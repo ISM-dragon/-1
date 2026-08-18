@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import secrets
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,9 @@ GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")
 PROVIDER_MODE = os.getenv("PROVIDER_MODE", "mock")
 PUBLISH_INTERVAL_SECONDS = max(10, int(os.getenv("PUBLISH_INTERVAL_SECONDS", "30")))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8787").rstrip("/")
+ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
+ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
+MAX_PROVIDER_ATTEMPTS = max(1, int(os.getenv("MAX_PROVIDER_ATTEMPTS", "3")))
 
 app = FastAPI(title="ISM Social Gateway", version="0.1.0")
 app.add_middleware(
@@ -32,6 +36,19 @@ app.add_middleware(
 )
 
 _scheduler_task: asyncio.Task | None = None
+
+
+class PolicyDeferred(Exception):
+    def __init__(self, message: str, retry_at: datetime):
+        self.message = message
+        self.retry_at = retry_at
+
+
+class ProviderResultPayload(BaseModel):
+    ok: bool
+    status_code: int = 200
+    error: str | None = None
+    retry_after_seconds: int | None = Field(default=None, ge=0, le=86400)
 
 
 def now_iso() -> str:
@@ -53,6 +70,42 @@ def db() -> sqlite3.Connection:
     return connection
 
 
+def idempotency_key(payload: PostPayload, scheduled_iso: str | None) -> str:
+    explicit = payload.idempotencyKey.strip() if payload.idempotencyKey else ""
+    if explicit:
+        return explicit[:180]
+    raw = "|".join([payload.platform, payload.account_id or payload.account, str(payload.mediaUrl), scheduled_iso or "", payload.title, payload.caption])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def account_for_post(connection: sqlite3.Connection, payload: PostPayload) -> sqlite3.Row | None:
+    if payload.account_id:
+        return connection.execute("SELECT * FROM accounts WHERE id=?", (payload.account_id,)).fetchone()
+    if payload.account:
+        return connection.execute("SELECT * FROM accounts WHERE platform=? AND account_name=? ORDER BY created_at DESC LIMIT 1", (payload.platform, payload.account)).fetchone()
+    return None
+
+
+def check_account_policy(account: sqlite3.Row | None, now: datetime) -> None:
+    if not account:
+        return
+    if account["status"] != "connected":
+        raise PolicyDeferred("Account is paused; publishing is stopped until it is resumed.", now + timedelta(hours=1))
+    cooldown = parse_time(account["cooldown_until"])
+    if cooldown and cooldown > now:
+        raise PolicyDeferred("Account is in a safety cooldown after a provider warning.", cooldown)
+    if account["publish_count_day"] != now.date().isoformat():
+        return
+    if int(account["publish_count"] or 0) >= int(account["daily_limit"] or ACCOUNT_DAILY_LIMIT):
+        tomorrow = datetime.combine(now.date() + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        raise PolicyDeferred("Daily account publishing limit reached.", tomorrow)
+    last = parse_time(account["last_publish_at"])
+    if last:
+        allowed = last + timedelta(seconds=int(account["min_gap_seconds"] or ACCOUNT_MIN_GAP_SECONDS))
+        if allowed > now:
+            raise PolicyDeferred("Minimum interval between account posts has not elapsed.", allowed)
+
+
 def init_db() -> None:
     with closing(db()) as connection:
         connection.executescript(
@@ -67,7 +120,14 @@ def init_db() -> None:
                 token_expires_at TEXT,
                 status TEXT NOT NULL DEFAULT 'connected',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                daily_limit INTEGER NOT NULL DEFAULT 10,
+                min_gap_seconds INTEGER NOT NULL DEFAULT 60,
+                last_publish_at TEXT,
+                publish_count_day TEXT,
+                publish_count INTEGER NOT NULL DEFAULT 0,
+                pause_reason TEXT,
+                cooldown_until TEXT
             );
             CREATE TABLE IF NOT EXISTS posts (
                 id TEXT PRIMARY KEY,
@@ -87,13 +147,32 @@ def init_db() -> None:
                 permalink TEXT,
                 error TEXT,
                 attempts INTEGER NOT NULL DEFAULT 0,
+                idempotency_key TEXT UNIQUE,
+                next_attempt_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
             CREATE INDEX IF NOT EXISTS idx_posts_due ON posts(status, auto_publish, scheduled_at);
+            CREATE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key);
             """
         )
+        migrations = [
+            ("accounts", "daily_limit", "INTEGER NOT NULL DEFAULT 10"),
+            ("accounts", "min_gap_seconds", "INTEGER NOT NULL DEFAULT 60"),
+            ("accounts", "last_publish_at", "TEXT"),
+            ("accounts", "publish_count_day", "TEXT"),
+            ("accounts", "publish_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("accounts", "pause_reason", "TEXT"),
+            ("accounts", "cooldown_until", "TEXT"),
+            ("posts", "idempotency_key", "TEXT"),
+            ("posts", "next_attempt_at", "TEXT"),
+        ]
+        for table, column, definition in migrations:
+            existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key)")
         connection.commit()
 
 
@@ -124,6 +203,13 @@ class PostPayload(BaseModel):
     scheduledAt: str | None = None
     autoPublish: bool = True
     status: str = "scheduled"
+    idempotencyKey: str | None = None
+
+
+class AccountPolicyPayload(BaseModel):
+    status: str = Field(pattern=r"^(connected|paused)$")
+    daily_limit: int = Field(default=10, ge=1, le=1000)
+    min_gap_seconds: int = Field(default=60, ge=0, le=86400)
 
 
 class StatusUpdate(BaseModel):
@@ -138,6 +224,13 @@ def account_dict(row: sqlite3.Row) -> dict[str, Any]:
         "account_name": row["account_name"],
         "status": row["status"],
         "token_expires_at": row["token_expires_at"],
+        "daily_limit": row["daily_limit"],
+        "min_gap_seconds": row["min_gap_seconds"],
+        "last_publish_at": row["last_publish_at"],
+        "publish_count_day": row["publish_count_day"],
+        "publish_count": row["publish_count"],
+        "pause_reason": row["pause_reason"],
+        "cooldown_until": row["cooldown_until"],
         "created_at": row["created_at"],
     }
 
@@ -162,23 +255,31 @@ def save_post(payload: PostPayload, post_id: str | None = None) -> dict[str, Any
     timestamp = now_iso()
     status = payload.status if payload.status in {"draft", "awaiting_approval", "scheduled"} else "scheduled"
     with closing(db()) as connection:
+        account = account_for_post(connection, payload)
+        account_id = account["id"] if account else payload.account_id
+        account_name = account["account_name"] if account else payload.account
+        key = idempotency_key(payload, scheduled_iso)
+        existing = connection.execute("SELECT id FROM posts WHERE idempotency_key=? AND id<>?", (key, identifier)).fetchone()
+        if existing:
+            row = connection.execute("SELECT * FROM posts WHERE id=?", (existing["id"],)).fetchone()
+            return row_dict(row)
         connection.execute(
             """
             INSERT INTO posts (id, platform, account_id, account_name, media_url, title, caption, description,
-              hashtags, keywords, scheduled_at, auto_publish, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              hashtags, keywords, scheduled_at, auto_publish, status, idempotency_key, next_attempt_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               platform=excluded.platform, account_id=excluded.account_id, account_name=excluded.account_name,
               media_url=excluded.media_url, title=excluded.title, caption=excluded.caption,
               description=excluded.description, hashtags=excluded.hashtags, keywords=excluded.keywords,
               scheduled_at=excluded.scheduled_at, auto_publish=excluded.auto_publish,
               status=CASE WHEN posts.status IN ('published', 'cancelled') THEN posts.status ELSE excluded.status END,
-              error=NULL, updated_at=excluded.updated_at
+              idempotency_key=excluded.idempotency_key, next_attempt_at=NULL, error=NULL, updated_at=excluded.updated_at
             """,
             (
-                identifier, payload.platform, payload.account_id, payload.account, str(payload.mediaUrl),
+                identifier, payload.platform, account_id, account_name, str(payload.mediaUrl),
                 payload.title, payload.caption, payload.description, payload.hashtags, payload.keywords,
-                scheduled_iso, int(payload.autoPublish), status, timestamp, timestamp,
+                scheduled_iso, int(payload.autoPublish), status, key, None, timestamp, timestamp,
             ),
         )
         connection.commit()
@@ -186,32 +287,89 @@ def save_post(payload: PostPayload, post_id: str | None = None) -> dict[str, Any
     return row_dict(row)
 
 
+async def provider_publish(row: sqlite3.Row) -> ProviderResultPayload:
+    if PROVIDER_MODE == "mock":
+        mock_status = int(os.getenv("MOCK_PROVIDER_STATUS", "200"))
+        if mock_status != 200:
+            return ProviderResultPayload(
+                ok=False,
+                status_code=mock_status,
+                retry_after_seconds=int(os.getenv("MOCK_RETRY_AFTER", "60")),
+                error=f"Mock provider returned HTTP {mock_status}",
+            )
+        await asyncio.sleep(0.15)
+        return ProviderResultPayload(ok=True)
+    return ProviderResultPayload(ok=False, status_code=501, error="Live provider adapters are not configured.")
+
+
 async def publish_job(post_id: str) -> dict[str, Any] | None:
+    now = datetime.now(timezone.utc)
     with closing(db()) as connection:
         row = connection.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
         if not row or row["status"] not in {"scheduled", "failed"}:
             return row_dict(row) if row else None
+        next_attempt = parse_time(row["next_attempt_at"])
+        if next_attempt and next_attempt > now:
+            return row_dict(row)
+        account = connection.execute("SELECT * FROM accounts WHERE id=?", (row["account_id"],)).fetchone() if row["account_id"] else None
+        try:
+            check_account_policy(account, now)
+        except PolicyDeferred as deferred:
+            connection.execute(
+                "UPDATE posts SET status='scheduled', error=?, next_attempt_at=?, updated_at=? WHERE id=?",
+                (deferred.message, deferred.retry_at.isoformat(), now_iso(), post_id),
+            )
+            connection.commit()
+            return await get_post(post_id)
         connection.execute(
-            "UPDATE posts SET status='publishing', attempts=attempts+1, error=NULL, updated_at=? WHERE id=?",
+            "UPDATE posts SET status='publishing', attempts=attempts+1, error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=?",
             (now_iso(), post_id),
         )
         connection.commit()
+        row = connection.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
 
-    if PROVIDER_MODE != "mock":
-        error = "Live provider adapters are not configured. Keep PROVIDER_MODE=mock for local testing."
+    result = await provider_publish(row)
+    if not result.ok:
+        current_attempts = int(row["attempts"] or 0)
+        warning = result.status_code in {401, 403, 429}
+        transient = result.status_code == 429 or result.status_code >= 500
+        if warning and row["account_id"]:
+            cooldown = now + timedelta(hours=24 if result.status_code in {401, 403} else 1)
+            with closing(db()) as connection:
+                connection.execute(
+                    "UPDATE accounts SET status=?, pause_reason=?, cooldown_until=?, updated_at=? WHERE id=?",
+                    ("paused" if result.status_code in {401, 403} else "connected", result.error or f"Provider warning HTTP {result.status_code}", cooldown.isoformat(), now_iso(), row["account_id"]),
+                )
+                connection.commit()
+        retry_seconds = result.retry_after_seconds or min(3600, 60 * (2 ** max(0, current_attempts - 1)))
+        should_retry = transient and current_attempts < MAX_PROVIDER_ATTEMPTS
+        next_attempt_at = (now + timedelta(seconds=retry_seconds)).isoformat() if should_retry else None
+        final_status = "scheduled" if should_retry else "failed"
         with closing(db()) as connection:
-            connection.execute("UPDATE posts SET status='failed', error=?, updated_at=? WHERE id=?", (error, now_iso(), post_id))
+            connection.execute(
+                "UPDATE posts SET status=?, error=?, next_attempt_at=?, updated_at=? WHERE id=?",
+                (final_status, result.error or f"Provider returned HTTP {result.status_code}", next_attempt_at, now_iso(), post_id),
+            )
             connection.commit()
         return await get_post(post_id)
 
-    await asyncio.sleep(0.15)
     provider_id = f"mock_{secrets.token_urlsafe(8)}"
     permalink = f"{PUBLIC_BASE_URL}/mock/published/{provider_id}"
     with closing(db()) as connection:
         connection.execute(
-            "UPDATE posts SET status='published', provider_post_id=?, permalink=?, error=NULL, updated_at=? WHERE id=?",
+            "UPDATE posts SET status='published', provider_post_id=?, permalink=?, error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=?",
             (provider_id, permalink, now_iso(), post_id),
         )
+        if row["account_id"]:
+            day = now.date().isoformat()
+            connection.execute(
+                """
+                UPDATE accounts SET last_publish_at=?, publish_count_day=?,
+                  publish_count=CASE WHEN publish_count_day=? THEN publish_count+1 ELSE 1 END,
+                  updated_at=? WHERE id=?
+                """,
+                (now_iso(), day, day, now_iso(), row["account_id"]),
+            )
         connection.commit()
     return await get_post(post_id)
 
@@ -228,8 +386,8 @@ async def scheduler_loop() -> None:
             current = datetime.now(timezone.utc)
             with closing(db()) as connection:
                 rows = connection.execute(
-                    "SELECT id FROM posts WHERE status='scheduled' AND auto_publish=1 AND scheduled_at IS NOT NULL AND scheduled_at <= ? LIMIT 20",
-                    (current.isoformat(),),
+                    "SELECT id FROM posts WHERE status='scheduled' AND auto_publish=1 AND scheduled_at IS NOT NULL AND scheduled_at <= ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?) LIMIT 20",
+                    (current.isoformat(), current.isoformat()),
                 ).fetchall()
             await asyncio.gather(*(publish_job(row["id"]) for row in rows))
         except asyncio.CancelledError:
@@ -275,7 +433,7 @@ async def summary() -> dict[str, Any]:
 @app.get("/v1/accounts", dependencies=[Depends(auth)])
 async def accounts() -> list[dict[str, Any]]:
     with closing(db()) as connection:
-        rows = connection.execute("SELECT id, platform, account_name, status, token_expires_at, created_at FROM accounts ORDER BY created_at DESC").fetchall()
+        rows = connection.execute("SELECT * FROM accounts ORDER BY created_at DESC").fetchall()
     return [account_dict(row) for row in rows]
 
 
@@ -285,11 +443,39 @@ async def create_mock_account(payload: AccountCreate) -> dict[str, Any]:
     timestamp = now_iso()
     with closing(db()) as connection:
         connection.execute(
-            "INSERT INTO accounts (id, platform, account_name, provider_account_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', ?, ?)",
-            (account_id, payload.platform, payload.account_name, f"mock_{account_id}", timestamp, timestamp),
+            "INSERT INTO accounts (id, platform, account_name, provider_account_id, status, daily_limit, min_gap_seconds, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', ?, ?, ?, ?)",
+            (account_id, payload.platform, payload.account_name, f"mock_{account_id}", ACCOUNT_DAILY_LIMIT, ACCOUNT_MIN_GAP_SECONDS, timestamp, timestamp),
         )
         connection.commit()
-        row = connection.execute("SELECT id, platform, account_name, status, token_expires_at, created_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+        row = connection.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+    return account_dict(row)
+
+
+@app.patch("/v1/accounts/{account_id}/policy", dependencies=[Depends(auth)])
+async def update_account_policy(account_id: str, payload: AccountPolicyPayload) -> dict[str, Any]:
+    with closing(db()) as connection:
+        cursor = connection.execute(
+            "UPDATE accounts SET status=?, daily_limit=?, min_gap_seconds=?, pause_reason=NULL, cooldown_until=NULL, updated_at=? WHERE id=?",
+            (payload.status, payload.daily_limit, payload.min_gap_seconds, now_iso(), account_id),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account_dict(row)
+
+
+@app.post("/v1/accounts/{account_id}/resume", dependencies=[Depends(auth)])
+async def resume_account(account_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        cursor = connection.execute(
+            "UPDATE accounts SET status='connected', pause_reason=NULL, cooldown_until=NULL, updated_at=? WHERE id=?",
+            (now_iso(), account_id),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Account not found")
     return account_dict(row)
 
 
@@ -306,8 +492,8 @@ async def oauth_complete(platform: str) -> str:
     timestamp = now_iso()
     with closing(db()) as connection:
         connection.execute(
-            "INSERT INTO accounts (id, platform, account_name, provider_account_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', ?, ?)",
-            (account_id, platform, f"mock_{platform}_account", f"mock_{account_id}", timestamp, timestamp),
+            "INSERT INTO accounts (id, platform, account_name, provider_account_id, status, daily_limit, min_gap_seconds, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', ?, ?, ?, ?)",
+            (account_id, platform, f"mock_{platform}_account", f"mock_{account_id}", ACCOUNT_DAILY_LIMIT, ACCOUNT_MIN_GAP_SECONDS, timestamp, timestamp),
         )
         connection.commit()
     return f"<h1>ISM mock OAuth complete</h1><p>Connected {platform}. You can close this tab and return to ISM.</p>"
@@ -374,7 +560,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <script>
 const $=id=>document.getElementById(id); const api=(path,opts)=>fetch(path,{headers:{'Content-Type':'application/json'},...opts}).then(async r=>{const data=await r.json();if(!r.ok)throw new Error(data.detail||r.status);return data});
 function localDue(){const d=new Date(Date.now()+120000);d.setSeconds(0,0);$('due').value=d.toISOString().slice(0,16)}
-async function refresh(){try{const [s,a,p]=await Promise.all([api('/v1/dashboard/summary'),api('/v1/accounts'),api('/v1/social/schedule')]);$('cards').innerHTML=[['Accounts',s.accounts],['Scheduled',s.posts.scheduled||0],['Publishing',s.posts.publishing||0],['Published',s.posts.published||0],['Failed',s.posts.failed||0]].map(x=>`<div class="card"><span class="muted">${x[0]}</span><b>${x[1]}</b></div>`).join('');$('accounts').innerHTML=a.map(x=>`<div class="account"><span>${x.platform} · ${x.account_name}</span><span class="status">${x.status}</span></div>`).join('')||'<div class="muted">No accounts yet.</div>';$('posts').innerHTML=p.map(x=>`<div class="post"><div><strong>${x.title||x.platform}</strong><small>${x.platform} · ${x.scheduledAt||'no time'} · ${x.account||''}</small>${x.error?`<small class="failed">${x.error}</small>`:''}</div><span class="status ${x.status}">${x.status}</span></div>`).join('')||'<div class="muted">No jobs yet.</div>'}catch(e){$('notice').textContent=e.message}}
+async function refresh(){try{const [s,a,p]=await Promise.all([api('/v1/dashboard/summary'),api('/v1/accounts'),api('/v1/social/schedule')]);$('cards').innerHTML=[['Accounts',s.accounts],['Scheduled',s.posts.scheduled||0],['Publishing',s.posts.publishing||0],['Published',s.posts.published||0],['Failed',s.posts.failed||0]].map(x=>`<div class="card"><span class="muted">${x[0]}</span><b>${x[1]}</b></div>`).join('');$('accounts').innerHTML=a.map(x=>`<div class="account"><span>${x.platform} · ${x.account_name}<small>${x.publish_count||0}/${x.daily_limit||0} today · gap ${x.min_gap_seconds||0}s${x.pause_reason?` · ${x.pause_reason}`:''}</small></span><span class="status ${x.status}">${x.status}</span></div>`).join('')||'<div class="muted">No accounts yet.</div>';$('posts').innerHTML=p.map(x=>`<div class="post"><div><strong>${x.title||x.platform}</strong><small>${x.platform} · ${x.scheduledAt||'no time'} · ${x.account||''}</small>${x.error?`<small class="failed">${x.error}</small>`:''}</div><span class="status ${x.status}">${x.status}</span></div>`).join('')||'<div class="muted">No jobs yet.</div>'}catch(e){$('notice').textContent=e.message}}
 async function addAccount(){try{await api('/v1/accounts/mock',{method:'POST',body:JSON.stringify({platform:$('platform').value,account_name:$('account').value})});$('notice').textContent='Mock account connected.';await refresh()}catch(e){$('notice').textContent=e.message}}
 async function schedulePost(){try{await api('/v1/social/schedule',{method:'POST',body:JSON.stringify({platform:$('postPlatform').value,account:$('postAccount').value,mediaUrl:$('media').value,title:$('title').value,caption:$('caption').value,scheduledAt:new Date($('due').value).toISOString(),autoPublish:true,status:'scheduled'})});$('notice').textContent='Scheduled. The background worker will publish it in mock mode.';await refresh()}catch(e){$('notice').textContent=e.message}}
 localDue();refresh();setInterval(refresh,5000)
