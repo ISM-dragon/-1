@@ -4,7 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -47,13 +47,21 @@ fn quiet_command(program: &str) -> Command {
 /// Where the Python pipeline lives and how to invoke it.
 /// Dev builds call `uv run` against the repo's pipeline/ directory. Packaged
 /// builds invoke the bundled python env (M6); resolution stays in one place.
-fn pipeline_invocation() -> (String, Vec<String>) {
+fn pipeline_invocation() -> Result<(String, Vec<String>), String> {
+    // The bundled Python/uv pipeline is a desktop runtime. Tauri Android
+    // resources are APK assets and the build-host uv binary is not an
+    // Android ARM executable, so spawning it would only produce OS error 2
+    // (or an architecture error) after installation. Fail early with an
+    // actionable message instead of reporting a misleading missing path.
+    if cfg!(target_os = "android") {
+        return Err("Local video processing is not available in this Android build. Use the desktop app for the bundled Python pipeline, or configure a remote processing Gateway API in Social Hub.".to_string());
+    }
     if cfg!(debug_assertions) {
         let pipeline_dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../pipeline")
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from("../pipeline"));
-        (
+        Ok((
             "uv".to_string(),
             vec![
                 "--directory".to_string(),
@@ -61,7 +69,7 @@ fn pipeline_invocation() -> (String, Vec<String>) {
                 "run".to_string(),
                 "publikclip".to_string(),
             ],
-        )
+        ))
     } else {
         // Packaged: bundled uv + pipeline source under the platform's
         // resource layout — macOS keeps them in the .app's Resources dir,
@@ -78,7 +86,7 @@ fn pipeline_invocation() -> (String, Vec<String>) {
             exe_dir.join("resources")
         };
         let uv = if cfg!(target_os = "windows") { "bin/uv.exe" } else { "bin/uv" };
-        (
+        Ok((
             resources.join(uv).to_string_lossy().to_string(),
             vec![
                 "--directory".to_string(),
@@ -86,13 +94,13 @@ fn pipeline_invocation() -> (String, Vec<String>) {
                 "run".to_string(),
                 "publikclip".to_string(),
             ],
-        )
+        ))
     }
 }
 
 #[tauri::command]
 fn run_job(app: AppHandle, source: String, llm: Option<String>, captions: Option<String>) -> Result<(), String> {
-    let (program, base_args) = pipeline_invocation();
+    let (program, base_args) = pipeline_invocation()?;
     std::thread::spawn(move || {
         let mut args = base_args.clone();
         args.push("--jsonl".to_string());
@@ -119,7 +127,7 @@ fn resume_job(
     captions: Option<String>,
     camera: Option<String>,
 ) -> Result<(), String> {
-    let (program, base_args) = pipeline_invocation();
+    let (program, base_args) = pipeline_invocation()?;
     std::thread::spawn(move || {
         let mut args = base_args.clone();
         args.push("--jsonl".to_string());
@@ -146,7 +154,7 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
     let child = quiet_command(program)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn();
     let mut child = match child {
         Ok(c) => c,
@@ -165,9 +173,19 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
             }
         }
     }
+    let mut stderr = child.stderr.take();
     if let Ok(status) = child.wait() {
         if !status.success() {
-            let _ = app.emit("pipeline-event", json!({"event": "exited", "code": status.code()}));
+            let mut detail = String::new();
+            if let Some(ref mut stream) = stderr {
+                let _ = stream.read_to_string(&mut detail);
+            }
+            let detail = detail.trim();
+            let _ = app.emit("pipeline-event", json!({
+                "event": "exited",
+                "code": status.code(),
+                "error": if detail.is_empty() { "pipeline exited with an error" } else { detail }
+            }));
         }
     }
 }
@@ -283,7 +301,7 @@ async fn check_ollama() -> Result<Value, String> {
 /// instead so progress streams.
 #[tauri::command]
 async fn edit_tool(args: Vec<String>) -> Result<Value, String> {
-    let (program, base_args) = pipeline_invocation();
+    let (program, base_args) = pipeline_invocation()?;
     let mut full = base_args;
     full.push("edit".to_string());
     full.extend(args);
@@ -305,7 +323,7 @@ async fn edit_tool(args: Vec<String>) -> Result<Value, String> {
 
 #[tauri::command]
 fn run_edit_render(app: AppHandle, job_id: String, clip: u32) -> Result<(), String> {
-    let (program, base_args) = pipeline_invocation();
+    let (program, base_args) = pipeline_invocation()?;
     std::thread::spawn(move || {
         let mut args = base_args.clone();
         args.push("--jsonl".to_string());
@@ -370,7 +388,7 @@ fn ig_status(app: AppHandle) -> Result<Value, String> {
 /// browser" state until this returns.
 #[tauri::command]
 async fn ig_connect(app_id: String, app_secret: String) -> Result<String, String> {
-    let (program, base_args) = pipeline_invocation();
+    let (program, base_args) = pipeline_invocation()?;
     let mut args = base_args;
     args.extend([
         "ig".into(), "connect".into(),
@@ -394,7 +412,7 @@ async fn ig_connect(app_id: String, app_secret: String) -> Result<String, String
 /// (sync / overview / link / unlink / reject — same contract as edit_tool).
 #[tauri::command]
 async fn ig_tool(args: Vec<String>) -> Result<Value, String> {
-    let (program, base_args) = pipeline_invocation();
+    let (program, base_args) = pipeline_invocation()?;
     let mut full = base_args;
     full.push("ig".to_string());
     full.extend(args);

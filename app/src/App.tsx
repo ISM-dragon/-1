@@ -97,7 +97,12 @@ export default function App() {
       setStages({})
       setResults(null)
       setActiveJob(null)
-      await api.runJob(source, llm, captions)
+      try {
+        await api.runJob(source, llm, captions)
+      } catch (error) {
+        setRunning(false)
+        setRunError(error instanceof Error ? error.message : String(error))
+      }
     },
     []
   )
@@ -145,7 +150,10 @@ export default function App() {
           setStages({})
           setActiveJob(results.job_id)
           setView('studio')
-          api.resumeJob(results.job_id, undefined, captions, camera)
+          api.resumeJob(results.job_id, undefined, captions, camera).catch((error) => {
+            setRunning(false)
+            setRunError(error instanceof Error ? error.message : String(error))
+          })
         }}
       />
     )
@@ -166,7 +174,10 @@ export default function App() {
         setRunError(null)
         setStages({})
         setActiveJob(id)
-        api.resumeJob(id, llm)
+        api.resumeJob(id, llm).catch((error) => {
+          setRunning(false)
+          setRunError(error instanceof Error ? error.message : String(error))
+        })
       }}
     />
   )

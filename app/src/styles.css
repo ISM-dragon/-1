@@ -991,3 +991,46 @@ body {
 .social-error { color: var(--red); font-size: 11px; }
 .social-notice { position: fixed; z-index: 5; right: 24px; bottom: 24px; max-width: 420px; background: var(--panel-2); border: 1px solid var(--amber-dim); color: var(--text); padding: 13px 16px; font-size: 13px; line-height: 1.45; box-shadow: 0 12px 30px rgba(0,0,0,.3); }
 @media (max-width: 900px) { .social-hub { padding: 22px 18px 60px; } .social-grid { grid-template-columns: 1fr; } .social-queue-panel { grid-column: auto; } .social-form-grid { grid-template-columns: 1fr; } .social-head { gap: 12px; } .social-title { font-size: 31px; } }
+
+/* ---------- Android / narrow viewport hardening ---------- */
+@media (max-width: 900px), (orientation: portrait), (max-height: 700px) and (max-width: 1200px) {
+  html, body, #root { min-height: 100%; height: auto; }
+  body { overflow-x: hidden; }
+  .studio { height: auto; min-height: 100%; display: block; }
+  .rail { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .rail-brand { padding: calc(14px + env(safe-area-inset-top)) 16px 12px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .rail-logo { font-size: 20px; }
+  .rail-sub { font-size: 10px; text-align: right; }
+  .rail-jobs { display: none; }
+  .rail-foot { display: flex; flex-wrap: wrap; gap: 4px; padding: 7px 10px calc(7px + env(safe-area-inset-bottom)); }
+  .rail-foot .btn-ghost { flex: 1 1 31%; min-width: 0; padding: 9px 6px; font-size: 10px; white-space: nowrap; }
+  .stage-area { min-width: 0; padding: 30px 16px calc(34px + env(safe-area-inset-bottom)); overflow-x: hidden; }
+  .input-heading { max-width: 100%; font-size: clamp(28px, 10vw, 44px); line-height: 1.02; overflow-wrap: anywhere; }
+  .input-row { width: 100%; max-width: none; flex-direction: column; }
+  .input-row input { width: 100%; min-width: 0; font-size: 13px; }
+  .input-row .btn-primary { width: 100%; }
+  .run-options { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 18px; }
+  .opt-group { min-width: 0; flex-wrap: wrap; gap: 6px; }
+  .opt-label { width: 100%; margin-right: 0; }
+  .deck { max-width: none; margin-top: 32px; }
+  .deck-row { grid-template-columns: 82px minmax(0, 1fr); gap: 4px 12px; }
+  .deck-bar, .deck-msg { min-width: 0; }
+  .deck-msg { grid-column: 1 / -1; overflow-wrap: anywhere; }
+  .error-block { max-width: none; overflow-wrap: anywhere; word-break: break-word; font-size: 13px; padding: 13px 14px; }
+  .error-block code, .error-block pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .onboarding { min-height: 100dvh; place-items: start; overflow-y: auto; padding: calc(28px + env(safe-area-inset-top)) 18px calc(34px + env(safe-area-inset-bottom)); }
+  .ob-step { width: 100%; max-width: 660px; }
+  .ob-title { font-size: clamp(38px, 12vw, 58px); }
+  .ob-h2 { font-size: 27px; }
+  .ob-body { font-size: 15px; }
+  .ob-key-row { flex-direction: column; }
+  .ob-key-row .btn-primary { width: 100%; }
+  .social-hub { min-height: 100dvh; padding-top: calc(22px + env(safe-area-inset-top)); }
+}
+@media (max-width: 420px) {
+  .rail-sub { display: none; }
+  .rail-foot .btn-ghost { flex-basis: 100%; }
+  .stage-area { padding-left: 13px; padding-right: 13px; }
+  .deck-row { grid-template-columns: 1fr; gap: 7px; }
+  .deck-msg { grid-column: auto; }
+}

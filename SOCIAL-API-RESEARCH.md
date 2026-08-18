@@ -43,3 +43,10 @@ Official sources:
 ## Architecture implication
 
 The selected hybrid model should keep account connection, preview, content approval, and local export on the Android app, while a secure background service handles scheduled uploads, token refresh, retries, and platform-specific status polling. App secrets and refresh tokens must not be embedded in the APK. Instagram/Facebook and TikTok may require public hosting or platform upload sessions; YouTube and X support direct resumable uploads from a server or controlled client flow. The implementation should expose platform availability and approval status rather than claiming every connected account can publish automatically before the corresponding developer app is approved.
+
+## Tauri Android resource diagnosis
+
+Tauri's official resources documentation states that on Android bundled resources are stored in the APK as assets, and the paths returned by resource resolution are asset URIs rather than normal filesystem paths. If files must be on a real filesystem, the app must copy them out manually through the filesystem plugin. This explains why spawning the bundled `resources/bin/uv` by a calculated path fails on Android: the asset is not directly executable. The official sidecar documentation recommends packaging architecture-specific external binaries and running them through Tauri's sidecar mechanism; however, the current Python/uv pipeline is not yet packaged as an Android-native sidecar. Sources:
+- https://v2.tauri.app/develop/resources/
+- https://v2.tauri.app/reference/javascript/api/namespacepath/
+- https://v2.tauri.app/develop/sidecar/
