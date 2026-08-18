@@ -100,3 +100,9 @@ Authorization: Bearer <session-token>
 ```
 
 The Gateway should cancel a queued provider job and return `{ "id": "gateway-job-id", "status": "cancelled" }`. The app keeps a local copy of the calendar for offline review; when no Gateway is configured, edits and cancellations remain local and are not published remotely.
+
+## Automatic publishing
+
+The composer now includes `autoPublish`. When it is enabled, the app submits a scheduled record to the Gateway and monitors due local records while the Social Hub is open. A due record is sent to `POST /v1/social/publish`, and the UI changes it to `published` or `failed`.
+
+For reliable publishing while the Android app is closed or the device is offline, the Gateway must treat `POST /v1/social/schedule` as a durable server-side job. The Android timer is a foreground convenience and recovery mechanism, not a replacement for a persistent backend worker. The Gateway should claim jobs idempotently, refresh OAuth tokens, retry transient provider errors, and report the normalized final state through a future sync/status endpoint.

@@ -1075,3 +1075,9 @@ body {
   .social-queue-item { align-items: flex-start; flex-direction: column; }
   .social-queue-actions { width: 100%; justify-content: flex-start; }
 }
+
+.social-auto-toggle { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 11px 12px; border: 1px solid var(--line); background: var(--ink); cursor: pointer; }
+.social-auto-toggle input { width: 18px; height: 18px; flex: none; accent-color: var(--amber); margin-top: 1px; }
+.social-auto-toggle strong, .social-auto-toggle small { display: block; }
+.social-auto-toggle strong { color: var(--text); font-size: 12px; }
+.social-auto-toggle small { color: var(--dim); font-size: 11px; line-height: 1.4; margin-top: 3px; }

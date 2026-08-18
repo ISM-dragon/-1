@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { api } from '../api'
 
@@ -15,6 +15,7 @@ type SocialForm = {
   hashtags: string
   keywords: string
   scheduledAt: string
+  autoPublish: boolean
 }
 
 interface SocialPost extends SocialForm {
@@ -35,13 +36,14 @@ const PLATFORMS: { id: Platform; label: string; hint: string }[] = [
 
 const STORAGE_KEY = 'publikclip.social-hub.queue.v1'
 const DEFAULT_FORM: SocialForm = {
-  platform: 'instagram', account: '', mediaUrl: '', title: '', caption: '', description: '', hashtags: '', keywords: '', scheduledAt: ''
+  platform: 'instagram', account: '', mediaUrl: '', title: '', caption: '', description: '', hashtags: '',   keywords: '', scheduledAt: '', autoPublish: true
 }
 
 function loadQueue(): SocialPost[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as SocialPost[]) : []
+    const parsed = raw ? (JSON.parse(raw) as SocialPost[]) : []
+    return parsed.map((post) => ({ ...post, autoPublish: post.autoPublish ?? true }))
   } catch {
     return []
   }
@@ -72,7 +74,8 @@ function copyForm(post: SocialPost): SocialForm {
     description: post.description,
     hashtags: post.hashtags,
     keywords: post.keywords,
-    scheduledAt: post.scheduledAt
+    scheduledAt: post.scheduledAt,
+    autoPublish: post.autoPublish ?? true
   }
 }
 
@@ -85,10 +88,50 @@ export default function SocialHub({ onBack }: Props) {
   const [calendarCursor, setCalendarCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const publishingRef = useRef(new Set<string>())
+
+  function outboundPost(post: SocialPost): SocialPost {
+    return {
+      ...post,
+      scheduledAt: post.scheduledAt ? new Date(post.scheduledAt).toISOString() : post.scheduledAt
+    }
+  }
+
+  async function publishDue(post: SocialPost) {
+    if (!gatewayUrl.trim() || publishingRef.current.has(post.id)) return
+    publishingRef.current.add(post.id)
+    setBusy(true)
+    try {
+      await api.socialPublish(gatewayUrl, gatewayToken, outboundPost({ ...post, status: 'scheduled' }))
+      setQueue((items) => items.map((item) => item.id === post.id ? { ...item, status: 'published', error: undefined } : item))
+      setNotice(`تم نشر ${post.title || post.platform} تلقائيًا.`)
+    } catch (error) {
+      setQueue((items) => items.map((item) => item.id === post.id ? { ...item, status: 'failed', error: String(error) } : item))
+      setNotice(error instanceof Error ? error.message : 'فشل النشر التلقائي.')
+    } finally {
+      publishingRef.current.delete(post.id)
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(queue))
   }, [queue])
+
+  useEffect(() => {
+    const checkDuePosts = () => {
+      const now = Date.now()
+      for (const post of queue) {
+        if (post.autoPublish && post.status === 'scheduled' && post.scheduledAt && new Date(post.scheduledAt).getTime() <= now) {
+          if (gatewayUrl.trim()) void publishDue(post)
+          else setNotice('هناك منشور مستحق، أدخل Gateway API لتفعيل النشر التلقائي.')
+        }
+      }
+    }
+    checkDuePosts()
+    const timer = window.setInterval(checkDuePosts, 30_000)
+    return () => window.clearInterval(timer)
+  }, [queue, gatewayUrl, gatewayToken])
 
   const sortedQueue = useMemo(() => [...queue].sort((a, b) => (a.scheduledAt || '').localeCompare(b.scheduledAt || '')), [queue])
   const calendarDays = useMemo(() => {
@@ -147,7 +190,7 @@ export default function SocialHub({ onBack }: Props) {
     if (gatewayUrl.trim() && status === 'scheduled') {
       setBusy(true)
       try {
-        await api.socialSchedule(gatewayUrl, gatewayToken, post)
+        await api.socialSchedule(gatewayUrl, gatewayToken, outboundPost(post))
         setNotice('تم إرسال المنشور إلى Gateway API للجدولة.')
       } catch (error) {
         setQueue((current) => current.map((item) => item.id === post.id ? { ...item, status: 'failed', error: String(error) } : item))
@@ -178,7 +221,7 @@ export default function SocialHub({ onBack }: Props) {
     if (gatewayUrl.trim()) {
       setBusy(true)
       try {
-        await api.socialUpdate(gatewayUrl, gatewayToken, updated)
+        await api.socialUpdate(gatewayUrl, gatewayToken, outboundPost(updated))
         setNotice('تم تحديث موعد المنشور في Gateway API.')
       } catch (error) {
         setQueue((items) => items.map((item) => item.id === updated.id ? { ...item, status: 'failed', error: String(error) } : item))
@@ -209,7 +252,7 @@ export default function SocialHub({ onBack }: Props) {
     if (!gatewayUrl.trim()) return setNotice('أدخل Gateway API لإرسال المنشور بعد الموافقة.')
     setBusy(true)
     try {
-      await api.socialPublish(gatewayUrl, gatewayToken, { ...post, status: 'scheduled' })
+      await api.socialPublish(gatewayUrl, gatewayToken, outboundPost({ ...post, status: 'scheduled' }))
       setQueue((items) => items.map((item) => item.id === post.id ? { ...item, status: 'scheduled', error: undefined } : item))
       setNotice('تمت الموافقة وإرسال المنشور إلى Gateway API.')
     } catch (error) {
@@ -256,7 +299,8 @@ export default function SocialHub({ onBack }: Props) {
           <label className="social-field">Description<textarea value={form.description} onChange={(e) => updateForm('description', e.target.value)} rows={3} placeholder="Long description for the platform" /></label>
           <div className="social-form-grid"><label className="social-field">Hashtags<input value={form.hashtags} onChange={(e) => updateForm('hashtags', e.target.value)} placeholder="#shorts #creator" /></label><label className="social-field">SEO keywords<input value={form.keywords} onChange={(e) => updateForm('keywords', e.target.value)} placeholder="podcast, clips, advice" /></label></div>
           <label className="social-field">Scheduled time<input type="datetime-local" value={form.scheduledAt} onChange={(e) => updateForm('scheduledAt', e.target.value)} /></label>
-          <div className="social-actions"><button className="btn-secondary" onClick={generateCopy}>Generate copy / SEO</button>{editingId ? <><button className="btn-secondary" onClick={() => { setEditingId(null); setForm(DEFAULT_FORM) }}>Cancel edit</button><button className="btn-primary" onClick={saveEdit} disabled={busy}>Save schedule</button></> : <><button className="btn-secondary" onClick={() => addPost('awaiting_approval')} disabled={busy}>Add for approval</button><button className="btn-primary" onClick={() => addPost('scheduled')} disabled={busy}>Schedule</button></>}</div>
+          <label className="social-auto-toggle"><input type="checkbox" checked={form.autoPublish} onChange={(e) => updateForm('autoPublish', e.target.checked)} /><span><strong>Auto-publish when due</strong><small>Gateway will publish this post automatically at the selected time.</small></span></label>
+          <div className="social-actions"><button className="btn-secondary" onClick={generateCopy}>Generate copy / SEO</button>{editingId ? <><button className="btn-secondary" onClick={() => { setEditingId(null); setForm(DEFAULT_FORM) }}>Cancel edit</button><button className="btn-primary" onClick={saveEdit} disabled={busy}>Save schedule</button></> : <><button className="btn-secondary" onClick={() => addPost('awaiting_approval')} disabled={busy}>Add for approval</button><button className="btn-primary" onClick={() => addPost(form.autoPublish ? 'scheduled' : 'awaiting_approval')} disabled={busy}>{form.autoPublish ? 'Schedule auto-publish' : 'Schedule for approval'}</button></>}</div>
         </section>
 
         <section className="social-panel social-calendar-panel">
@@ -268,7 +312,7 @@ export default function SocialHub({ onBack }: Props) {
         <section className="social-panel social-queue-panel">
           <p className="social-label">04 / APPROVAL QUEUE & UPCOMING</p>
           {sortedQueue.length === 0 && <p className="social-empty">No scheduled posts yet.</p>}
-          {sortedQueue.map((post) => <article className={`social-queue-item status-row-${post.status}`} key={post.id}><div className="social-queue-main"><strong>{post.title || post.platform}</strong><span>{post.platform} · {post.account || 'account not selected'}</span><small>{post.scheduledAt || 'no time set'} · {post.status}</small></div><div className="social-queue-actions">{post.status === 'awaiting_approval' && <button className="btn-secondary" onClick={() => approve(post)} disabled={busy}>Approve</button>}{post.status !== 'published' && post.status !== 'cancelled' && <><button className="btn-ghost" onClick={() => startEdit(post)} disabled={busy}>Edit</button><button className="btn-ghost danger" onClick={() => cancelPost(post)} disabled={busy}>Cancel</button></>}{post.error && <p className="social-error">{post.error}</p>}</div></article>)}
+          {sortedQueue.map((post) => <article className={`social-queue-item status-row-${post.status}`} key={post.id}><div className="social-queue-main"><strong>{post.title || post.platform}</strong><span>{post.platform} · {post.account || 'account not selected'}</span><small>{post.scheduledAt || 'no time set'} · {post.status}{post.autoPublish ? ' · auto' : ''}</small></div><div className="social-queue-actions">{post.status === 'awaiting_approval' && <button className="btn-secondary" onClick={() => approve(post)} disabled={busy}>Approve</button>}{post.status !== 'published' && post.status !== 'cancelled' && <><button className="btn-ghost" onClick={() => startEdit(post)} disabled={busy}>Edit</button><button className="btn-ghost danger" onClick={() => cancelPost(post)} disabled={busy}>Cancel</button></>}{post.error && <p className="social-error">{post.error}</p>}</div></article>)}
         </section>
       </main>
       {notice && <div className="social-notice">{notice}</div>}
