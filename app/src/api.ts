@@ -1,6 +1,21 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import type { JobResults, JobSummary, LoopOverview, SetupState, SyncSummary } from './types'
 
+function gatewayEndpoint(baseUrl: string, path: string) {
+  const value = baseUrl.trim().replace(/\/+$/, '')
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error('Gateway API URL is invalid.')
+  }
+  const localHost = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(parsed.hostname)
+  if (parsed.protocol !== 'https:' && !localHost) {
+    throw new Error('Gateway API must use HTTPS. HTTP is allowed only for localhost development.')
+  }
+  return `${value}${path}`
+}
+
 export const api = {
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
@@ -27,14 +42,14 @@ export const api = {
     invoke<{ ok: boolean }>('ig_tool', { args: ['reject', mediaId, jobId, String(clip)] }),
   fileUrl: (path: string) => convertFileSrc(path),
   socialOAuthStart: async (baseUrl: string, token: string, platform: string) => {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/oauth/${platform}/start`, {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/social/oauth/${platform}/start`), {
       headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
     })
     if (!response.ok) throw new Error(`OAuth gateway returned ${response.status}.`)
     return (await response.json()) as { url: string }
   },
   socialSchedule: async (baseUrl: string, token: string, post: unknown) => {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/schedule`, {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/schedule'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
       body: JSON.stringify(post)
@@ -43,7 +58,7 @@ export const api = {
     return response.json()
   },
   socialPublish: async (baseUrl: string, token: string, post: unknown) => {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/publish`, {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/publish'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
       body: JSON.stringify(post)
@@ -52,7 +67,7 @@ export const api = {
     return response.json()
   },
   socialUpdate: async (baseUrl: string, token: string, post: unknown) => {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/schedule/${encodeURIComponent(String((post as { id?: string }).id ?? ''))}`, {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/social/schedule/${encodeURIComponent(String((post as { id?: string }).id ?? ''))}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
       body: JSON.stringify(post)
@@ -61,7 +76,7 @@ export const api = {
     return response.json()
   },
   socialCancel: async (baseUrl: string, token: string, postId: string) => {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/schedule/${encodeURIComponent(postId)}`, {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/social/schedule/${encodeURIComponent(postId)}`), {
       method: 'DELETE',
       headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
     })

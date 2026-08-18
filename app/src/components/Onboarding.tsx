@@ -45,7 +45,7 @@ export default function Onboarding({ onDone }: Props) {
       <div className="grain" />
       {step === 0 && (
         <section className="ob-step" key="s0">
-          <p className="ob-kicker">publikclip</p>
+          <p className="ob-kicker">ISM</p>
           <h1 className="ob-title">
             THE CLIPPER
             <br />

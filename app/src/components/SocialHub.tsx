@@ -52,7 +52,7 @@ function makeCopy(title: string, caption: string, keywords: string) {
   const cleanCaption = caption.trim() || `Watch ${cleanTitle}.`
   const tags = keywords.split(',').map((item) => item.trim().replace(/^#/, '').replace(/\s+/g, '')).filter(Boolean).slice(0, 8)
   const hashtags = tags.length ? tags.map((tag) => `#${tag}`).join(' ') : '#shorts #viralvideo #contentcreator'
-  return { title: cleanTitle, caption: cleanCaption, description: `${cleanCaption}\n\nCreated with publikclip.`, hashtags, keywords: tags.join(', ') }
+  return { title: cleanTitle, caption: cleanCaption, description: `${cleanCaption}\n\nCreated with ISM.`, hashtags, keywords: tags.join(', ') }
 }
 
 function dateKey(date: Date) {
@@ -229,7 +229,7 @@ export default function SocialHub({ onBack }: Props) {
       <header className="social-head">
         <button className="btn-ghost" onClick={onBack}>← studio</button>
         <div>
-          <p className="social-kicker">publikclip / social hub</p>
+          <p className="social-kicker">ISM / social hub</p>
           <h1 className="social-title">PUBLISH ON YOUR TERMS<span className="amber">.</span></h1>
           <p className="social-sub">Connect accounts, prepare SEO copy, review, and schedule through your own publishing API.</p>
         </div>

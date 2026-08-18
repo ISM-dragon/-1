@@ -43,7 +43,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
       {showKey && <KeyModal onClose={() => setShowKey(false)} />}
       <aside className="rail">
         <header className="rail-brand">
-          <span className="rail-logo">publikclip</span>
+          <span className="rail-logo">ISM</span>
           <span className="rail-sub">the clipper that shows its work</span>
         </header>
         <div className="rail-jobs">
