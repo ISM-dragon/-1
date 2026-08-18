@@ -50,5 +50,22 @@ export const api = {
     })
     if (!response.ok) throw new Error(`Publish gateway returned ${response.status}.`)
     return response.json()
+  },
+  socialUpdate: async (baseUrl: string, token: string, post: unknown) => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/schedule/${encodeURIComponent(String((post as { id?: string }).id ?? ''))}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify(post)
+    })
+    if (!response.ok) throw new Error(`Schedule update gateway returned ${response.status}.`)
+    return response.json()
+  },
+  socialCancel: async (baseUrl: string, token: string, postId: string) => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/schedule/${encodeURIComponent(postId)}`, {
+      method: 'DELETE',
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Schedule cancel gateway returned ${response.status}.`)
+    return response.json()
   }
 }

@@ -81,3 +81,22 @@ The Gateway is responsible for platform-specific OAuth scopes, refresh-token rot
 ## Security requirements
 
 The APK must never contain Meta app secrets, TikTok client secrets, Google client secrets, X client secrets, or platform refresh tokens. Use short-lived session tokens for the Gateway, rotate them, validate HTTPS certificates, rate-limit the endpoints, and require explicit user approval when the account or content policy requires it.
+
+## Update or cancel a scheduled post
+
+The calendar uses the local post ID as the stable identifier. A Gateway that supports server-side scheduling should implement the following endpoints:
+
+```http
+PATCH /v1/social/schedule/{post-id}
+Authorization: Bearer <session-token>
+Content-Type: application/json
+```
+
+The request body contains the full post payload with the new `scheduledAt`, content, account, or platform. The Gateway should return the normalized scheduled record.
+
+```http
+DELETE /v1/social/schedule/{post-id}
+Authorization: Bearer <session-token>
+```
+
+The Gateway should cancel a queued provider job and return `{ "id": "gateway-job-id", "status": "cancelled" }`. The app keeps a local copy of the calendar for offline review; when no Gateway is configured, edits and cancellations remain local and are not published remotely.

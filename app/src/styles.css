@@ -1034,3 +1034,44 @@ body {
   .deck-row { grid-template-columns: 1fr; gap: 7px; }
   .deck-msg { grid-column: auto; }
 }
+
+/* ---------- publishing calendar ---------- */
+.social-calendar-panel { grid-column: 1 / -1; }
+.social-calendar-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 16px; }
+.social-month { font-family: var(--display); font-size: 24px; margin-top: 8px; }
+.social-calendar-actions { display: flex; gap: 5px; align-items: center; }
+.social-calendar-actions .btn-ghost { min-width: 42px; }
+.social-calendar-weekdays, .social-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
+.social-calendar-weekdays { margin-bottom: 5px; }
+.social-calendar-weekdays span { color: var(--faint); font: 10px var(--mono); padding: 4px 6px; text-transform: uppercase; }
+.social-calendar-day { min-height: 104px; min-width: 0; background: var(--ink); border: 1px solid var(--line); padding: 7px; overflow: hidden; }
+.social-calendar-day.empty { opacity: .35; }
+.social-calendar-day.today { border-color: var(--amber-dim); box-shadow: inset 0 2px 0 var(--amber); }
+.social-day-number { display: block; color: var(--dim); font: 11px var(--mono); margin-bottom: 6px; }
+.social-calendar-day.today .social-day-number { color: var(--amber); }
+.social-day-posts { display: grid; gap: 4px; }
+.social-day-post { width: 100%; min-width: 0; display: grid; grid-template-columns: 1fr auto; gap: 4px; text-align: left; background: var(--panel-2); border: 0; border-left: 2px solid var(--amber); color: var(--text); padding: 5px 6px; cursor: pointer; }
+.social-day-post span, .social-day-post small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.social-day-post span { font-size: 10px; }
+.social-day-post small { color: var(--faint); font: 9px var(--mono); }
+.social-day-post.platform-facebook { border-left-color: #4a8cff; }
+.social-day-post.platform-tiktok { border-left-color: #ff5cce; }
+.social-day-post.platform-youtube { border-left-color: #ff3b30; }
+.social-day-post.platform-x { border-left-color: #eee; }
+.social-day-post.status-cancelled { opacity: .45; text-decoration: line-through; }
+.social-more { color: var(--faint); font: 9px var(--mono); }
+.social-queue-actions { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.social-queue-actions .danger { color: var(--red); }
+.status-row-cancelled { opacity: .5; }
+@media (max-width: 700px) {
+  .social-calendar-head { align-items: center; }
+  .social-calendar-actions .btn-ghost { padding: 8px 7px; min-width: 0; }
+  .social-calendar-day { min-height: 76px; padding: 5px; }
+  .social-day-number { margin-bottom: 4px; }
+  .social-day-post { display: block; padding: 4px; }
+  .social-day-post span, .social-day-post small { display: block; font-size: 8px; }
+  .social-day-post small { margin-top: 2px; }
+  .social-calendar-weekdays span { padding-left: 2px; padding-right: 2px; font-size: 8px; }
+  .social-queue-item { align-items: flex-start; flex-direction: column; }
+  .social-queue-actions { width: 100%; justify-content: flex-start; }
+}
