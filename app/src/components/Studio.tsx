@@ -26,11 +26,12 @@ interface Props {
   error: string | null
   onRun: (source: string, llm: string, captions: string) => void
   onOpenLoop: () => void
+  onOpenSocial: () => void
   onOpenJob: (id: string) => void
   onResume: (id: string, llm?: string) => void
 }
 
-export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenSocial, onOpenJob, onResume }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -68,6 +69,9 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
           </button>
           <button className="btn-ghost" onClick={onOpenLoop}>
             ⟳ instagram loop
+          </button>
+          <button className="btn-ghost" onClick={onOpenSocial}>
+            ◎ social hub
           </button>
         </footer>
       </aside>

@@ -33,3 +33,4 @@ app/src-tauri/gen/android/build/
 app/src-tauri/gen/android/.gradle/
 app/src-tauri/gen/android/app/src/main/assets/resources/
 app/src-tauri/gen/android/app/src/main/jniLibs/
+app/src-tauri/gen/android/buildSrc/.kotlin/

@@ -25,5 +25,30 @@ export const api = {
     invoke<{ ok: boolean }>('ig_tool', { args: ['unlink', mediaId] }),
   igReject: (mediaId: string, jobId: string, clip: number) =>
     invoke<{ ok: boolean }>('ig_tool', { args: ['reject', mediaId, jobId, String(clip)] }),
-  fileUrl: (path: string) => convertFileSrc(path)
+  fileUrl: (path: string) => convertFileSrc(path),
+  socialOAuthStart: async (baseUrl: string, token: string, platform: string) => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/oauth/${platform}/start`, {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`OAuth gateway returned ${response.status}.`)
+    return (await response.json()) as { url: string }
+  },
+  socialSchedule: async (baseUrl: string, token: string, post: unknown) => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/schedule`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify(post)
+    })
+    if (!response.ok) throw new Error(`Schedule gateway returned ${response.status}.`)
+    return response.json()
+  },
+  socialPublish: async (baseUrl: string, token: string, post: unknown) => {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/social/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify(post)
+    })
+    if (!response.ok) throw new Error(`Publish gateway returned ${response.status}.`)
+    return response.json()
+  }
 }
