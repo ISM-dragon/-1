@@ -220,6 +220,9 @@ body {
 }
 .ob-key-row input:focus { border-color: var(--amber-dim); }
 .ob-fine { font-size: 13px; color: var(--faint); margin-bottom: 26px; }
+.ob-error, .ob-success { font-size: 12px; line-height: 1.45; margin: 9px 0 0; }
+.ob-error { color: var(--red); }
+.ob-success { color: var(--green); }
 
 /* ---------- studio ---------- */
 .studio {

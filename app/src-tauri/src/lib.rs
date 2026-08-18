@@ -11,11 +11,15 @@ use std::process::{Command, Stdio};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
-fn home_dir() -> PathBuf {
+fn home_dir(app: &AppHandle) -> PathBuf {
     if let Ok(custom) = std::env::var("PUBLIKCLIP_HOME") {
         return PathBuf::from(custom);
     }
-    dirs_home().join(".publikclip")
+    // Android does not guarantee a writable HOME directory. Use Tauri's
+    // per-app data directory so API keys, jobs, and settings are writable.
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| dirs_home().join(".publikclip"))
 }
 
 fn dirs_home() -> PathBuf {
@@ -171,8 +175,8 @@ fn stream_pipeline(app: &AppHandle, program: &str, args: &[String]) {
 /// Everything the review UI needs for one job, read straight off the job
 /// dir's checkpoint files (artifacts are the truth).
 #[tauri::command]
-fn job_results(job_id: String) -> Result<Value, String> {
-    let dir = home_dir().join("jobs").join(&job_id);
+fn job_results(app: AppHandle, job_id: String) -> Result<Value, String> {
+    let dir = home_dir(&app).join("jobs").join(&job_id);
     if !dir.exists() {
         return Err(format!("no job dir for {job_id}"));
     }
@@ -196,8 +200,8 @@ fn job_results(job_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn list_job_dirs() -> Result<Vec<Value>, String> {
-    let jobs_dir = home_dir().join("jobs");
+fn list_job_dirs(app: AppHandle) -> Result<Vec<Value>, String> {
+    let jobs_dir = home_dir(&app).join("jobs");
     let mut out = vec![];
     if let Ok(entries) = fs::read_dir(&jobs_dir) {
         for entry in entries.flatten() {
@@ -220,8 +224,8 @@ fn list_job_dirs() -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
-fn save_gemini_key(key: String) -> Result<bool, String> {
-    let home = home_dir();
+fn save_gemini_key(app: AppHandle, key: String) -> Result<bool, String> {
+    let home = home_dir(&app);
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     let path = home.join("secrets.json");
     let mut current: Value = fs::read_to_string(&path)
@@ -239,20 +243,20 @@ fn save_gemini_key(key: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn get_setup_state() -> Result<Value, String> {
-    let secrets = home_dir().join("secrets.json");
+fn get_setup_state(app: AppHandle) -> Result<Value, String> {
+    let secrets = home_dir(&app).join("secrets.json");
     let has_key = fs::read_to_string(&secrets)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .map(|v| v["gemini_api_key"].as_str().map(|k| !k.is_empty()).unwrap_or(false))
         .unwrap_or(false);
-    let onboarded = home_dir().join("onboarded").exists();
+    let onboarded = home_dir(&app).join("onboarded").exists();
     Ok(json!({"has_gemini_key": has_key, "onboarded": onboarded}))
 }
 
 #[tauri::command]
-fn mark_onboarded() -> Result<(), String> {
-    let home = home_dir();
+fn mark_onboarded(app: AppHandle) -> Result<(), String> {
+    let home = home_dir(&app);
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     fs::write(home.join("onboarded"), "1").map_err(|e| e.to_string())
 }
@@ -315,8 +319,8 @@ fn run_edit_render(app: AppHandle, job_id: String, clip: u32) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn save_clip_edits(job_id: String, edits: Value) -> Result<(), String> {
-    let path = home_dir().join("jobs").join(&job_id).join("clip_edits.json");
+fn save_clip_edits(app: AppHandle, job_id: String, edits: Value) -> Result<(), String> {
+    let path = home_dir(&app).join("jobs").join(&job_id).join("clip_edits.json");
     // Merge: the app sends one clip's state at a time; other clips' edits
     // must survive.
     let mut current: Value = fs::read_to_string(&path)
@@ -332,8 +336,8 @@ fn save_clip_edits(job_id: String, edits: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_pexels_key(key: String) -> Result<bool, String> {
-    let home = home_dir();
+fn save_pexels_key(app: AppHandle, key: String) -> Result<bool, String> {
+    let home = home_dir(&app);
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     let path = home.join("secrets.json");
     let mut current: Value = fs::read_to_string(&path)
@@ -346,8 +350,8 @@ fn save_pexels_key(key: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn ig_status() -> Result<Value, String> {
-    let path = home_dir().join("instagram.json");
+fn ig_status(app: AppHandle) -> Result<Value, String> {
+    let path = home_dir(&app).join("instagram.json");
     let connected = fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok());

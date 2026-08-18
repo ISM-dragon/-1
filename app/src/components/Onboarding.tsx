@@ -15,6 +15,8 @@ export default function Onboarding({ onDone }: Props) {
   const [step, setStep] = useState(0)
   const [key, setKey] = useState('')
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [ollama, setOllama] = useState<{ running: boolean; models: string[] } | null>(null)
 
   useEffect(() => {
@@ -22,9 +24,20 @@ export default function Onboarding({ onDone }: Props) {
   }, [])
 
   async function saveKey() {
-    if (!key.trim()) return
-    await api.saveGeminiKey(key)
-    setSaved(true)
+    const trimmed = key.trim()
+    if (!trimmed || saving) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const ok = await api.saveGeminiKey(trimmed)
+      if (!ok) throw new Error('The API key was not saved.')
+      setSaved(true)
+    } catch (error) {
+      setSaved(false)
+      setSaveError(error instanceof Error ? error.message : 'Could not save the API key.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -71,10 +84,12 @@ export default function Onboarding({ onDone }: Props) {
                   onChange={(e) => setKey(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && saveKey()}
                 />
-                <button className="btn-secondary" onClick={saveKey} disabled={!key.trim()}>
-                  {saved ? 'Saved ✓' : 'Save'}
+                <button className="btn-secondary" onClick={saveKey} disabled={!key.trim() || saving}>
+                  {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
                 </button>
               </div>
+              {saveError && <p className="ob-error">{saveError}</p>}
+              {saved && <p className="ob-success">Your key is stored locally and ready to use.</p>}
             </div>
             <div className={`ob-card ${ollama?.running ? '' : 'dim'}`}>
               <h3>
