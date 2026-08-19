@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { api, loadProcessingGatewayConfig, saveProcessingGatewayConfig } from '../api'
 
@@ -93,7 +93,6 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
   const [summary, setSummary] = useState<{ accounts: number; posts: Record<string, number>; recent: Array<Record<string, unknown>> } | null>(null)
   const [accountNotice, setAccountNotice] = useState<string | null>(null)
   const [capabilities, setCapabilities] = useState<Array<{ platform: string; configured: boolean; publish_mode: string; analytics: string; note: string }>>([])
-  const publishingRef = useRef(new Set<string>())
 
   useEffect(() => {
     saveProcessingGatewayConfig({ url: gatewayUrl.trim(), token: gatewayToken.trim() })
@@ -139,23 +138,6 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
     }
   }
 
-  async function publishDue(post: SocialPost) {
-    if (!gatewayUrl.trim() || publishingRef.current.has(post.id)) return
-    publishingRef.current.add(post.id)
-    setBusy(true)
-    try {
-      await api.socialPublish(gatewayUrl, gatewayToken, outboundPost({ ...post, status: 'scheduled' }))
-      setQueue((items) => items.map((item) => item.id === post.id ? { ...item, status: 'published', error: undefined } : item))
-      setNotice(`تم نشر ${post.title || post.platform} تلقائيًا.`)
-    } catch (error) {
-      setQueue((items) => items.map((item) => item.id === post.id ? { ...item, status: 'failed', error: String(error) } : item))
-      setNotice(error instanceof Error ? error.message : 'فشل النشر التلقائي.')
-    } finally {
-      publishingRef.current.delete(post.id)
-      setBusy(false)
-    }
-  }
-
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(queue))
   }, [queue])
@@ -164,9 +146,8 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
     const checkDuePosts = () => {
       const now = Date.now()
       for (const post of queue) {
-        if (post.autoPublish && post.status === 'scheduled' && post.scheduledAt && new Date(post.scheduledAt).getTime() <= now) {
-          if (gatewayUrl.trim()) void publishDue(post)
-          else setNotice('هناك منشور مستحق، أدخل Gateway API لتفعيل النشر التلقائي.')
+        if (post.autoPublish && post.status === 'scheduled' && post.scheduledAt && new Date(post.scheduledAt).getTime() <= now && !gatewayUrl.trim()) {
+          setNotice('هناك منشور مستحق، أدخل Gateway API لتفعيل النشر التلقائي.')
         }
       }
     }

@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -35,8 +36,10 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8787").rstrip("
 ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
 ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
 MAX_PROVIDER_ATTEMPTS = max(1, int(os.getenv("MAX_PROVIDER_ATTEMPTS", "3")))
+MAX_ACTIVE_PROCESSING_JOBS = max(1, int(os.getenv("MAX_ACTIVE_PROCESSING_JOBS", "1")))
+MAX_ACTIVE_SOURCE_JOBS = max(1, int(os.getenv("MAX_ACTIVE_SOURCE_JOBS", "2")))
 
-app = FastAPI(title="ISM Social Gateway", version="0.9.0")
+app = FastAPI(title="ISM Social Gateway", version="0.9.2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
@@ -235,7 +238,7 @@ async def auth(request: Request) -> None:
     if not GATEWAY_TOKEN:
         return
     supplied = request.headers.get("authorization", "")
-    if supplied != f"Bearer {GATEWAY_TOKEN}":
+    if not secrets.compare_digest(supplied, f"Bearer {GATEWAY_TOKEN}"):
         raise HTTPException(status_code=401, detail="Invalid Gateway token")
 
 
@@ -309,12 +312,21 @@ def validate_public_source(value: str) -> str:
     blocked = {"localhost", "localhost.localdomain", "0.0.0.0", "::1"}
     if host in blocked:
         raise HTTPException(status_code=422, detail="Local network sources are not allowed.")
-    try:
-        address = ipaddress.ip_address(host)
-        if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+
+    def reject_private(address_text: str) -> None:
+        address = ipaddress.ip_address(address_text)
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast:
             raise HTTPException(status_code=422, detail="Private network sources are not allowed.")
+
+    try:
+        reject_private(host)
     except ValueError:
-        pass
+        try:
+            addresses = {entry[4][0] for entry in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)}
+        except socket.gaierror as error:
+            raise HTTPException(status_code=422, detail="Source hostname could not be resolved.") from error
+        for address_text in addresses:
+            reject_private(address_text)
     return value
 
 
@@ -549,12 +561,20 @@ def row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def save_post(payload: PostPayload, post_id: str | None = None) -> dict[str, Any]:
     identifier = post_id or payload.id or f"post_{secrets.token_urlsafe(10)}"
-    scheduled = parse_time(payload.scheduledAt)
+    try:
+        scheduled = parse_time(payload.scheduledAt)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="scheduledAt must be a valid ISO-8601 timestamp") from error
     scheduled_iso = scheduled.isoformat() if scheduled else None
+    media_url = validate_public_source(str(payload.mediaUrl))
     timestamp = now_iso()
     status = payload.status if payload.status in {"draft", "awaiting_approval", "scheduled"} else "scheduled"
     with closing(db()) as connection:
         account = account_for_post(connection, payload)
+        if account and account["platform"] != payload.platform:
+            raise HTTPException(status_code=422, detail="Account platform does not match post platform")
+        if (payload.autoPublish or status == "scheduled") and not account:
+            raise HTTPException(status_code=422, detail="A connected account is required for scheduled or automatic publishing")
         account_id = account["id"] if account else payload.account_id
         account_name = account["account_name"] if account else payload.account
         key = idempotency_key(payload, scheduled_iso)
@@ -572,11 +592,11 @@ def save_post(payload: PostPayload, post_id: str | None = None) -> dict[str, Any
               media_url=excluded.media_url, title=excluded.title, caption=excluded.caption,
               description=excluded.description, hashtags=excluded.hashtags, keywords=excluded.keywords,
               scheduled_at=excluded.scheduled_at, auto_publish=excluded.auto_publish,
-              status=CASE WHEN posts.status IN ('published', 'cancelled') THEN posts.status ELSE excluded.status END,
+              status=CASE WHEN posts.status IN ('published', 'cancelled', 'publishing') THEN posts.status ELSE excluded.status END,
               idempotency_key=excluded.idempotency_key, next_attempt_at=NULL, error=NULL, updated_at=excluded.updated_at
             """,
             (
-                identifier, payload.platform, account_id, account_name, str(payload.mediaUrl),
+                identifier, payload.platform, account_id, account_name, media_url,
                 payload.title, payload.caption, payload.description, payload.hashtags, payload.keywords,
                 scheduled_iso, int(payload.autoPublish), status, key, None, timestamp, timestamp,
             ),
@@ -620,11 +640,14 @@ async def publish_job(post_id: str) -> dict[str, Any] | None:
             )
             connection.commit()
             return await get_post(post_id)
-        connection.execute(
-            "UPDATE posts SET status='publishing', attempts=attempts+1, error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=?",
+        claimed = connection.execute(
+            "UPDATE posts SET status='publishing', attempts=attempts+1, error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=? AND status IN ('scheduled', 'failed')",
             (now_iso(), post_id),
         )
         connection.commit()
+        if claimed.rowcount == 0:
+            current = connection.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
+            return row_dict(current) if current else None
         row = connection.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
 
     result = await provider_publish(row)
@@ -700,6 +723,11 @@ async def scheduler_loop() -> None:
 async def startup() -> None:
     global _scheduler_task
     init_db()
+    with closing(db()) as connection:
+        timestamp = now_iso()
+        connection.execute("UPDATE processing_jobs SET status='failed', error='Gateway restarted before this task completed. Start it again.', message='Interrupted by Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
+        connection.execute("UPDATE source_jobs SET status='failed', error='Gateway restarted before this download completed. Start it again.', message='Interrupted by Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
+        connection.commit()
     _scheduler_task = asyncio.create_task(scheduler_loop())
 
 
@@ -712,7 +740,10 @@ async def shutdown() -> None:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "provider_mode": PROVIDER_MODE, "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS}
+    with closing(db()) as connection:
+        processing_active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+        source_active = connection.execute("SELECT COUNT(*) AS count FROM source_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+    return {"ok": True, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -723,8 +754,9 @@ async def dashboard() -> str:
 @app.post("/v1/sources/inspect", dependencies=[Depends(auth)])
 async def inspect_source(payload: SourcePayload) -> dict[str, Any]:
     source = validate_public_source(str(payload.source))
+    preview_limit = payload.max_items or 50
     try:
-        items = await asyncio.to_thread(source_preview, source, payload.max_items)
+        items = await asyncio.to_thread(source_preview, source, preview_limit)
     except Exception as error:  # noqa: BLE001 — normalize extractor errors
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"source": source, "count": len(items), "items": items}
@@ -737,6 +769,12 @@ async def download_source(payload: SourcePayload) -> dict[str, Any]:
     timestamp = now_iso()
     SOURCE_ROOT.mkdir(parents=True, exist_ok=True)
     with closing(db()) as connection:
+        existing = connection.execute("SELECT id, status FROM source_jobs WHERE source=? AND max_items=? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1", (source, payload.max_items)).fetchone()
+        if existing:
+            return {"id": existing["id"], "status": existing["status"], "reused": True}
+        active = connection.execute("SELECT COUNT(*) AS count FROM source_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+        if active >= MAX_ACTIVE_SOURCE_JOBS:
+            raise HTTPException(status_code=429, detail="Too many source downloads are active. Wait for one to finish.")
         connection.execute(
             "INSERT INTO source_jobs (id, source, max_items, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
             (job_id, source, payload.max_items, timestamp, timestamp),
@@ -770,16 +808,23 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
 async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
+    source = validate_public_source(str(payload.source))
     job_id = f"proc_{secrets.token_urlsafe(12)}"
     timestamp = now_iso()
     PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
     with closing(db()) as connection:
+        existing = connection.execute("SELECT id, status FROM processing_jobs WHERE source=? AND llm=? AND captions=? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1", (source, payload.llm, payload.captions)).fetchone()
+        if existing:
+            return {"id": existing["id"], "status": existing["status"], "reused": True}
+        active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+        if active >= MAX_ACTIVE_PROCESSING_JOBS:
+            raise HTTPException(status_code=429, detail="A processing job is already active. Wait for it to finish.")
         connection.execute(
             "INSERT INTO processing_jobs (id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
-            (job_id, str(payload.source), payload.llm, payload.captions, timestamp, timestamp),
+            (job_id, source, payload.llm, payload.captions, timestamp, timestamp),
         )
         connection.commit()
-    asyncio.create_task(asyncio.to_thread(run_processing_job, job_id, str(payload.source), payload.llm, payload.captions))
+    asyncio.create_task(asyncio.to_thread(run_processing_job, job_id, source, payload.llm, payload.captions))
     return {"id": job_id, "status": "queued"}
 
 
@@ -868,6 +913,8 @@ async def accounts() -> list[dict[str, Any]]:
 
 @app.post("/v1/accounts/mock", dependencies=[Depends(auth)])
 async def create_mock_account(payload: AccountCreate) -> dict[str, Any]:
+    if PROVIDER_MODE != "mock":
+        raise HTTPException(status_code=404, detail="Mock account endpoint is disabled outside mock mode")
     account_id = f"acct_{secrets.token_urlsafe(8)}"
     timestamp = now_iso()
     with closing(db()) as connection:
@@ -922,21 +969,22 @@ async def resume_account(account_id: str) -> dict[str, Any]:
 
 @app.get("/v1/social/capabilities", dependencies=[Depends(auth)])
 async def social_capabilities() -> dict[str, Any]:
-    configured = {
-        "instagram": bool(os.getenv("META_CLIENT_ID")),
-        "facebook": bool(os.getenv("META_CLIENT_ID")),
-        "tiktok": bool(os.getenv("TIKTOK_CLIENT_KEY")),
-        "youtube": bool(os.getenv("GOOGLE_CLIENT_ID")),
-        "x": bool(os.getenv("X_CLIENT_ID")),
+    configured = {platform: PROVIDER_MODE == "mock" for platform in ("instagram", "facebook", "tiktok", "youtube", "x")}
+    credentials_present = {
+        "instagram": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
+        "facebook": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
+        "tiktok": bool(os.getenv("TIKTOK_CLIENT_KEY") and os.getenv("TIKTOK_CLIENT_SECRET")),
+        "youtube": bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET")),
+        "x": bool(os.getenv("X_CLIENT_ID") and os.getenv("X_CLIENT_SECRET")),
     }
     return {
         "mode": PROVIDER_MODE,
         "providers": [
-            {"platform": "instagram", "configured": configured["instagram"], "publish_mode": "professional account direct post", "analytics": "Instagram Insights", "note": "Requires Instagram professional account and Meta permissions."},
-            {"platform": "facebook", "configured": configured["facebook"], "publish_mode": "Page publishing", "analytics": "Page insights", "note": "Requires Page access and Meta app review where applicable."},
-            {"platform": "tiktok", "configured": configured["tiktok"], "publish_mode": "Direct Post or Draft", "analytics": "Display/approved business scope", "note": "The provider may require product approval; Draft mode is supported by design."},
-            {"platform": "youtube", "configured": configured["youtube"], "publish_mode": "videos.insert", "analytics": "YouTube Analytics", "note": "Uses Google OAuth and resumable uploads."},
-            {"platform": "x", "configured": configured["x"], "publish_mode": "chunked media + post", "analytics": "public/private metrics", "note": "Private metrics require user context and have provider-specific windows."},
+            {"platform": "instagram", "configured": configured["instagram"], "credentials_present": credentials_present["instagram"], "publish_mode": "professional account direct post", "analytics": "Instagram Insights", "note": "Requires Instagram professional account and Meta permissions."},
+            {"platform": "facebook", "configured": configured["facebook"], "credentials_present": credentials_present["facebook"], "publish_mode": "Page publishing", "analytics": "Page insights", "note": "Requires Page access and Meta app review where applicable."},
+            {"platform": "tiktok", "configured": configured["tiktok"], "credentials_present": credentials_present["tiktok"], "publish_mode": "Direct Post or Draft", "analytics": "Display/approved business scope", "note": "The provider may require product approval; Draft mode is supported by design."},
+            {"platform": "youtube", "configured": configured["youtube"], "credentials_present": credentials_present["youtube"], "publish_mode": "videos.insert", "analytics": "YouTube Analytics", "note": "Uses Google OAuth and resumable uploads."},
+            {"platform": "x", "configured": configured["x"], "credentials_present": credentials_present["x"], "publish_mode": "chunked media + post", "analytics": "public/private metrics", "note": "Private metrics require user context and have provider-specific windows."},
         ],
     }
 
@@ -945,11 +993,15 @@ async def social_capabilities() -> dict[str, Any]:
 async def oauth_start(platform: str) -> dict[str, str]:
     if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
         raise HTTPException(status_code=400, detail="Unsupported platform")
-    return {"url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}"}
+    if PROVIDER_MODE == "mock":
+        return {"url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}"}
+    raise HTTPException(status_code=501, detail=f"Live OAuth adapter for {platform} is not configured in this Gateway build")
 
 
 @app.get("/oauth/mock/complete", response_class=HTMLResponse)
 async def oauth_complete(platform: str) -> str:
+    if PROVIDER_MODE != "mock":
+        raise HTTPException(status_code=404, detail="Mock OAuth callback is disabled outside mock mode")
     account_id = f"acct_{secrets.token_urlsafe(8)}"
     timestamp = now_iso()
     with closing(db()) as connection:
@@ -975,15 +1027,18 @@ async def schedule(payload: PostPayload) -> dict[str, Any]:
 
 @app.patch("/v1/social/schedule/{post_id}", dependencies=[Depends(auth)])
 async def update_schedule(post_id: str, payload: PostPayload) -> dict[str, Any]:
-    if not await get_post(post_id):
+    existing = await get_post(post_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Post not found")
+    if existing["status"] in {"publishing", "published", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"Post cannot be edited while status is {existing['status']}")
     return save_post(payload, post_id=post_id)
 
 
 @app.delete("/v1/social/schedule/{post_id}", dependencies=[Depends(auth)])
 async def cancel_schedule(post_id: str) -> dict[str, Any]:
     with closing(db()) as connection:
-        cursor = connection.execute("UPDATE posts SET status='cancelled', updated_at=? WHERE id=? AND status NOT IN ('published', 'cancelled')", (now_iso(), post_id))
+        cursor = connection.execute("UPDATE posts SET status='cancelled', updated_at=? WHERE id=? AND status IN ('draft', 'awaiting_approval', 'scheduled', 'failed')", (now_iso(), post_id))
         connection.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Post not found or already final")
@@ -999,6 +1054,8 @@ async def publish(payload: PostPayload) -> dict[str, Any]:
 
 @app.get("/mock/published/{provider_id}")
 async def mock_published(provider_id: str) -> dict[str, str]:
+    if PROVIDER_MODE != "mock":
+        raise HTTPException(status_code=404, detail="Mock publication endpoint is disabled outside mock mode")
     return {"status": "published", "provider_post_id": provider_id, "mode": "mock"}
 
 

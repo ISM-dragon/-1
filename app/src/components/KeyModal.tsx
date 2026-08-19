@@ -10,6 +10,8 @@ interface Props {
 function PexelsField() {
   const [key, setKey] = useState('')
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   return (
     <div className="ig-form">
       <input
@@ -21,14 +23,24 @@ function PexelsField() {
       />
       <button
         className="btn-secondary"
-        disabled={!key.trim()}
+        disabled={!key.trim() || saving}
         onClick={async () => {
-          await invoke('save_pexels_key', { key })
-          setSaved(true)
+          setSaving(true)
+          setError(null)
+          try {
+            await invoke('save_pexels_key', { key: key.trim() })
+            setSaved(true)
+          } catch (reason) {
+            setSaved(false)
+            setError(reason instanceof Error ? reason.message : String(reason))
+          } finally {
+            setSaving(false)
+          }
         }}
       >
-        {saved ? 'saved ✓' : 'save'}
+        {saving ? 'saving…' : saved ? 'saved ✓' : 'save'}
       </button>
+      {error && <p className="ob-error">{error}</p>}
     </div>
   )
 }
@@ -37,18 +49,29 @@ export default function KeyModal({ onClose }: Props) {
   const [key, setKey] = useState('')
   const [hasKey, setHasKey] = useState<boolean | null>(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     invoke<{ has_gemini_key: boolean }>('get_setup_state').then((s) =>
       setHasKey(s.has_gemini_key)
-    )
+    ).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
   }, [])
 
   async function save() {
-    if (!key.trim()) return
-    await invoke('save_gemini_key', { key })
-    setSaved(true)
-    setHasKey(true)
+    if (!key.trim() || saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      await invoke('save_gemini_key', { key: key.trim() })
+      setSaved(true)
+      setHasKey(true)
+    } catch (reason) {
+      setSaved(false)
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -73,10 +96,11 @@ export default function KeyModal({ onClose }: Props) {
             onKeyDown={(e) => e.key === 'Enter' && save()}
             className="mono"
           />
-          <button className="btn-primary" onClick={save} disabled={!key.trim()}>
-            {saved ? 'SAVED ✓' : 'SAVE KEY'}
+          <button className="btn-primary" onClick={save} disabled={!key.trim() || saving}>
+            {saving ? 'SAVING…' : saved ? 'SAVED ✓' : 'SAVE KEY'}
           </button>
         </div>
+        {error && <p className="ob-error">{error}</p>}
         <p className="audit-label" style={{ marginTop: 22 }}>PEXELS (STOCK VISUALS)</p>
         <PexelsField />
         <p className="ig-message mono">

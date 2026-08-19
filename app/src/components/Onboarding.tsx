@@ -8,7 +8,7 @@ import { api } from '../api'
  */
 
 interface Props {
-  onDone: () => void
+  onDone: () => Promise<void>
 }
 
 export default function Onboarding({ onDone }: Props) {
@@ -17,6 +17,8 @@ export default function Onboarding({ onDone }: Props) {
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [finishing, setFinishing] = useState(false)
+  const [finishError, setFinishError] = useState<string | null>(null)
   const [ollama, setOllama] = useState<{ running: boolean; models: string[] } | null>(null)
 
   useEffect(() => {
@@ -127,9 +129,19 @@ export default function Onboarding({ onDone }: Props) {
             podcast then takes a while on-device — the progress bar never lies to you,
             and every stage checkpoints, so you can quit and resume anytime.
           </p>
-          <button className="btn-primary" onClick={onDone}>
-            Open the studio
+          <button className="btn-primary" disabled={finishing} onClick={async () => {
+            setFinishing(true)
+            setFinishError(null)
+            try {
+              await onDone()
+            } catch (error) {
+              setFinishError(error instanceof Error ? error.message : 'Could not finish setup.')
+              setFinishing(false)
+            }
+          }}>
+            {finishing ? 'Opening…' : 'Open the studio'}
           </button>
+          {finishError && <p className="ob-error">{finishError}</p>}
         </section>
       )}
     </div>

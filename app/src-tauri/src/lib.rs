@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
@@ -20,6 +20,23 @@ fn home_dir(app: &AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| dirs_home().join(".publikclip"))
+}
+
+fn write_text_atomically(path: &Path, content: &str) -> Result<(), String> {
+    let temp = path.with_extension("tmp");
+    fs::write(&temp, content).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&temp, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(windows)]
+    {
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+    }
+    fs::rename(&temp, path).map_err(|e| e.to_string())
 }
 
 fn dirs_home() -> PathBuf {
@@ -85,7 +102,11 @@ fn pipeline_invocation() -> Result<(String, Vec<String>), String> {
         } else {
             exe_dir.join("resources")
         };
-        let uv = if cfg!(target_os = "windows") { "bin/uv.exe" } else { "bin/uv" };
+        let uv = if cfg!(target_os = "windows") {
+            "bin/uv.exe"
+        } else {
+            "bin/uv"
+        };
         Ok((
             resources.join(uv).to_string_lossy().to_string(),
             vec![
@@ -99,7 +120,12 @@ fn pipeline_invocation() -> Result<(String, Vec<String>), String> {
 }
 
 #[tauri::command]
-fn run_job(app: AppHandle, source: String, llm: Option<String>, captions: Option<String>) -> Result<(), String> {
+fn run_job(
+    app: AppHandle,
+    source: String,
+    llm: Option<String>,
+    captions: Option<String>,
+) -> Result<(), String> {
     let (program, base_args) = pipeline_invocation()?;
     std::thread::spawn(move || {
         let mut args = base_args.clone();
@@ -243,6 +269,10 @@ fn list_job_dirs(app: AppHandle) -> Result<Vec<Value>, String> {
 
 #[tauri::command]
 fn save_gemini_key(app: AppHandle, key: String) -> Result<bool, String> {
+    let key = key.trim();
+    if key.len() < 10 || key.contains(['\n', '\r']) {
+        return Err("Gemini API key is empty or malformed.".to_string());
+    }
     let home = home_dir(&app);
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     let path = home.join("secrets.json");
@@ -250,13 +280,8 @@ fn save_gemini_key(app: AppHandle, key: String) -> Result<bool, String> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| json!({}));
-    current["gemini_api_key"] = json!(key.trim());
-    fs::write(&path, serde_json::to_string_pretty(&current).unwrap()).map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-    }
+    current["gemini_api_key"] = json!(key);
+    write_text_atomically(&path, &serde_json::to_string_pretty(&current).unwrap())?;
     Ok(true)
 }
 
@@ -266,7 +291,12 @@ fn get_setup_state(app: AppHandle) -> Result<Value, String> {
     let has_key = fs::read_to_string(&secrets)
         .ok()
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .map(|v| v["gemini_api_key"].as_str().map(|k| !k.is_empty()).unwrap_or(false))
+        .map(|v| {
+            v["gemini_api_key"]
+                .as_str()
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+        })
         .unwrap_or(false);
     let onboarded = home_dir(&app).join("onboarded").exists();
     Ok(json!({"has_gemini_key": has_key, "onboarded": onboarded}))
@@ -291,7 +321,11 @@ async fn check_ollama() -> Result<Value, String> {
     let parsed: Value = serde_json::from_slice(&out.stdout).unwrap_or(json!({}));
     let models: Vec<String> = parsed["models"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|m| m["name"].as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m["name"].as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     Ok(json!({"running": true, "models": models}))
 }
@@ -311,12 +345,18 @@ async fn edit_tool(args: Vec<String>) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     // last JSON line is the payload (progress lines may precede it)
-    let line = stdout.lines().rev().find(|l| l.trim_start().starts_with('{'));
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'));
     match line.and_then(|l| serde_json::from_str::<Value>(l).ok()) {
         Some(v) => Ok(v),
         None => Err(format!(
             "edit tool produced no JSON: {}",
-            String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(400)
+                .collect::<String>()
         )),
     }
 }
@@ -338,7 +378,10 @@ fn run_edit_render(app: AppHandle, job_id: String, clip: u32) -> Result<(), Stri
 
 #[tauri::command]
 fn save_clip_edits(app: AppHandle, job_id: String, edits: Value) -> Result<(), String> {
-    let path = home_dir(&app).join("jobs").join(&job_id).join("clip_edits.json");
+    let path = home_dir(&app)
+        .join("jobs")
+        .join(&job_id)
+        .join("clip_edits.json");
     // Merge: the app sends one clip's state at a time; other clips' edits
     // must survive.
     let mut current: Value = fs::read_to_string(&path)
@@ -350,11 +393,15 @@ fn save_clip_edits(app: AppHandle, job_id: String, edits: Value) -> Result<(), S
             obj.insert(k.clone(), v.clone());
         }
     }
-    fs::write(&path, serde_json::to_string_pretty(&current).unwrap()).map_err(|e| e.to_string())
+    write_text_atomically(&path, &serde_json::to_string_pretty(&current).unwrap())
 }
 
 #[tauri::command]
 fn save_pexels_key(app: AppHandle, key: String) -> Result<bool, String> {
+    let key = key.trim();
+    if key.len() < 10 || key.contains(['\n', '\r']) {
+        return Err("Pexels API key is empty or malformed.".to_string());
+    }
     let home = home_dir(&app);
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     let path = home.join("secrets.json");
@@ -362,8 +409,8 @@ fn save_pexels_key(app: AppHandle, key: String) -> Result<bool, String> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| json!({}));
-    current["pexels_api_key"] = json!(key.trim());
-    fs::write(&path, serde_json::to_string_pretty(&current).unwrap()).map_err(|e| e.to_string())?;
+    current["pexels_api_key"] = json!(key);
+    write_text_atomically(&path, &serde_json::to_string_pretty(&current).unwrap())?;
     Ok(true)
 }
 
@@ -391,9 +438,12 @@ async fn ig_connect(app_id: String, app_secret: String) -> Result<String, String
     let (program, base_args) = pipeline_invocation()?;
     let mut args = base_args;
     args.extend([
-        "ig".into(), "connect".into(),
-        "--app-id".into(), app_id,
-        "--app-secret".into(), app_secret,
+        "ig".into(),
+        "connect".into(),
+        "--app-id".into(),
+        app_id,
+        "--app-secret".into(),
+        app_secret,
     ]);
     let out = quiet_command(&program)
         .args(&args)
@@ -421,12 +471,18 @@ async fn ig_tool(args: Vec<String>) -> Result<Value, String> {
         .output()
         .map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let line = stdout.lines().rev().find(|l| l.trim_start().starts_with('{'));
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'));
     match line.and_then(|l| serde_json::from_str::<Value>(l).ok()) {
         Some(v) => Ok(v),
         None => Err(format!(
             "ig tool produced no JSON: {}",
-            String::from_utf8_lossy(&out.stderr).chars().take(400).collect::<String>()
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(400)
+                .collect::<String>()
         )),
     }
 }
@@ -441,7 +497,13 @@ fn export_clip(path: String, title: Option<String>) -> Result<String, String> {
     let stem = title.unwrap_or_else(|| "publikclip".into());
     let safe: String = stem
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim()
         .replace(' ', "-")

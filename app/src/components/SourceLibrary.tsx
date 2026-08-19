@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api, loadProcessingGatewayConfig, saveProcessingGatewayConfig, type SourceItem, type SourceJob } from '../api'
 
 interface Props {
@@ -21,6 +21,7 @@ export default function SourceLibrary({ onClose }: Props) {
   const [job, setJob] = useState<SourceJob | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const cancelPolling = useRef(false)
 
   function maxCount() {
     const parsed = Number.parseInt(maxItems, 10)
@@ -58,12 +59,16 @@ export default function SourceLibrary({ onClose }: Props) {
     setBusy(true)
     setNotice(null)
     setJob(null)
+    cancelPolling.current = false
     try {
       saveGateway()
       const started = await api.sourceDownload(gatewayUrl, gatewayToken, source.trim(), maxCount())
       let current = await api.sourceStatus(gatewayUrl, gatewayToken, started.id)
       setJob(current)
+      const deadline = Date.now() + 2 * 60 * 60 * 1000
       while (current.status === 'queued' || current.status === 'running') {
+        if (cancelPolling.current) throw new Error('Polling stopped. The Gateway job may continue in the background.')
+        if (Date.now() >= deadline) throw new Error('The download is still running on Gateway. Reopen Source Library later to check it.')
         await new Promise((resolve) => window.setTimeout(resolve, 1500))
         current = await api.sourceStatus(gatewayUrl, gatewayToken, started.id)
         setJob(current)
@@ -90,13 +95,14 @@ export default function SourceLibrary({ onClose }: Props) {
       </div>
 
       <section className="source-panel">
-        <label className="source-field">Gateway URL<input value={gatewayUrl} onChange={(event) => setGatewayUrl(event.target.value)} placeholder="https://your-gateway.example" /></label>
-        <label className="source-field">Gateway token<input type="password" value={gatewayToken} onChange={(event) => setGatewayToken(event.target.value)} placeholder="optional" /></label>
+        <label className="source-field">Gateway URL<input value={gatewayUrl} onChange={(event) => { setGatewayUrl(event.target.value); saveProcessingGatewayConfig({ url: event.target.value, token: gatewayToken }) }} placeholder="https://your-gateway.example or http://192.168.1.10:8787" /></label>
+        <label className="source-field">Gateway token<input type="password" value={gatewayToken} onChange={(event) => { setGatewayToken(event.target.value); saveProcessingGatewayConfig({ url: gatewayUrl, token: event.target.value }) }} placeholder="optional" /></label>
         <label className="source-field source-wide">Video, channel, or playlist URL<input value={source} onChange={(event) => setSource(event.target.value)} placeholder="https://www.youtube.com/@channel or /playlist?list=..." /></label>
         <label className="source-field">Max items<input value={maxItems} onChange={(event) => setMaxItems(event.target.value)} inputMode="numeric" /></label>
         <div className="source-actions">
           <button className="btn-secondary" onClick={inspect} disabled={busy}>INSPECT</button>
           <button className="btn-primary" onClick={download} disabled={busy || !source.trim()}>DOWNLOAD BATCH</button>
+          {busy && <button className="btn-ghost" onClick={() => { cancelPolling.current = true; setNotice('Stopping status checks…') }}>STOP WAITING</button>}
         </div>
       </section>
 

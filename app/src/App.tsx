@@ -22,6 +22,7 @@ export default function App() {
   const [stages, setStages] = useState<Record<string, { fraction: number; message: string }>>({})
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
+  const [bootError, setBootError] = useState<string | null>(null)
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
   activeJobRef.current = activeJob
@@ -34,7 +35,10 @@ export default function App() {
   useEffect(() => {
     api.setupState().then((s) => {
       setSetup(s)
+      setBootError(null)
       setView(s.onboarded ? 'studio' : 'onboarding')
+    }).catch((error) => {
+      setBootError(error instanceof Error ? error.message : 'Could not read the local app settings.')
     })
     refreshJobs()
   }, [refreshJobs])
@@ -150,13 +154,13 @@ export default function App() {
     if (r.render?.outputs?.length) setView('review')
   }, [])
 
-  if (view === 'boot') return <div className="boot" />
+  if (view === 'boot') return bootError ? <div className="boot boot-failed"><div><h1>ISM could not start</h1><p>{bootError}</p><button className="btn-primary" onClick={() => window.location.reload()}>RETRY</button></div></div> : <div className="boot" />
 
   if (view === 'onboarding' && setup) {
     return (
       <Onboarding
-        onDone={() => {
-          api.markOnboarded()
+        onDone={async () => {
+          await api.markOnboarded()
           setSetup({ ...setup, onboarded: true })
           setView('studio')
         }}
@@ -218,6 +222,10 @@ export default function App() {
 
       onOpenJob={openJob}
       onResume={(id, llm) => {
+        if (isAndroid) {
+          setRunError('Android cannot resume a local desktop Pipeline job. Start the YouTube URL again through Processing Gateway.')
+          return
+        }
         setRunning(true)
         setRunError(null)
         setStages({})

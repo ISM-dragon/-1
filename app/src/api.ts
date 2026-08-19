@@ -38,8 +38,9 @@ function gatewayEndpoint(baseUrl: string, path: string) {
     throw new Error('Gateway API URL is invalid.')
   }
   const localHost = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(parsed.hostname)
-  if (parsed.protocol !== 'https:' && !localHost) {
-    throw new Error('Gateway API must use HTTPS. HTTP is allowed only for localhost development.')
+  const privateNetwork = /^10\./.test(parsed.hostname) || /^192\.168\./.test(parsed.hostname) || /^172\.(1[6-9]|2\d|3[01])\./.test(parsed.hostname)
+  if (parsed.protocol !== 'https:' && !localHost && !privateNetwork) {
+    throw new Error('Gateway API must use HTTPS. HTTP is allowed only for localhost or a private LAN address in debug builds.')
   }
   return `${value}${path}`
 }

@@ -14,7 +14,7 @@ pip install -r requirements.txt
 PROVIDER_MODE=mock uvicorn main:app --host 0.0.0.0 --port 8787
 ```
 
-افتح `http://127.0.0.1:8787` لعرض لوحة التحكم. في تطبيق ISM، ضع `http://127.0.0.1:8787` في حقل **Gateway API URL**. عناوين HTTP مسموحة محليًا فقط؛ يجب استخدام HTTPS خارج الجهاز.
+افتح `http://127.0.0.1:8787` لعرض لوحة التحكم. في تطبيق ISM، ضع عنوان Gateway في حقل **Gateway API URL**. في APK Debug يمكن استخدام عنوان LAN مثل `http://192.168.1.10:8787` إذا كان الهاتف والخادم على الشبكة نفسها؛ أما العنوان العام فيجب أن يكون HTTPS.
 
 ## مكتبة المصادر v0.6
 
@@ -30,7 +30,7 @@ PROVIDER_MODE=mock uvicorn main:app --host 0.0.0.0 --port 8787
 
 ## معالجة فيديو Android عن بُعد
 
-نسخة Android لا تشغّل Python أو `uv` داخل APK. بعد نشر Gateway على جهاز يملك مجلد `pipeline` واعتمادياته، يرسل التطبيق رابط YouTube إلى `POST /v1/processing/jobs` ثم يستطلع `GET /v1/processing/jobs/{id}` ويعرض ملفات MP4 من مسار الوسائط. يجب ضبط `PUBLIC_BASE_URL` على عنوان HTTPS العام للخادم، وضبط `ISM_PIPELINE_DIR` على مجلد `pipeline`.
+نسخة Android لا تشغّل Python أو `uv` داخل APK. بعد نشر Gateway على جهاز يملك مجلد `pipeline` واعتمادياته، يرسل التطبيق رابط YouTube إلى `POST /v1/processing/jobs` ثم يستطلع `GET /v1/processing/jobs/{id}` ويعرض ملفات MP4 من مسار الوسائط. يجب ضبط `PUBLIC_BASE_URL` على عنوان HTTPS العام للخادم، وضبط `ISM_PIPELINE_DIR` على مجلد `pipeline`. يحصر Gateway المعالجة في مهمة واحدة افتراضياً والتنزيل في مهمتين، ويعيد المهام التي كانت queued/running إلى failed بعد إعادة تشغيل الخادم بدلاً من ترك التطبيق ينتظر بلا نهاية.
 
 ```bash
 # من جذر المستودع، بعد تثبيت uv أو اعتماديات pipeline
