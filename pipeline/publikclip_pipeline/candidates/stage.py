@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .. import config
 from ..jobs.queue import Stage, StageContext, StageError
 
 
@@ -74,6 +75,10 @@ class CandidatesStage(Stage):
 
         ctx.emit(0.8, "Extracting candidate windows…")
         candidates = windows_mod.extract(curve, channels, segments, duration)
+        budget = config.candidate_budget(ctx.settings.processing_mode, duration)
+        if len(candidates) > budget:
+            candidates = sorted(candidates, key=lambda item: item.curve_score, reverse=True)[:budget]
+            candidates = sorted(candidates, key=lambda item: item.start)
         if not candidates:
             raise StageError(
                 "No candidate moments found — the video may be too short or too quiet."
@@ -87,6 +92,8 @@ class CandidatesStage(Stage):
         return {
             "candidates": [c.to_json() for c in candidates],
             "count": len(candidates),
+            "candidate_budget": budget,
+            "processing_mode": ctx.settings.processing_mode,
             "effective_weights": effective_weights,
             "scene_count": len(scene_times),
             "heatmap_present": bool(ingest.get("heatmap")),

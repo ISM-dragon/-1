@@ -95,6 +95,7 @@ MIN_FREE_DISK_GB = max(0.0, float(os.getenv("MIN_FREE_DISK_GB", "2")))
 GEMINI_KEY_FILE = Path(os.getenv("ISM_GEMINI_KEY_FILE", str(ROOT / "secrets" / "gemini.key")))
 AI_SECRET_FILE = Path(os.getenv("ISM_AI_SECRET_FILE", str(ROOT / "secrets" / "ai-vault.json")))
 AI_VAULT = SecretVault(AI_SECRET_FILE)
+MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
 
 app = FastAPI(title="ISM Social Gateway", version="0.10.0")
 app.add_middleware(
@@ -233,6 +234,7 @@ def init_db() -> None:
                 source TEXT NOT NULL,
                 llm TEXT NOT NULL DEFAULT 'gemini',
                 captions TEXT NOT NULL DEFAULT 'classic',
+                mode TEXT NOT NULL DEFAULT 'balanced',
                 status TEXT NOT NULL DEFAULT 'queued',
                 stage TEXT,
                 fraction REAL,
@@ -284,6 +286,7 @@ def init_db() -> None:
             ("accounts", "cooldown_until", "TEXT"),
             ("posts", "idempotency_key", "TEXT"),
             ("posts", "next_attempt_at", "TEXT"),
+            ("processing_jobs", "mode", "TEXT NOT NULL DEFAULT 'balanced'"),
         ]
         for table, column, definition in migrations:
             existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
@@ -306,6 +309,7 @@ class ProcessingPayload(BaseModel):
     source: HttpUrl
     llm: str = Field(default="gemini", pattern=r"^(gemini|ollama)$")
     captions: str = Field(default="classic", min_length=1, max_length=40)
+    mode: str = Field(default="balanced", pattern=r"^(fast|balanced|quality|maximum)$")
 
 
 class SourcePayload(BaseModel):
@@ -341,6 +345,38 @@ class AIProviderUpdatePayload(BaseModel):
     capabilities: list[str] | None = Field(default=None, max_length=20)
     enabled: bool | None = None
     api_key: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class AIProviderPayload(BaseModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=160)
+    type: str = Field(min_length=1, max_length=40)
+    base_url: str = ""
+    credential_ref: str = ""
+    default_model: str = Field(min_length=1, max_length=160)
+    fallback_model: str = ""
+    enabled: bool = True
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+
+
+class PersonalEventPayload(BaseModel):
+    event_type: str = Field(min_length=2, max_length=20)
+    clip_id: str = ""
+    candidate_id: str = ""
+    job_id: str = ""
+    reason: str = ""
+    timestamp: int | None = None
+    features: dict[str, Any] = Field(default_factory=dict)
+
+
+class PersonalSearchPayload(BaseModel):
+    selected: dict[str, Any]
+    candidates: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+    limit: int = Field(default=10, ge=1, le=20)
+
+
+class FindBetterPayload(PersonalSearchPayload):
+    threshold: float = Field(default=5.0, ge=0.0, le=50.0)
 
 
 class AnalyticsSnapshotPayload(BaseModel):
@@ -392,6 +428,16 @@ def source_dict(row: sqlite3.Row) -> dict[str, Any]:
     result["items"] = json.loads(result["items_json"]) if result.get("items_json") else []
     result.pop("items_json", None)
     return result
+
+
+def validate_processing_source(value: str) -> str:
+    parsed = urlparse(value)
+    public = urlparse(PUBLIC_BASE_URL)
+    if parsed.scheme in {"http", "https"} and parsed.hostname and public.hostname and parsed.hostname.lower() == public.hostname.lower():
+        prefix = f"{PUBLIC_BASE_URL}/v1/sources/jobs/"
+        if value.startswith(prefix) and "/media/" in value:
+            return value
+    return validate_public_source(value)
 
 
 def validate_public_source(value: str) -> str:
@@ -502,6 +548,43 @@ def run_source_download(job_id: str, source: str, max_items: int) -> None:
         update_source_job(job_id, status="done", total=len(items), completed=len(items), message="Downloads ready", items_json=json.dumps(items, ensure_ascii=False))
     except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
         update_source_job(job_id, status="failed", error=str(error), message="Source download failed")
+
+
+def provider_config_path() -> Path:
+    PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+    return PROCESSING_ROOT / "providers.json"
+
+
+def read_provider_profiles() -> list[dict[str, Any]]:
+    path = provider_config_path()
+    try:
+        payload = json.loads(path.read_text()) if path.exists() else []
+    except (OSError, json.JSONDecodeError):
+        return []
+    profiles = payload if isinstance(payload, list) else payload.get("providers", [])
+    return [item for item in profiles if isinstance(item, dict) and item.get("id")]
+
+
+def write_provider_profiles(profiles: list[dict[str, Any]]) -> None:
+    path = provider_config_path()
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"providers": profiles}, ensure_ascii=False, indent=2))
+    temporary.replace(path)
+
+
+def public_provider_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": profile.get("id", ""),
+        "name": profile.get("name", ""),
+        "type": profile.get("type", ""),
+        "base_url": profile.get("base_url", ""),
+        "credential_ref": profile.get("credential_ref", ""),
+        "default_model": profile.get("default_model", ""),
+        "fallback_model": profile.get("fallback_model", ""),
+        "enabled": bool(profile.get("enabled", True)),
+        "capabilities": profile.get("capabilities", {}),
+        "credential_configured": bool(profile.get("credential_ref")),
+    }
 
 
 def processing_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -633,19 +716,38 @@ def pipeline_command() -> tuple[list[str], dict[str, str]]:
     return [sys.executable, "-m", "publikclip_pipeline.cli", "--jsonl"], environment
 
 
-def run_processing_job(external_id: str, source: str | None = None, llm: str | None = None, captions: str | None = None) -> None:
+def uploaded_source_path(source: str) -> str | None:
+    parsed = urlparse(source)
+    public = urlparse(PUBLIC_BASE_URL)
+    if parsed.hostname != public.hostname:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 5 or parts[:3] != ["v1", "sources", "jobs"] or parts[4] != "media":
+        return None
+    job_id = parts[3]
+    filename = Path("/".join(parts[5:])).name
+    if not filename or job_id.startswith("."):
+        return None
+    candidate = (SOURCE_ROOT / job_id / filename).resolve()
+    root = SOURCE_ROOT.resolve()
+    return str(candidate) if root in candidate.parents and candidate.is_file() else None
+
+
+def run_processing_job(external_id: str, source: str | None = None, llm: str | None = None, captions: str | None = None, mode: str | None = None) -> None:
     with closing(db()) as connection:
-        row = connection.execute("SELECT source, llm, captions, pipeline_job_id FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
+        row = connection.execute("SELECT source, llm, captions, mode, pipeline_job_id FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
     if not row:
         return
     source = source or row["source"]
     llm = llm or row["llm"]
     captions = captions or row["captions"]
+    mode = mode or row["mode"] or "balanced"
     command, environment = pipeline_command()
+    pipeline_source = uploaded_source_path(source) or source
     if row["pipeline_job_id"]:
-        command.extend(["resume", str(row["pipeline_job_id"]), "--llm", llm, "--captions", captions])
+        command.extend(["resume", str(row["pipeline_job_id"]), "--llm", llm, "--captions", captions, "--mode", mode])
     else:
-        command.extend(["run", source, "--llm", llm, "--captions", captions])
+        command.extend(["run", pipeline_source, "--llm", llm, "--captions", captions, "--mode", mode])
     try:
         process = subprocess.Popen(
             command,
@@ -998,6 +1100,66 @@ async def diagnostics_pipeline() -> dict[str, Any]:
     return checks
 
 
+@app.get("/v1/ai/providers", dependencies=[Depends(auth)])
+async def list_ai_providers() -> dict[str, Any]:
+    return {"providers": [public_provider_profile(item) for item in read_provider_profiles()]}
+
+
+@app.post("/v1/ai/providers", dependencies=[Depends(auth)])
+async def save_ai_provider(payload: AIProviderPayload) -> dict[str, Any]:
+    profiles = read_provider_profiles()
+    item = payload.model_dump()
+    profiles = [profile for profile in profiles if profile.get("id") != payload.id]
+    profiles.append(item)
+    write_provider_profiles(profiles)
+    return {"provider": public_provider_profile(item), "status": "saved"}
+
+
+@app.delete("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
+async def delete_ai_provider(provider_id: str) -> dict[str, Any]:
+    profiles = read_provider_profiles()
+    filtered = [profile for profile in profiles if profile.get("id") != provider_id]
+    if len(filtered) == len(profiles):
+        raise HTTPException(status_code=404, detail="AI provider not found")
+    write_provider_profiles(filtered)
+    return {"id": provider_id, "status": "deleted"}
+
+
+def personal_state_path() -> Path:
+    PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+    return PROCESSING_ROOT / "personal_taste.json"
+
+
+@app.get("/v1/personal/profile", dependencies=[Depends(auth)])
+async def personal_profile() -> dict[str, Any]:
+    from .personal_taste import load_state
+    state = load_state(personal_state_path())
+    return {"profile": state["profile"], "event_count": len(state["events"])}
+
+
+@app.post("/v1/personal/events", dependencies=[Depends(auth)])
+async def personal_event(payload: PersonalEventPayload) -> dict[str, Any]:
+    from .personal_taste import record_event
+    try:
+        return record_event(personal_state_path(), payload.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/personal/more-like-this", dependencies=[Depends(auth)])
+async def more_like_this(payload: PersonalSearchPayload) -> dict[str, Any]:
+    from .personal_taste import load_state, similarity_recommendations
+    state = load_state(personal_state_path())
+    return {"results": similarity_recommendations(state["profile"], payload.selected, payload.candidates, payload.limit)}
+
+
+@app.post("/v1/personal/find-better", dependencies=[Depends(auth)])
+async def find_better(payload: FindBetterPayload) -> dict[str, Any]:
+    from .personal_taste import better_recommendations, load_state
+    state = load_state(personal_state_path())
+    return {"results": better_recommendations(state["profile"], payload.selected, payload.candidates, payload.threshold), "threshold": payload.threshold}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard() -> str:
     return DASHBOARD_HTML
@@ -1012,6 +1174,47 @@ async def inspect_source(payload: SourcePayload) -> dict[str, Any]:
     except Exception as error:  # noqa: BLE001 — normalize extractor errors
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"source": source, "count": len(items), "items": items}
+
+
+@app.post("/v1/sources/upload", dependencies=[Depends(auth)])
+async def upload_source(request: Request) -> dict[str, Any]:
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
+    upload_id = f"upl_{secrets.token_urlsafe(12)}"
+    directory = (SOURCE_ROOT / upload_id).resolve()
+    directory.mkdir(parents=True, exist_ok=False)
+    target = directory / "source.mp4"
+    size = 0
+    try:
+        with target.open("wb") as output:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded video is empty.")
+        timestamp = now_iso()
+        source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/source.mp4"
+        items = [{"index": 0, "title": "Uploaded video", "url": source_url, "filename": "source.mp4", "bytes": size}]
+        with closing(db()) as connection:
+            connection.execute(
+                "INSERT INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, ?, ?)",
+                (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), timestamp, timestamp),
+            )
+            connection.commit()
+        return {"id": upload_id, "status": "done", "source": source_url, "filename": "source.mp4", "bytes": size}
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    except Exception as error:
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Video upload failed: {error}") from error
 
 
 @app.post("/v1/sources/download", dependencies=[Depends(auth)])
@@ -1061,7 +1264,7 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
 async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
-    source = validate_public_source(str(payload.source))
+    source = validate_processing_source(str(payload.source))
     job_id = f"proc_{secrets.token_urlsafe(12)}"
     timestamp = now_iso()
     PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
@@ -1073,8 +1276,8 @@ async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
         if active >= MAX_ACTIVE_PROCESSING_JOBS:
             raise HTTPException(status_code=429, detail="A processing job is already active. Wait for it to finish.")
         connection.execute(
-            "INSERT INTO processing_jobs (id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
-            (job_id, source, payload.llm, payload.captions, timestamp, timestamp),
+            "INSERT INTO processing_jobs (id, source, llm, captions, mode, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+            (job_id, source, payload.llm, payload.captions, payload.mode, timestamp, timestamp),
         )
         connection.commit()
     if not _processing_workers.submit(job_id):
