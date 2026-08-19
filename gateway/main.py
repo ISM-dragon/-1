@@ -102,7 +102,7 @@ AI_SECRET_FILE = Path(os.getenv("ISM_AI_SECRET_FILE", str(ROOT / "secrets" / "ai
 AI_VAULT = SecretVault(AI_SECRET_FILE)
 MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
 
-app = FastAPI(title="ISM Social Gateway", version="0.10.0")
+app = FastAPI(title="ISM Social Gateway", version="0.10.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
