@@ -48,6 +48,24 @@ function gatewayEndpoint(baseUrl: string, path: string) {
 export const api = {
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
+  createProject: async (baseUrl: string, token: string, name: string, source?: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/api/v1/projects'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify({ name, ...(source ? { source } : {}) })
+    })
+    if (!response.ok) throw new Error(`Project creation returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
+    return (await response.json()) as { id: string; name: string; status: string; source?: string | null }
+  },
+  processProject: async (baseUrl: string, token: string, projectId: string, llm: string, captions: string, source?: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/api/v1/projects/${encodeURIComponent(projectId)}/process`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify({ llm, captions, ...(source ? { source } : {}) })
+    })
+    if (!response.ok) throw new Error(`Project processing returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
+    return (await response.json()) as { project_id: string; job: { id: string; status: string } }
+  },
   processingStart: async (baseUrl: string, token: string, source: string, llm: string, captions: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, '/v1/processing/jobs'), {
       method: 'POST',

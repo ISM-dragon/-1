@@ -117,7 +117,14 @@ export default function App() {
         if (!/^https?:\/\//i.test(source.trim())) {
           throw new Error('Android remote processing accepts a YouTube or HTTPS video URL, not a local file path.')
         }
-        const started = await api.processingStart(gateway.url, gateway.token, source.trim(), llm, captions)
+        const project = await api.createProject(
+          gateway.url,
+          gateway.token,
+          `Clip session ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+          source.trim()
+        )
+        const startedResponse = await api.processProject(gateway.url, gateway.token, project.id, llm, captions, source.trim())
+        const started = startedResponse.job
         setActiveJob(started.id)
         let lastStage = ''
         for (;;) {
