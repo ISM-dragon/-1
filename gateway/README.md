@@ -24,6 +24,14 @@ PROVIDER_MODE=mock uvicorn main:app --host 0.0.0.0 --port 8787
 
 يستخدم تطبيق الواجهة عنوان Gateway في `localStorage`، بينما يُحفظ bearer token في `sessionStorage` فقط ويُرحّل الرمز القديم من التخزين الدائم ثم يُحذف. يقيّد Gateway CORS افتراضياً بأصول Tauri/التطوير، ويجب ضبط `CORS_ORIGINS` صراحة في الإنتاج. توجد اختبارات انحدار لرفض `localhost` وعناوين الشبكات الخاصة ومصادر `file://`، كما تُستخدم حدود الملفات وروابط الوسائط غير القابلة للتخمين. لا يعتمد النظام على تدوير IP أو proxy لتجاوز حظر المنصات؛ يستخدم بدلاً منه حدود الحساب والتبريد والتوقف الآمن عند أخطاء OAuth أو 401/403/429.
 
+## AI Provider Registry وWorker Queue
+
+يحتوي Gateway الآن على Registry مركزي لمزودي Gemini وOpenAI وAnthropic وOpenRouter وOllama، مع إضافة مزودات OpenAI-compatible كبيانات عبر `/v1/ai/providers` من دون تعديل المصدر. يعرض المسار أسماء الأسرار فقط ولا يعيد القيم. تُحفظ الأسرار في متغيرات البيئة أو في `ISM_AI_SECRET_FILE` الاختياري داخل `gateway/secrets/` بصلاحية `0600`، وهذا المجلد غير متعقب في Git.
+
+توفر `/v1/ai/providers/{id}/health` مصفوفة حالات موحدة مثل `READY` و`NOT_CONFIGURED` و`AUTH_ERROR` و`NETWORK_ERROR` و`RATE_LIMITED`. لا يعني وجود مفتاح أن المزود جاهزاً؛ يجب أن ينجح فحص الشبكة والمصادقة والنموذج عند توفرها. راجع `docs/ai/PROVIDER_HEALTH.md` و`docs/ai/PROVIDER_REGISTRY.md`.
+
+المعالجة والتنزيل يعملان عبر صفوف Worker منفصلة بحدود `MAX_ACTIVE_PROCESSING_JOBS` و`MAX_ACTIVE_SOURCE_JOBS` و`MIN_FREE_DISK_GB`. لا تنفذ طلبات HTTP عملية الفيديو الطويلة داخل request handler. عند إعادة تشغيل Gateway تعاد المهام `queued/running` إلى الصف، ويعاد استخدام `pipeline_job_id` للاستئناف عندما يكون checkpoint موجوداً. تعرض `/v1/diagnostics/workers` حالة العامل والمهام الحالية وheartbeat، ولا يُعرض artifact كمقطع جاهز قبل فحص وجوده وحجمه وامتداده.
+
 ## Analytics v0.8
 
 يوفر Gateway مسار `GET /v1/analytics/summary?days=30` لقراءة اللقطات اليومية، ومسار `POST /v1/analytics/snapshots` لإدخال نتيجة مزامنة من موصل رسمي. تُحفظ المشاهدات والإعجابات والتعليقات والمتابعون ووقت المشاهدة مع `source` و`fetched_at`، ويعرض التطبيق البيانات المفقودة بوضوح. هذا العقد لا يخترع أرقاماً ولا يجمع بيانات من صفحات المنصات؛ يجب أن يملأه موصل OAuth رسمي يملك الصلاحيات المناسبة.

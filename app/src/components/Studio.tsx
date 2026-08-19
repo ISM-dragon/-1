@@ -29,12 +29,13 @@ interface Props {
   onOpenLoop: () => void
   onOpenSocial: () => void
   onOpenSources: () => void
+  onOpenProviders: () => void
   onOpenJob: (id: string) => void
   onResume: (id: string, llm?: string) => void
   isAndroid: boolean
 }
 
-export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenSocial, onOpenSources, onOpenJob, onResume, isAndroid }: Props) {
+export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenSocial, onOpenSources, onOpenProviders, onOpenJob, onResume, isAndroid }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -129,6 +130,9 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
           </button>
           <button className="btn-ghost" onClick={onOpenSources}>
             ▣ source library
+          </button>
+          <button className="btn-ghost" onClick={onOpenProviders}>
+            ◇ ai providers
           </button>
         </footer>
       </aside>

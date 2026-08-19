@@ -1,6 +1,6 @@
 [package]
 name = "publikclip-app"
-version = "0.9.3"
+version = "0.10.0"
 description = "ISM — long video in, scored vertical clips out"
 license = "AGPL-3.0-or-later"
 edition = "2021"

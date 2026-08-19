@@ -9,9 +9,10 @@ import Loop from './components/Loop'
 import SocialHub from './components/SocialHub'
 import SourceLibrary from './components/SourceLibrary'
 import AnalyticsDashboard from './components/AnalyticsDashboard'
+import AIProviders from './components/AIProviders'
 import './styles.css'
 
-type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'social' | 'sources' | 'analytics'
+type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'social' | 'sources' | 'analytics' | 'providers'
 
 export default function App() {
   const [view, setView] = useState<View>('boot')
@@ -196,6 +197,10 @@ export default function App() {
     return <AnalyticsDashboard onBack={() => setView('social')} />
   }
 
+  if (view === 'providers') {
+    return <AIProviders onBack={() => setView('studio')} />
+  }
+
   if (view === 'review' && results) {
     return (
       <Review
@@ -231,6 +236,7 @@ export default function App() {
       onOpenLoop={() => setView('loop')}
               onOpenSocial={() => setView('social')}
         onOpenSources={() => setView('sources')}
+        onOpenProviders={() => setView('providers')}
 
       onOpenJob={openJob}
       onResume={(id, llm) => {
