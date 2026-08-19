@@ -120,7 +120,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
         </div>
         <footer className="rail-foot">
           <button className="btn-ghost" onClick={() => setShowKey(true)}>
-            ◈ gemini key
+            ◈ local gemini key
           </button>
           <button className="btn-ghost" onClick={onOpenLoop}>
             ⟳ instagram loop
@@ -161,7 +161,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
           {isAndroid && (
             <div className="remote-gateway-block">
               <p className="opt-label">ANDROID PROCESSING GATEWAY</p>
-              <p className="gateway-help">The Android build sends the YouTube URL to your private Gateway, which runs the Python pipeline and returns real clips. Use HTTPS publicly or a LAN address such as http://192.168.1.10:8787 in Debug.</p>
+              <p className="gateway-help">Android sends only the source URL and Gateway token. Your private Gateway runs Python/FFmpeg and returns real clips. Use HTTPS publicly or a LAN address such as http://192.168.1.10:8787 in Debug; keep Gemini credentials on the server.</p>
               <input
                 value={processingGatewayUrl}
                 onChange={(e) => { setProcessingGatewayUrl(e.target.value); persistGateway(e.target.value, processingGatewayToken) }}
@@ -172,7 +172,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
                 type="password"
                 value={processingGatewayToken}
                 onChange={(e) => { setProcessingGatewayToken(e.target.value); persistGateway(processingGatewayUrl, e.target.value) }}
-                placeholder="Gateway token (optional)"
+                placeholder="Gateway token (required for remote use)"
                 disabled={running}
               />
               <div className="gateway-actions">
@@ -186,7 +186,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
               <div className={`engine-status engine-${engineState}`}>
                 <strong>PROCESSING ENGINE: {engineState === 'connected' ? 'CONNECTED' : engineState === 'checking' ? 'CHECKING' : engineState === 'failed' ? 'DISCONNECTED' : 'NOT TESTED'}</strong>
                 <span>{engineMessage}</span>
-                {engineCapabilities && <small>Pipeline {engineCapabilities.pipeline ? '✓' : '✕'} · FFmpeg {engineCapabilities.ffmpeg ? '✓' : '✕'} · Storage {engineCapabilities.storage ? '✓' : '✕'} · Gemini {geminiDiagnostic ? (geminiDiagnostic.reachable ? '✓' : `✕ ${geminiDiagnostic.error_code ?? ''}`) : engineCapabilities.gemini_configured ? 'configured' : 'not configured'}</small>}
+                {engineCapabilities && <small>Pipeline {engineCapabilities.pipeline ? '✓' : '✕'} · FFmpeg {engineCapabilities.ffmpeg ? '✓' : '✕'} · Storage {engineCapabilities.storage === false ? '✕' : '✓'} · Gemini {geminiDiagnostic ? ((geminiDiagnostic.status === 'ready' || geminiDiagnostic.reachable) ? '✓' : `✕ ${geminiDiagnostic.code ?? geminiDiagnostic.error_code ?? ''}`) : engineCapabilities.gemini_configured ? 'configured' : 'not configured'}</small>}
               </div>
             </div>
           )}

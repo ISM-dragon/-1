@@ -74,19 +74,34 @@ GATEWAY_TOKEN='ضع-رمزًا-محليًا-طويلًا' PROVIDER_MODE=mock uvi
 
 هذه الآليات مخصصة للاستقرار والالتزام بالحدود الرسمية، وليست لتجاوز الحظر أو إخفاء الأتمتة. لا يستخدم Gateway تدوير عناوين IP أو Proxies للتحايل على المنصات.
 
-## Android Processing Engine diagnostics
+## Gemini للمعالجة البعيدة من Android
 
-نسخة Android لا تحتاج إلى Gemini key داخل الهاتف عند استخدام المعالجة البعيدة. على جهاز Gateway أنشئ الملف المحلي غير المتعقب:
+لا يرسل Android مفتاح Gemini مع طلب المعالجة. يحتفظ Gateway الشخصي بالمفتاح server-side عبر `GEMINI_API_KEY` أو ملف `ISM_GEMINI_KEY_FILE` غير متعقب بصلاحيات 600، ويمرره فقط إلى بيئة Pipeline الفرعية، ويعرض للتطبيق حالات آمنة دون إظهار المفتاح.
+
+اضبط الخادم الذي يحتوي على Pipeline قبل التشغيل:
+
+```bash
+export GATEWAY_TOKEN='generate-a-long-random-token'
+export REQUIRE_GATEWAY_TOKEN=true
+export GEMINI_API_KEY='your-server-side-key'
+export ISM_PROCESSING_ROOT=/srv/ism-processing
+export ISM_PIPELINE_DIR=/srv/ism/pipeline
+export PUBLIC_BASE_URL='https://your-private-gateway.example'
+python3 -m uvicorn main:app --host 0.0.0.0 --port 8787
+```
+
+كبديل للبيئات التي تستخدم ملف أسرار محلياً، أنشئه خارج Git:
 
 ```bash
 mkdir -p gateway/secrets
 umask 077
 printf '%s' "$GEMINI_API_KEY" > gateway/secrets/gemini.key
-export GATEWAY_TOKEN="ضع-رمزاً-عشوائياً-طويلاً"
 export ISM_GEMINI_KEY_FILE="$PWD/gateway/secrets/gemini.key"
 ```
 
-بعد تشغيل Gateway، اختبر:
+لا تضع `GEMINI_API_KEY` في Android أو URL أو JSON الخاص بالمهمة أو معاملات CLI أو السجلات. على الهاتف، أدخل فقط عنوان Gateway و`GATEWAY_TOKEN` داخل Studio. استخدم عنوان LAN خاصاً في Debug أو شبكة VPN خاصة؛ الاتصالات العامة يجب أن تستخدم HTTPS.
+
+اختبر الخادم قبل الضغط على CUT IT:
 
 ```bash
 curl http://127.0.0.1:8787/health
@@ -95,6 +110,6 @@ curl -H "Authorization: Bearer $GATEWAY_TOKEN" -X POST http://127.0.0.1:8787/v1/
 curl -H "Authorization: Bearer $GATEWAY_TOKEN" -X POST http://127.0.0.1:8787/v1/diagnostics/gemini
 ```
 
-يجب أن تكون `pipeline`, `python`, `ffmpeg`, و`storage` جاهزة قبل الضغط على CUT IT. إذا كان llm هو Gemini فيجب أن يعيد diagnostic قيمة `reachable: true`. لا يعيد أي مسار diagnostic المفتاح أو قيمة Bearer token.
+ينفذ diagnostic طلباً حقيقياً صغيراً باستخدام نفس `GeminiClient` الذي يستخدمه scoring، ويعيد حالات مثل `ready` و`not_configured` و`auth_failed` و`quota` و`network_error` و`timeout` فقط. لا يعيد المفتاح أو جزءاً منه أو hash أو headers أو environment dump. يجب أن تكون `pipeline`, `python`, `ffmpeg`, و`storage` جاهزة قبل الضغط على CUT IT، وإذا كان llm هو Gemini فيجب أن تكون حالة diagnostic جاهزة.
 
-إذا لم يملك الخادم اعتماديات Pipeline بعد، لا تضغط CUT IT انتظاراً لنتيجة وهمية. ثبّت بيئة `pipeline` كما يشرح `pipeline/pyproject.toml`، وثبّت FFmpeg وffprobe، ثم أعد اختبار TEST SYSTEM. Android يقبل عنوان LAN في Debug مثل `http://192.168.1.10:8787`، بينما الاتصالات العامة يجب أن تستخدم HTTPS.
+عند بدء مهمة Gemini، يضع Gateway المفتاح في `GEMINI_API_KEY` لعملية Pipeline الابنة ويضبط `PUBLIKCLIP_DISABLE_LOCAL_SECRETS=1`. تشمل الأخطاء المستقرة `GEMINI_NOT_CONFIGURED` و`GEMINI_AUTH_FAILED` و`GEMINI_QUOTA_EXCEEDED` و`GEMINI_TIMEOUT` و`PIPELINE_UNAVAILABLE` و`FFMPEG_UNAVAILABLE`. Android ينفذ **TEST SYSTEM** قبل **CUT IT** ولا ينشئ job إذا فشل أي فحص.

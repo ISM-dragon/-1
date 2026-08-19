@@ -7,11 +7,56 @@ export type SourceJob = { id: string; status: 'queued' | 'running' | 'done' | 'f
 
 export const PROCESSING_GATEWAY_STORAGE_KEY = 'ism.processing-gateway.v1'
 export const PROCESSING_GATEWAY_SESSION_KEY = 'ism.processing-gateway.session.v1'
+export const REMOTE_PROCESSING_JOB_SESSION_KEY = 'ism.remote-processing-job.v1'
 
 export type ProcessingGatewayConfig = { url: string; token: string }
-export type GatewayHealth = { status: string; ok: boolean; provider_mode?: string; auth_configured?: boolean; pipeline: boolean; python: boolean; ffmpeg: boolean; gemini_configured: boolean; storage: boolean; processing_active?: number; source_active?: number }
-export type ProcessingCapabilities = GatewayHealth & { uv?: boolean; ffprobe?: boolean; ollama?: boolean; youtube_urls?: boolean; https_urls?: boolean; android_remote_processing?: boolean }
-export type GeminiDiagnostic = { configured: boolean; reachable: boolean; model: string; latency_ms?: number | null; error_code?: string | null }
+export type GatewayHealth = {
+  status?: string
+  ok: boolean
+  provider_mode?: string
+  auth_configured?: boolean
+  auth_required?: boolean
+  pipeline?: boolean
+  python?: boolean
+  ffmpeg?: boolean
+  gemini_configured?: boolean
+  storage?: boolean
+  processing_active?: number
+  source_active?: number
+}
+
+export type ProcessingCapabilities = {
+  gateway: boolean
+  pipeline: boolean
+  gemini: boolean
+  gemini_configured?: boolean
+  ffmpeg: boolean
+  storage?: boolean
+  python?: boolean
+  uv?: boolean
+  ffprobe?: boolean
+  ollama?: boolean
+  youtube_urls?: boolean
+  https_urls?: boolean
+  android_remote_processing?: boolean
+  details?: {
+    pipeline?: { ready: boolean; message?: string }
+    gemini?: { configured: boolean; provider: string; status: string }
+    ffmpeg?: { ready: boolean; captions: boolean; message?: string }
+  }
+}
+
+export type GeminiDiagnostic = {
+  status?: 'ready' | 'not_configured' | 'auth_failed' | 'quota' | 'network_error' | 'timeout' | 'pipeline_unavailable' | 'unknown_error'
+  configured?: boolean
+  reachable?: boolean
+  code?: string
+  error_code?: string | null
+  provider?: string
+  model?: string
+  latency_ms?: number | null
+  message?: string
+}
 export type AIModel = { id: string; provider_id: string; model_id: string; display_name: string; capabilities: string[]; context_window?: number | null; supports_structured_output: boolean; supports_vision: boolean; enabled: boolean }
 export type AIProvider = { id: string; name: string; type: string; enabled: boolean; base_url?: string | null; credential_ref?: string | null; capabilities: string[]; models: AIModel[]; created_at: string; updated_at: string }
 export type AIHealth = { provider_id: string; state: string; configured: boolean; reachable: boolean; authenticated?: boolean | null; selected_model_available?: boolean | null; required_capabilities: string[]; checked_at: string; latency_ms?: number | null; error?: string | null }
@@ -77,6 +122,16 @@ export const api = {
   deleteAIProvider: (baseUrl: string, token: string, providerId: string) => gatewayJson<{ id: string; status: string }>(baseUrl, token, `/v1/ai/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' }),
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
+  health: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/health'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 240)
+      throw new Error(`Gateway health returned ${response.status}: ${detail}`)
+    }
+    return (await response.json()) as GatewayHealth
+  },
   processingStart: async (baseUrl: string, token: string, source: string, llm: string, captions: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, '/v1/processing/jobs'), {
       method: 'POST',
@@ -207,6 +262,13 @@ export const api = {
     })
     if (!response.ok) throw new Error(`OAuth gateway returned ${response.status}.`)
     return (await response.json()) as { url: string }
+  },
+  socialScheduleList: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/schedule'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Schedule list request returned ${response.status}.`)
+    return (await response.json()) as Array<Record<string, unknown>>
   },
   socialSchedule: async (baseUrl: string, token: string, post: unknown) => {
     const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/schedule'), {

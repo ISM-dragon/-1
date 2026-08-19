@@ -1,28 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { api, loadProcessingGatewayConfig, saveProcessingGatewayConfig } from '../api'
+import { mergeGatewayQueue, replaceQueuePost, toLocalDateTimeValue } from '../socialQueue'
+import type { GatewaySocialPost, PostStatus, SocialForm, SocialPost } from '../socialQueue'
 
-type Platform = 'instagram' | 'facebook' | 'tiktok' | 'youtube' | 'x'
-type PostStatus = 'draft' | 'awaiting_approval' | 'scheduled' | 'published' | 'failed' | 'cancelled'
-
-type SocialForm = {
-  platform: Platform
-  account: string
-  mediaUrl: string
-  title: string
-  caption: string
-  description: string
-  hashtags: string
-  keywords: string
-  scheduledAt: string
-  autoPublish: boolean
-}
-
-interface SocialPost extends SocialForm {
-  id: string
-  status: PostStatus
-  error?: string
-}
+type Platform = SocialForm['platform']
 
 interface Props { onBack: () => void; onOpenAnalytics?: () => void }
 
@@ -74,7 +56,7 @@ function copyForm(post: SocialPost): SocialForm {
     description: post.description,
     hashtags: post.hashtags,
     keywords: post.keywords,
-    scheduledAt: post.scheduledAt,
+    scheduledAt: toLocalDateTimeValue(post.scheduledAt),
     autoPublish: post.autoPublish ?? true
   }
 }
@@ -93,9 +75,26 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
   const [summary, setSummary] = useState<{ accounts: number; posts: Record<string, number>; recent: Array<Record<string, unknown>> } | null>(null)
   const [accountNotice, setAccountNotice] = useState<string | null>(null)
   const [capabilities, setCapabilities] = useState<Array<{ platform: string; configured: boolean; publish_mode: string; analytics: string; note: string }>>([])
+  const [syncing, setSyncing] = useState(false)
+  const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null)
 
   useEffect(() => {
     saveProcessingGatewayConfig({ url: gatewayUrl.trim(), token: gatewayToken.trim() })
+  }, [gatewayUrl, gatewayToken])
+
+  const syncQueue = useCallback(async (silent = true) => {
+    if (!gatewayUrl.trim()) return
+    setSyncing(true)
+    try {
+      const remote = await api.socialScheduleList(gatewayUrl, gatewayToken)
+      setQueue((current) => mergeGatewayQueue(remote as GatewaySocialPost[], current))
+      setLastSyncAt(new Date())
+      if (!silent) setNotice('تمت مزامنة طابور النشر مع Gateway API.')
+    } catch (error) {
+      if (!silent) setNotice(error instanceof Error ? error.message : 'تعذر مزامنة طابور النشر.')
+    } finally {
+      setSyncing(false)
+    }
   }, [gatewayUrl, gatewayToken])
 
   useEffect(() => {
@@ -130,6 +129,13 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
       window.clearInterval(timer)
     }
   }, [gatewayUrl, gatewayToken])
+
+  useEffect(() => {
+    if (!gatewayUrl.trim()) return
+    void syncQueue(true)
+    const timer = window.setInterval(() => void syncQueue(true), 30_000)
+    return () => window.clearInterval(timer)
+  }, [gatewayUrl, syncQueue])
 
   function outboundPost(post: SocialPost): SocialPost {
     return {
@@ -227,7 +233,8 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
     if (gatewayUrl.trim() && status === 'scheduled') {
       setBusy(true)
       try {
-        await api.socialSchedule(gatewayUrl, gatewayToken, outboundPost(post))
+        const saved = await api.socialSchedule(gatewayUrl, gatewayToken, outboundPost(post))
+        setQueue((current) => replaceQueuePost(current, saved as GatewaySocialPost))
         setNotice('تم إرسال المنشور إلى Gateway API للجدولة.')
       } catch (error) {
         setQueue((current) => current.map((item) => item.id === post.id ? { ...item, status: 'failed', error: String(error) } : item))
@@ -255,10 +262,12 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
     setQueue((items) => items.map((item) => item.id === editingId ? updated : item))
     setEditingId(null)
     setForm(DEFAULT_FORM)
-    if (gatewayUrl.trim()) {
+    const serverBacked = ['scheduled', 'publishing', 'published', 'failed', 'cancelled'].includes(current.status)
+    if (gatewayUrl.trim() && serverBacked) {
       setBusy(true)
       try {
-        await api.socialUpdate(gatewayUrl, gatewayToken, outboundPost(updated))
+        const saved = await api.socialUpdate(gatewayUrl, gatewayToken, outboundPost(updated))
+        setQueue((items) => replaceQueuePost(items, saved as GatewaySocialPost))
         setNotice('تم تحديث موعد المنشور في Gateway API.')
       } catch (error) {
         setQueue((items) => items.map((item) => item.id === updated.id ? { ...item, status: 'failed', error: String(error) } : item))
@@ -289,8 +298,8 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
     if (!gatewayUrl.trim()) return setNotice('أدخل Gateway API لإرسال المنشور بعد الموافقة.')
     setBusy(true)
     try {
-      await api.socialPublish(gatewayUrl, gatewayToken, outboundPost({ ...post, status: 'scheduled' }))
-      setQueue((items) => items.map((item) => item.id === post.id ? { ...item, status: 'scheduled', error: undefined } : item))
+      const saved = await api.socialPublish(gatewayUrl, gatewayToken, outboundPost({ ...post, status: 'scheduled' }))
+      setQueue((items) => replaceQueuePost(items, saved as GatewaySocialPost))
       setNotice('تمت الموافقة وإرسال المنشور إلى Gateway API.')
     } catch (error) {
       setQueue((items) => items.map((item) => item.id === post.id ? { ...item, status: 'failed', error: String(error) } : item))
@@ -322,6 +331,7 @@ export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
           <label className="social-field">Gateway API URL<input value={gatewayUrl} onChange={(e) => setGatewayUrl(e.target.value)} placeholder="https://your-publishing-api.example" /></label>
           <label className="social-field">Session token <input type="password" value={gatewayToken} onChange={(e) => setGatewayToken(e.target.value)} placeholder="Optional bearer token" /></label>
           {summary && <div className="social-summary-cards"><span><b>{summary.accounts}</b> connected</span><span><b>{summary.posts.scheduled || 0}</b> scheduled</span><span><b>{summary.posts.published || 0}</b> published</span><span><b>{summary.posts.failed || 0}</b> failed</span></div>}
+          {gatewayUrl.trim() && <p className="social-help">{syncing ? 'مزامنة الطابور…' : lastSyncAt ? `آخر مزامنة: ${lastSyncAt.toLocaleTimeString('ar')}` : 'لم تتم المزامنة بعد.'} <button className="btn-link" onClick={() => void syncQueue(false)} disabled={syncing}>مزامنة الآن</button></p>}
           {accountNotice && <p className="social-error">{accountNotice}</p>}
           <div className="social-platforms">{PLATFORMS.map((platform) => <div className="social-platform" key={platform.id}><div><strong>{platform.label}</strong><span>{platform.hint}</span></div><button className="btn-secondary" onClick={() => connect(platform.id)} disabled={busy}>Connect</button></div>)}</div>
           {capabilities.length > 0 && <div className="provider-capabilities"><p className="social-label">PROVIDER CAPABILITIES</p>{capabilities.map((item) => <div className="provider-capability" key={item.platform}><span><strong>{item.platform}</strong><small>{item.publish_mode} · {item.analytics}</small></span><span className={item.configured ? 'account-connected' : 'account-status'}>{item.configured ? 'configured' : 'needs setup'}</span></div>)}</div>}

@@ -78,13 +78,13 @@ export default function KeyModal({ onClose }: Props) {
     <div className="modal-scrim" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
-          <p className="audit-kicker">THE BRAIN</p>
+          <p className="audit-kicker">LOCAL / DESKTOP GEMINI CONFIGURATION</p>
           <button className="btn-ghost" onClick={onClose}>close ✕</button>
         </header>
         <p className="ig-intro">
           Gemini scores your moments at full quality (~<span className="mono">$0.15</span>/hr
-          of source). The key lives in <span className="mono">~/.publikclip/secrets.json</span>,
-          chmod 600, and never goes anywhere but Google.{' '}
+          of source) when running the desktop Pipeline. This local key lives in <span className="mono">~/.publikclip/secrets.json</span>.
+          Android remote processing does not use or transmit this key; configure <span className="mono">GEMINI_API_KEY</span> only on your personal Gateway.{' '}
           {hasKey && <strong>A key is currently saved{saved ? ' — updated ✓' : ''}.</strong>}
         </p>
         <div className="ig-form">

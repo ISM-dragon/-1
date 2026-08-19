@@ -18,6 +18,7 @@ from urllib.request import Request as UrlRequest, urlopen
 from contextlib import closing
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
+from time import perf_counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -28,6 +29,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 try:
+    from .processing_service import classify_gemini_error, pipeline_available, pipeline_command as build_pipeline_command, pipeline_environment
     from .worker_queue import PersistentWorkerQueue, WorkerResourceError, validate_media_artifact
     from .provider_registry import (
         BUILT_IN_PROVIDERS,
@@ -50,7 +52,8 @@ try:
         update_provider,
     )
     from .secret_vault import SecretVault, SecretVaultError
-except ImportError:
+except ImportError:  # pragma: no cover - uvicorn main:app from gateway/
+    from processing_service import classify_gemini_error, pipeline_available, pipeline_command as build_pipeline_command, pipeline_environment
     from worker_queue import PersistentWorkerQueue, WorkerResourceError, validate_media_artifact
     from provider_registry import (
         BUILT_IN_PROVIDERS,
@@ -85,6 +88,8 @@ PIPELINE_BIN = os.getenv("ISM_PIPELINE_BIN", "").strip()
 YTDLP_BIN = os.getenv("ISM_YTDLP_BIN", "yt-dlp").strip()
 SOURCE_ROOT = Path(os.getenv("ISM_SOURCE_ROOT", str(ROOT / "sources")))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8787").rstrip("/")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+REQUIRE_GATEWAY_TOKEN = os.getenv("REQUIRE_GATEWAY_TOKEN", "").lower() in {"1", "true", "yes"}
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
 ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
@@ -97,7 +102,7 @@ AI_SECRET_FILE = Path(os.getenv("ISM_AI_SECRET_FILE", str(ROOT / "secrets" / "ai
 AI_VAULT = SecretVault(AI_SECRET_FILE)
 MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
 
-app = FastAPI(title="ISM Social Gateway", version="0.10.0")
+app = FastAPI(title="ISM Social Gateway", version="0.10.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
@@ -240,6 +245,7 @@ def init_db() -> None:
                 fraction REAL,
                 message TEXT,
                 error TEXT,
+                error_code TEXT,
                 result_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -286,6 +292,7 @@ def init_db() -> None:
             ("accounts", "cooldown_until", "TEXT"),
             ("posts", "idempotency_key", "TEXT"),
             ("posts", "next_attempt_at", "TEXT"),
+            ("processing_jobs", "error_code", "TEXT"),
             ("processing_jobs", "mode", "TEXT NOT NULL DEFAULT 'balanced'"),
         ]
         for table, column, definition in migrations:
@@ -299,6 +306,8 @@ def init_db() -> None:
 
 async def auth(request: Request) -> None:
     if not GATEWAY_TOKEN:
+        if REQUIRE_GATEWAY_TOKEN:
+            raise HTTPException(status_code=503, detail="Gateway token is not configured on this remote Gateway.")
         return
     supplied = request.headers.get("authorization", "")
     if not secrets.compare_digest(supplied, f"Bearer {GATEWAY_TOKEN}"):
@@ -642,16 +651,19 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
         outputs.append(item)
     return {
         "job_id": external_id,
-        "dir": str(job_dir),
         "ingest": {key: ingest.get(key) for key in ("title", "heatmap", "probe")} if ingest else None,
         "score": score,
         "render": {**render, "outputs": outputs} if render else None,
+        "artifacts": outputs,
         "events": events,
         "candidates": candidates,
     }
 
 
 def read_server_gemini_key() -> str | None:
+    for key in (GEMINI_API_KEY.strip(), os.getenv("GEMINI_API_KEY", "").strip(), os.getenv("PUBLIKCLIP_GEMINI_API_KEY", "").strip()):
+        if key:
+            return key
     try:
         key = AI_VAULT.get("GEMINI_API_KEY")
     except SecretVaultError:
@@ -702,18 +714,12 @@ def ollama_available() -> bool:
 
 
 def pipeline_command() -> tuple[list[str], dict[str, str]]:
-    environment = os.environ.copy()
-    server_key = read_server_gemini_key()
-    if server_key:
-        environment["PUBLIKCLIP_GEMINI_API_KEY"] = server_key
-    environment["PUBLIKCLIP_HOME"] = str(PROCESSING_ROOT)
-    environment["PYTHONPATH"] = f"{PIPELINE_DIR}{os.pathsep}{environment.get('PYTHONPATH', '')}".rstrip(os.pathsep)
-    if PIPELINE_BIN:
-        return [PIPELINE_BIN, "--jsonl"], environment
-    uv = shutil.which("uv")
-    if uv and (PIPELINE_DIR / "pyproject.toml").exists():
-        return [uv, "run", "--project", str(PIPELINE_DIR), "publikclip", "--jsonl"], environment
-    return [sys.executable, "-m", "publikclip_pipeline.cli", "--jsonl"], environment
+    environment = pipeline_environment(PROCESSING_ROOT, PIPELINE_DIR, read_server_gemini_key() or "")
+    return pipeline_command_for_config(PIPELINE_DIR, PIPELINE_BIN, environment), environment
+
+
+def pipeline_command_for_config(pipeline_dir: Path, pipeline_bin: str, environment: dict[str, str]) -> list[str]:
+    return build_pipeline_command(pipeline_dir, pipeline_bin, environment)
 
 
 def uploaded_source_path(source: str) -> str | None:
@@ -742,6 +748,9 @@ def run_processing_job(external_id: str, source: str | None = None, llm: str | N
     llm = llm or row["llm"]
     captions = captions or row["captions"]
     mode = mode or row["mode"] or "balanced"
+    if llm == "gemini" and not read_server_gemini_key():
+        update_processing_job(external_id, status="failed", error="Gemini is not configured on the Gateway.", error_code="GEMINI_NOT_CONFIGURED", message="Gemini configuration is required")
+        return
     command, environment = pipeline_command()
     pipeline_source = uploaded_source_path(source) or source
     if row["pipeline_job_id"]:
@@ -778,19 +787,23 @@ def run_processing_job(external_id: str, source: str | None = None, llm: str | N
                 )
             elif event.get("event") == "result":
                 final = event
+        process.stdout.close()
         return_code = process.wait()
         if return_code != 0 or not final or not final.get("ok"):
             detail = (final or {}).get("error") or f"Pipeline exited with code {return_code}."
-            update_processing_job(external_id, status="failed", error=str(detail), message="Pipeline failed")
+            error_code = (final or {}).get("error_code") or ("PIPELINE_START_FAILED" if return_code == 127 else "PIPELINE_FAILED")
+            update_processing_job(external_id, status="failed", error=str(detail), error_code=error_code, message="Pipeline failed")
             return
         pipeline_job_id = str(final.get("job_id") or "")
         if not pipeline_job_id:
-            update_processing_job(external_id, status="failed", error="Pipeline returned no job id.", message="Pipeline failed")
+            update_processing_job(external_id, status="failed", error="Pipeline returned no job id.", error_code="PIPELINE_RESULT_INVALID", message="Pipeline failed")
             return
         results = processing_results(external_id, pipeline_job_id)
         update_processing_job(external_id, pipeline_job_id=pipeline_job_id, status="done", fraction=1.0, stage="render", message="Clips ready", result_json=json.dumps(results, ensure_ascii=False))
+    except FileNotFoundError as error:
+        update_processing_job(external_id, status="failed", error="Pipeline executable could not be started.", error_code="PIPELINE_START_FAILED", message="Gateway worker failed")
     except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
-        update_processing_job(external_id, status="failed", error=str(error), message="Gateway worker failed")
+        update_processing_job(external_id, status="failed", error="Pipeline worker failed.", error_code="PIPELINE_WORKER_FAILED", message="Gateway worker failed")
 
 
 def account_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -1021,34 +1034,48 @@ async def shutdown() -> None:
     await _source_workers.stop()
 
 
-def gemini_probe() -> dict[str, Any]:
-    key = read_server_gemini_key()
-    result: dict[str, Any] = {"configured": bool(key), "reachable": False, "model": GEMINI_MODEL, "latency_ms": None, "error_code": None}
-    if not key:
-        result["error_code"] = "GEMINI_NOT_CONFIGURED"
-        return result
-    body = json.dumps({"contents": [{"parts": [{"text": "Reply with the single word OK."}]}], "generationConfig": {"maxOutputTokens": 4}}).encode()
-    request = UrlRequest(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-        data=body,
-        headers={"Content-Type": "application/json", "x-goog-api-key": key},
-        method="POST",
-    )
-    started = time_module.monotonic()
+def _ffmpeg_capability() -> dict[str, Any]:
     try:
-        with urlopen(request, timeout=15) as response:
-            response.read(1024)
-            result["reachable"] = response.status == 200
-            result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
-            if response.status != 200:
-                result["error_code"] = f"GEMINI_HTTP_{response.status}"
-    except HTTPError as error:
-        result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
-        result["error_code"] = {401: "GEMINI_AUTH_FAILED", 403: "GEMINI_AUTH_FAILED", 404: "GEMINI_MODEL_NOT_FOUND", 429: "GEMINI_QUOTA_OR_RATE_LIMIT"}.get(error.code, f"GEMINI_HTTP_{error.code}")
-    except (OSError, URLError, TimeoutError):
-        result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
-        result["error_code"] = "GEMINI_UNREACHABLE"
-    return result
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        from publikclip_pipeline.render import ffmpeg_bin
+
+        binary = ffmpeg_bin.ffmpeg()
+        ready = Path(binary).is_file() or shutil.which(binary) is not None
+        return {"ready": ready, "captions": bool(ready and ffmpeg_bin.supports_captions()), "message": "FFmpeg is available." if ready else "FFmpeg was not found."}
+    except Exception:  # noqa: BLE001 — capability endpoint must never crash
+        return {"ready": False, "captions": False, "message": "FFmpeg capability could not be checked."}
+
+
+def _gemini_diagnostic_sync() -> dict[str, Any]:
+    key = read_server_gemini_key()
+    if not key:
+        return {"status": "not_configured", "code": "GEMINI_NOT_CONFIGURED", "provider": "gemini", "message": "Gemini is not configured on the Gateway."}
+    if not (PIPELINE_DIR / "publikclip_pipeline" / "scoring" / "llm.py").is_file():
+        return {"status": "pipeline_unavailable", "code": "PIPELINE_UNAVAILABLE", "provider": "gemini", "message": "The Pipeline Gemini provider is not available."}
+    try:
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        from publikclip_pipeline.scoring.llm import GeminiClient
+
+        schema = {"type": "OBJECT", "properties": {"answer": {"type": "STRING"}}, "required": ["answer"]}
+        started = perf_counter()
+        client = GeminiClient(api_key=key)
+        client.generate_json("Return exactly the word OK.", schema, use_cache=False)
+        return {"status": "ready", "provider": "gemini", "model": client.model, "latency_ms": round((perf_counter() - started) * 1000)}
+    except Exception as error:  # noqa: BLE001 — convert provider errors to stable safe status
+        status, code = classify_gemini_error(error)
+        messages = {
+            "auth_failed": "Gemini rejected the configured API key.",
+            "quota": "Gemini quota or rate limit was reached.",
+            "timeout": "Gemini diagnostic timed out.",
+            "network_error": "The Gateway could not reach Gemini.",
+            "unknown_error": "Gemini diagnostic failed.",
+        }
+        return {"status": status, "code": code, "provider": "gemini", "message": messages.get(status, "Gemini diagnostic failed.")}
+def gemini_probe() -> dict[str, Any]:
+    result = _gemini_diagnostic_sync()
+    return {"configured": bool(result.get("configured", result.get("status") != "not_configured")), "reachable": result.get("status") == "ready", "model": result.get("model", GEMINI_MODEL), "latency_ms": result.get("latency_ms"), "error_code": result.get("code") or result.get("error_code")}
 
 
 @app.get("/health")
@@ -1060,12 +1087,24 @@ async def health() -> dict[str, Any]:
     processing_worker = _processing_workers.info().as_dict()
     source_worker = _source_workers.info().as_dict()
     ready = bool(checks["pipeline"] and checks["ffmpeg"] and checks["storage"] and processing_worker["status"] != "STOPPED")
-    return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": checks["gemini_configured"], "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active, "workers": {"processing": processing_worker, "sources": source_worker}, "min_free_disk_gb": MIN_FREE_DISK_GB}
+    return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "auth_required": REQUIRE_GATEWAY_TOKEN, "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": bool(read_server_gemini_key()), "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active, "workers": {"processing": processing_worker, "sources": source_worker}, "min_free_disk_gb": MIN_FREE_DISK_GB}
 
 
 @app.get("/v1/processing/capabilities", dependencies=[Depends(auth)])
 async def processing_capabilities() -> dict[str, Any]:
-    return pipeline_checks()
+    checks = pipeline_checks()
+    ffmpeg = _ffmpeg_capability()
+    gemini_configured = bool(read_server_gemini_key())
+    return {**checks, "gateway": True, "pipeline": bool(checks["pipeline"]), "gemini": gemini_configured, "ffmpeg": bool(ffmpeg["ready"]), "details": {"pipeline": {"ready": bool(checks["pipeline"]), "message": "Pipeline CLI is present; runtime dependencies are checked when the worker starts."}, "gemini": {"configured": gemini_configured, "provider": "gemini", "status": "configured" if gemini_configured else "not_configured"}, "ffmpeg": ffmpeg}}
+
+
+@app.get("/v1/diagnostics/gemini", dependencies=[Depends(auth)])
+async def gemini_diagnostic() -> dict[str, Any]:
+    result = await asyncio.to_thread(_gemini_diagnostic_sync)
+    if result.get("status") != "ready":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=result)
+    return result
 
 
 @app.get("/v1/diagnostics/workers", dependencies=[Depends(auth)])
@@ -1081,20 +1120,14 @@ async def diagnostics_gemini() -> dict[str, Any]:
 @app.post("/v1/diagnostics/pipeline", dependencies=[Depends(auth)])
 async def diagnostics_pipeline() -> dict[str, Any]:
     checks = pipeline_checks()
-    importable = False
-    if checks["pipeline"]:
-        pipeline_text = str(PIPELINE_DIR)
-        if pipeline_text not in sys.path:
-            sys.path.insert(0, pipeline_text)
-        importable = importlib.util.find_spec("publikclip_pipeline") is not None
-    checks["pipeline_importable"] = importable
+    pipeline_text = str(PIPELINE_DIR)
+    if pipeline_text not in sys.path:
+        sys.path.insert(0, pipeline_text)
+    checks["pipeline_importable"] = bool(checks["pipeline"] and importlib.util.find_spec("publikclip_pipeline") is not None)
     ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg:
-        try:
-            checks["ffmpeg_usable"] = subprocess.run([ffmpeg, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            checks["ffmpeg_usable"] = False
-    else:
+    try:
+        checks["ffmpeg_usable"] = bool(ffmpeg and subprocess.run([ffmpeg, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False).returncode == 0)
+    except (OSError, subprocess.SubprocessError):
         checks["ffmpeg_usable"] = False
     checks["ready"] = bool(checks["pipeline"] and checks["pipeline_importable"] and checks["python"] and checks["ffmpeg_usable"] and checks["storage"])
     return checks
@@ -1265,6 +1298,16 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
 async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
     source = validate_processing_source(str(payload.source))
+    if payload.llm == "gemini" and not read_server_gemini_key():
+        raise HTTPException(status_code=503, detail="GEMINI_NOT_CONFIGURED: Configure Gemini on the personal Gateway.")
+    checks = pipeline_checks()
+    if not checks["pipeline"]:
+        raise HTTPException(status_code=503, detail="PIPELINE_UNAVAILABLE: Pipeline is not available on the processing server.")
+    if not checks["storage"]:
+        raise HTTPException(status_code=503, detail="STORAGE_UNAVAILABLE: Processing storage is not writable.")
+    ffmpeg = _ffmpeg_capability()
+    if not ffmpeg["ready"]:
+        raise HTTPException(status_code=503, detail="FFMPEG_UNAVAILABLE: Install FFmpeg on the processing server.")
     job_id = f"proc_{secrets.token_urlsafe(12)}"
     timestamp = now_iso()
     PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
