@@ -36,10 +36,10 @@ ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
 ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
 MAX_PROVIDER_ATTEMPTS = max(1, int(os.getenv("MAX_PROVIDER_ATTEMPTS", "3")))
 
-app = FastAPI(title="ISM Social Gateway", version="0.1.0")
+app = FastAPI(title="ISM Social Gateway", version="0.9.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

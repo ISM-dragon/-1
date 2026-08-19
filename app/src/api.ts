@@ -6,6 +6,7 @@ export type SourceItem = { index: number; id: string; title: string; duration?: 
 export type SourceJob = { id: string; status: 'queued' | 'running' | 'done' | 'failed'; total: number; completed: number; message?: string | null; error?: string | null; items?: SourceItem[] }
 
 export const PROCESSING_GATEWAY_STORAGE_KEY = 'ism.processing-gateway.v1'
+export const PROCESSING_GATEWAY_SESSION_KEY = 'ism.processing-gateway.session.v1'
 
 export type ProcessingGatewayConfig = { url: string; token: string }
 
@@ -13,14 +14,19 @@ export function loadProcessingGatewayConfig(): ProcessingGatewayConfig {
   try {
     const raw = localStorage.getItem(PROCESSING_GATEWAY_STORAGE_KEY)
     const parsed = raw ? (JSON.parse(raw) as Partial<ProcessingGatewayConfig>) : {}
-    return { url: parsed.url ?? '', token: parsed.token ?? '' }
+    const sessionToken = sessionStorage.getItem(PROCESSING_GATEWAY_SESSION_KEY) ?? ''
+    if (!sessionToken && parsed.token) sessionStorage.setItem(PROCESSING_GATEWAY_SESSION_KEY, parsed.token)
+    if (parsed.token) localStorage.setItem(PROCESSING_GATEWAY_STORAGE_KEY, JSON.stringify({ url: parsed.url ?? '' }))
+    return { url: parsed.url ?? '', token: sessionToken || parsed.token || '' }
   } catch {
     return { url: '', token: '' }
   }
 }
 
 export function saveProcessingGatewayConfig(config: ProcessingGatewayConfig) {
-  localStorage.setItem(PROCESSING_GATEWAY_STORAGE_KEY, JSON.stringify(config))
+  localStorage.setItem(PROCESSING_GATEWAY_STORAGE_KEY, JSON.stringify({ url: config.url.trim() }))
+  if (config.token.trim()) sessionStorage.setItem(PROCESSING_GATEWAY_SESSION_KEY, config.token.trim())
+  else sessionStorage.removeItem(PROCESSING_GATEWAY_SESSION_KEY)
 }
 
 function gatewayEndpoint(baseUrl: string, path: string) {
