@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import type { JobSummary } from '../types'
 import KeyModal from './KeyModal'
-import { loadProcessingGatewayConfig, saveProcessingGatewayConfig } from '../api'
+import { api, loadProcessingGatewayConfig, saveProcessingGatewayConfig } from '../api'
+import type { GeminiDiagnostic, ProcessingCapabilities } from '../api'
 
 const STAGE_ORDER = [
   'ingest', 'asr', 'diarize', 'events', 'candidates', 'score', 'camera', 'render'
@@ -42,6 +43,8 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
   const [processingGatewayUrl, setProcessingGatewayUrl] = useState(() => loadProcessingGatewayConfig().url)
   const [processingGatewayToken, setProcessingGatewayToken] = useState(() => loadProcessingGatewayConfig().token)
   const [gatewaySaved, setGatewaySaved] = useState(false)
+  const [engine, setEngine] = useState<{ gateway: 'idle' | 'ready' | 'failed'; pipeline: 'idle' | 'ready' | 'failed'; gemini: 'idle' | 'ready' | 'failed'; ffmpeg: 'idle' | 'ready' | 'failed'; message: string }>({ gateway: 'idle', pipeline: 'idle', gemini: 'idle', ffmpeg: 'idle', message: 'Run TEST SYSTEM before CUT IT.' })
+  const [testingEngine, setTestingEngine] = useState(false)
 
   const gatewayReady = !isAndroid || processingGatewayUrl.trim().length > 0
 
@@ -53,6 +56,29 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
     persistGateway()
     setGatewaySaved(true)
     window.setTimeout(() => setGatewaySaved(false), 2200)
+  }
+
+  async function testSystem() {
+    const gateway = loadProcessingGatewayConfig()
+    if (!gateway.url.trim()) {
+      setEngine({ gateway: 'failed', pipeline: 'idle', gemini: 'idle', ffmpeg: 'idle', message: 'Enter the personal Gateway URL first.' })
+      return
+    }
+    setTestingEngine(true)
+    setEngine({ gateway: 'idle', pipeline: 'idle', gemini: 'idle', ffmpeg: 'idle', message: 'Checking Gateway…' })
+    try {
+      await api.health(gateway.url, gateway.token)
+      const capabilities: ProcessingCapabilities = await api.processingCapabilities(gateway.url, gateway.token)
+      let diagnostic: GeminiDiagnostic | null = null
+      if (llm === 'gemini') diagnostic = await api.geminiDiagnostic(gateway.url, gateway.token)
+      const geminiReady = llm !== 'gemini' || diagnostic?.status === 'ready'
+      const gatewayState = { gateway: 'ready' as const, pipeline: capabilities.pipeline ? 'ready' as const : 'failed' as const, gemini: geminiReady ? 'ready' as const : 'failed' as const, ffmpeg: capabilities.ffmpeg ? 'ready' as const : 'failed' as const, message: geminiReady && capabilities.pipeline && capabilities.ffmpeg ? 'Processing engine is ready.' : (diagnostic?.message ?? capabilities.details?.pipeline?.message ?? capabilities.details?.ffmpeg?.message ?? 'One or more processing services are not ready.') }
+      setEngine(gatewayState)
+    } catch (error) {
+      setEngine({ gateway: 'failed', pipeline: 'failed', gemini: 'failed', ffmpeg: 'failed', message: error instanceof Error ? error.message : 'Gateway could not be reached.' })
+    } finally {
+      setTestingEngine(false)
+    }
   }
 
   return (
@@ -83,7 +109,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
         </div>
         <footer className="rail-foot">
           <button className="btn-ghost" onClick={() => setShowKey(true)}>
-            ◈ gemini key
+            ◈ local gemini key
           </button>
           <button className="btn-ghost" onClick={onOpenLoop}>
             ⟳ instagram loop
@@ -121,7 +147,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
           {isAndroid && (
             <div className="remote-gateway-block">
               <p className="opt-label">ANDROID PROCESSING GATEWAY</p>
-              <p className="gateway-help">The Android build sends the YouTube URL to your private Gateway, which runs the Python pipeline and returns the clips.</p>
+              <p className="gateway-help">Android sends only the source URL and Gateway token. The personal Gateway stores GEMINI_API_KEY, runs Python/FFmpeg, and returns safe clip URLs.</p>
               <input
                 value={processingGatewayUrl}
                 onChange={(e) => { setProcessingGatewayUrl(e.target.value); persistGateway(e.target.value, processingGatewayToken) }}
@@ -132,12 +158,19 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
                 type="password"
                 value={processingGatewayToken}
                 onChange={(e) => { setProcessingGatewayToken(e.target.value); persistGateway(processingGatewayUrl, e.target.value) }}
-                placeholder="Gateway token (optional)"
+                placeholder="Gateway token (required for remote use)"
                 disabled={running}
               />
               <button className="btn-secondary" onClick={saveGateway} disabled={running || !processingGatewayUrl.trim()}>
                 {gatewaySaved ? 'GATEWAY SAVED ✓' : 'SAVE GATEWAY'}
               </button>
+              <section className="processing-engine-card">
+                <div className="processing-engine-head"><span className="opt-label">PROCESSING ENGINE</span><button className="btn-secondary" onClick={testSystem} disabled={testingEngine || running || !processingGatewayUrl.trim()}>{testingEngine ? 'TESTING…' : 'TEST SYSTEM'}</button></div>
+                <div className="engine-grid">
+                  {([['Gateway', engine.gateway], ['Pipeline', engine.pipeline], ['Gemini', engine.gemini], ['FFmpeg', engine.ffmpeg]] as const).map(([label, state]) => <div className="engine-row" key={label}><span>{label}</span><strong className={state === 'ready' ? 'engine-ready' : state === 'failed' ? 'engine-failed' : 'engine-idle'}>{state === 'ready' ? '✓ READY' : state === 'failed' ? '✕ FAILED' : '○ CHECK'}</strong></div>)}
+                </div>
+                <p className="gateway-help">{engine.message}</p>
+              </section>
             </div>
           )}
           <div className="run-options">

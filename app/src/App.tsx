@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { api, loadProcessingGatewayConfig } from './api'
+import { api, loadProcessingGatewayConfig, REMOTE_PROCESSING_JOB_SESSION_KEY } from './api'
 import type { JobResults, JobSummary, PipelineEvent, SetupState } from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
@@ -42,6 +42,45 @@ export default function App() {
     })
     refreshJobs()
   }, [refreshJobs])
+
+  useEffect(() => {
+    if (!isAndroid) return
+    const jobId = sessionStorage.getItem(REMOTE_PROCESSING_JOB_SESSION_KEY)
+    const gateway = loadProcessingGatewayConfig()
+    if (!jobId || !gateway.url.trim()) return
+    let cancelled = false
+    setActiveJob(jobId)
+    setRunning(true)
+    setRunError(null)
+    const restore = async () => {
+      try {
+        for (;;) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500))
+          if (cancelled) return
+          const status = await api.processingStatus(gateway.url, gateway.token, jobId)
+          if (status.stage) setStages((prev) => ({ ...prev, [status.stage!]: { fraction: status.fraction ?? -1, message: status.message ?? '' } }))
+          if (status.status === 'failed') {
+            sessionStorage.removeItem(REMOTE_PROCESSING_JOB_SESSION_KEY)
+            throw new Error(status.error || 'Remote processing failed.')
+          }
+          if (status.status === 'done') {
+            sessionStorage.removeItem(REMOTE_PROCESSING_JOB_SESSION_KEY)
+            if (!status.results) throw new Error('Gateway completed without returning clip results.')
+            setResults(status.results)
+            setRunning(false)
+            setView('review')
+            return
+          }
+        }
+      } catch (error) {
+        sessionStorage.removeItem(REMOTE_PROCESSING_JOB_SESSION_KEY)
+        setRunning(false)
+        setRunError(error instanceof Error ? error.message : String(error))
+      }
+    }
+    restore()
+    return () => { cancelled = true }
+  }, [isAndroid])
 
   // Instagram loop: opportunistic sync on launch + hourly while open
   // (decision #12 — no background process, the app's own uptime is the
@@ -117,8 +156,17 @@ export default function App() {
         if (!/^https?:\/\//i.test(source.trim())) {
           throw new Error('Android remote processing accepts a YouTube or HTTPS video URL, not a local file path.')
         }
+        await api.health(gateway.url, gateway.token)
+        const capabilities = await api.processingCapabilities(gateway.url, gateway.token)
+        if (!capabilities.pipeline) throw new Error(capabilities.details?.pipeline?.message ?? 'PIPELINE_UNAVAILABLE: Pipeline is not ready on the Gateway.')
+        if (!capabilities.ffmpeg) throw new Error(capabilities.details?.ffmpeg?.message ?? 'FFMPEG_UNAVAILABLE: FFmpeg is not ready on the Gateway.')
+        if (llm === 'gemini') {
+          const diagnostic = await api.geminiDiagnostic(gateway.url, gateway.token)
+          if (diagnostic.status !== 'ready') throw new Error(diagnostic.message ?? `${diagnostic.code ?? 'GEMINI_FAILED'}: Gemini is not ready on the Gateway.`)
+        }
         const started = await api.processingStart(gateway.url, gateway.token, source.trim(), llm, captions)
         setActiveJob(started.id)
+        sessionStorage.setItem(REMOTE_PROCESSING_JOB_SESSION_KEY, started.id)
         let lastStage = ''
         for (;;) {
           await new Promise((resolve) => window.setTimeout(resolve, 1500))
@@ -130,8 +178,12 @@ export default function App() {
               [status.stage!]: { fraction: status.fraction ?? -1, message: status.message ?? '' }
             }))
           }
-          if (status.status === 'failed') throw new Error(status.error || 'Remote processing failed.')
+          if (status.status === 'failed') {
+            sessionStorage.removeItem(REMOTE_PROCESSING_JOB_SESSION_KEY)
+            throw new Error(status.error || 'Remote processing failed.')
+          }
           if (status.status === 'done') {
+            sessionStorage.removeItem(REMOTE_PROCESSING_JOB_SESSION_KEY)
             if (!status.results) throw new Error('Gateway completed without returning clip results.')
             setResults(status.results)
             setRunning(false)
@@ -159,6 +211,7 @@ export default function App() {
   if (view === 'onboarding' && setup) {
     return (
       <Onboarding
+        isAndroid={isAndroid}
         onDone={async () => {
           await api.markOnboarded()
           setSetup({ ...setup, onboarded: true })

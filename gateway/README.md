@@ -65,3 +65,35 @@ GATEWAY_TOKEN='ضع-رمزًا-محليًا-طويلًا' PROVIDER_MODE=mock uvi
 يتم إنشاء مفتاح idempotency ثابت لكل منشور لمنع تكرار نفس المحتوى والموعد. توجد أيضًا مسارات `POST /v1/accounts/{account_id}/resume` لاستئناف الحساب بعد معالجة التحذير، و`GET /v1/accounts` لإظهار حالة الحساب وعدد منشورات اليوم وآخر نشر وفترة التهدئة.
 
 هذه الآليات مخصصة للاستقرار والالتزام بالحدود الرسمية، وليست لتجاوز الحظر أو إخفاء الأتمتة. لا يستخدم Gateway تدوير عناوين IP أو Proxies للتحايل على المنصات.
+
+## Gemini للمعالجة البعيدة من Android
+
+لا يرسل Android مفتاح Gemini مع طلب المعالجة. يحتفظ Gateway الشخصي بالمتغير canonical `GEMINI_API_KEY`، ويمرره فقط إلى بيئة Pipeline الفرعية، ويعرض للتطبيق حالات آمنة دون إظهار المفتاح.
+
+اضبط الخادم الذي يحتوي على Pipeline قبل التشغيل:
+
+```bash
+export GATEWAY_TOKEN='generate-a-long-random-token'
+export REQUIRE_GATEWAY_TOKEN=true
+export GEMINI_API_KEY='your-server-side-key'
+export ISM_PROCESSING_ROOT=/srv/ism-processing
+export ISM_PIPELINE_DIR=/srv/ism/pipeline
+export PUBLIC_BASE_URL='https://your-private-gateway.example'
+python3 -m uvicorn main:app --host 0.0.0.0 --port 8787
+```
+
+لا تضع `GEMINI_API_KEY` في Android أو URL أو JSON الخاص بالمهمة أو معاملات CLI أو السجلات. على الهاتف، أدخل فقط عنوان Gateway و`GATEWAY_TOKEN` داخل Studio. استخدم عنوان LAN خاصاً في Debug أو شبكة VPN خاصة؛ لا تفتح منفذ HTTP عاماً غير موثق.
+
+مسارات التشخيص هي:
+
+```text
+GET /health
+GET /v1/processing/capabilities
+GET /v1/diagnostics/gemini
+```
+
+ينفذ diagnostic طلباً حقيقياً صغيراً باستخدام نفس `GeminiClient` الذي يستخدمه scoring، ويعيد حالات مثل `ready` و`not_configured` و`auth_failed` و`quota` و`network_error` و`timeout` فقط. لا يعيد المفتاح أو جزءاً منه أو hash أو headers أو environment dump.
+
+عند بدء مهمة Gemini، يضع Gateway المفتاح في `GEMINI_API_KEY` لعملية Pipeline الابنة ويضبط `PUBLIKCLIP_DISABLE_LOCAL_SECRETS=1`، حتى لا يتغلب `secrets.json` على إعداد الخادم. تشمل الأخطاء المستقرة `GEMINI_NOT_CONFIGURED` و`GEMINI_AUTH_FAILED` و`GEMINI_QUOTA_EXCEEDED` و`GEMINI_TIMEOUT` و`PIPELINE_UNAVAILABLE` و`FFMPEG_UNAVAILABLE`.
+
+ينفذ Android زر **TEST SYSTEM** قبل **CUT IT**، ويفحص Gateway وPipeline وGemini وFFmpeg دون إنشاء مهمة فيديو. إذا فشل أي فحص، يعرض التطبيق سبباً قابلاً للإصلاح ولا ينشئ job في SQLite.

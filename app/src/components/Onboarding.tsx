@@ -9,9 +9,10 @@ import { api } from '../api'
 
 interface Props {
   onDone: () => Promise<void>
+  isAndroid?: boolean
 }
 
-export default function Onboarding({ onDone }: Props) {
+export default function Onboarding({ onDone, isAndroid = false }: Props) {
   const [step, setStep] = useState(0)
   const [key, setKey] = useState('')
   const [saved, setSaved] = useState(false)
@@ -56,10 +57,10 @@ export default function Onboarding({ onDone }: Props) {
             ITS WORK<span className="amber">.</span>
           </h1>
           <p className="ob-body">
-            Long video in, vertical clips out. Speech, laughter, speakers, and camera
-            moves are all computed <em>on this machine</em>. The only thing that ever
-            leaves it is two or three small text calls to score your moments — and
-            every score comes with the full audit trail of how it was made.
+            Long video in, vertical clips out. Desktop runs the Python Pipeline locally;
+            Android sends only a source URL to your personal Gateway. Gemini credentials
+            stay with the environment that runs the Pipeline, and every score comes with
+            the full audit trail of how it was made.
           </p>
           <button className="btn-primary" onClick={() => setStep(1)}>
             Set it up
@@ -72,7 +73,7 @@ export default function Onboarding({ onDone }: Props) {
           <h2 className="ob-h2">Pick how moments get judged</h2>
           <div className="ob-cards">
             <div className={`ob-card ${saved ? 'done' : ''}`}>
-              <h3>Gemini key <span className="chip chip-amber">recommended</span></h3>
+              <h3>Local desktop Gemini key <span className="chip chip-amber">recommended</span></h3>
               <p>
                 Bring your own key (aistudio.google.com). Costs roughly{' '}
                 <span className="mono">$0.15</span> per hour of source video. Best
@@ -91,7 +92,7 @@ export default function Onboarding({ onDone }: Props) {
                 </button>
               </div>
               {saveError && <p className="ob-error">{saveError}</p>}
-              {saved && <p className="ob-success">Your key is stored locally and ready to use.</p>}
+              {saved && <p className="ob-success">Your local desktop key is stored locally. Android uses the Gateway key instead.</p>}
             </div>
             <div className={`ob-card ${ollama?.running ? '' : 'dim'}`}>
               <h3>
@@ -107,13 +108,13 @@ export default function Onboarding({ onDone }: Props) {
             </div>
           </div>
           <p className="ob-fine">
-            You can switch per-run. Everything else — transcription, laughter
-            detection, speaker tracking, rendering — is local either way.
+            You can switch per-run. On Android, configure the personal Processing Gateway
+            in Studio; its server-side GEMINI_API_KEY is never sent from the phone.
           </p>
           <button
             className="btn-primary"
             onClick={() => setStep(2)}
-            disabled={!saved && !ollama?.running}
+            disabled={!isAndroid && !saved && !ollama?.running}
           >
             Continue
           </button>
@@ -124,10 +125,7 @@ export default function Onboarding({ onDone }: Props) {
           <p className="ob-kicker">02 / one honest warning</p>
           <h2 className="ob-h2">First run downloads the models</h2>
           <p className="ob-body">
-            About <span className="mono">2.5 GB</span> of open speech and audio models,
-            fetched once into <span className="mono">~/.publikclip</span>. An hour-long
-            podcast then takes a while on-device — the progress bar never lies to you,
-            and every stage checkpoints, so you can quit and resume anytime.
+            {isAndroid ? 'The personal Gateway downloads the speech and audio models once on the processing server. Android keeps the job remote and polls its honest stage progress.' : <>About <span className="mono">2.5 GB</span> of open speech and audio models, fetched once into <span className="mono">~/.publikclip</span>. An hour-long podcast then takes a while on-device — the progress bar never lies to you, and every stage checkpoints, so you can quit and resume anytime.</>}
           </p>
           <button className="btn-primary" disabled={finishing} onClick={async () => {
             setFinishing(true)

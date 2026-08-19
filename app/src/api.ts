@@ -7,8 +7,40 @@ export type SourceJob = { id: string; status: 'queued' | 'running' | 'done' | 'f
 
 export const PROCESSING_GATEWAY_STORAGE_KEY = 'ism.processing-gateway.v1'
 export const PROCESSING_GATEWAY_SESSION_KEY = 'ism.processing-gateway.session.v1'
+export const REMOTE_PROCESSING_JOB_SESSION_KEY = 'ism.remote-processing-job.v1'
 
 export type ProcessingGatewayConfig = { url: string; token: string }
+
+export type GatewayHealth = {
+  ok: boolean
+  provider_mode?: string
+  auth_configured?: boolean
+  auth_required?: boolean
+  gemini_configured?: boolean
+  processing_active?: number
+  source_active?: number
+}
+
+export type ProcessingCapabilities = {
+  gateway: boolean
+  pipeline: boolean
+  gemini: boolean
+  ffmpeg: boolean
+  details?: {
+    pipeline?: { ready: boolean; message?: string }
+    gemini?: { configured: boolean; provider: string; status: string }
+    ffmpeg?: { ready: boolean; captions: boolean; message?: string }
+  }
+}
+
+export type GeminiDiagnostic = {
+  status: 'ready' | 'not_configured' | 'auth_failed' | 'quota' | 'network_error' | 'timeout' | 'pipeline_unavailable' | 'unknown_error'
+  code?: string
+  provider?: string
+  model?: string
+  latency_ms?: number
+  message?: string
+}
 
 export function loadProcessingGatewayConfig(): ProcessingGatewayConfig {
   try {
@@ -48,6 +80,36 @@ function gatewayEndpoint(baseUrl: string, path: string) {
 export const api = {
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
+  health: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/health'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 240)
+      throw new Error(`Gateway health returned ${response.status}: ${detail}`)
+    }
+    return (await response.json()) as GatewayHealth
+  },
+  processingCapabilities: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/processing/capabilities'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 240)
+      throw new Error(`Processing capabilities returned ${response.status}: ${detail}`)
+    }
+    return (await response.json()) as ProcessingCapabilities
+  },
+  geminiDiagnostic: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/diagnostics/gemini'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    const payload = (await response.json().catch(() => ({}))) as GeminiDiagnostic
+    if (!response.ok && response.status !== 503) {
+      throw new Error(`Gemini diagnostic returned ${response.status}: ${payload.message ?? 'request failed'}`)
+    }
+    return payload
+  },
   processingStart: async (baseUrl: string, token: string, source: string, llm: string, captions: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, '/v1/processing/jobs'), {
       method: 'POST',
