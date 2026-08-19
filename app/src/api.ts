@@ -10,13 +10,17 @@ export const PROCESSING_GATEWAY_SESSION_KEY = 'ism.processing-gateway.session.v1
 export const REMOTE_PROCESSING_JOB_SESSION_KEY = 'ism.remote-processing-job.v1'
 
 export type ProcessingGatewayConfig = { url: string; token: string }
-
 export type GatewayHealth = {
+  status?: string
   ok: boolean
   provider_mode?: string
   auth_configured?: boolean
   auth_required?: boolean
+  pipeline?: boolean
+  python?: boolean
+  ffmpeg?: boolean
   gemini_configured?: boolean
+  storage?: boolean
   processing_active?: number
   source_active?: number
 }
@@ -25,7 +29,16 @@ export type ProcessingCapabilities = {
   gateway: boolean
   pipeline: boolean
   gemini: boolean
+  gemini_configured?: boolean
   ffmpeg: boolean
+  storage?: boolean
+  python?: boolean
+  uv?: boolean
+  ffprobe?: boolean
+  ollama?: boolean
+  youtube_urls?: boolean
+  https_urls?: boolean
+  android_remote_processing?: boolean
   details?: {
     pipeline?: { ready: boolean; message?: string }
     gemini?: { configured: boolean; provider: string; status: string }
@@ -34,11 +47,14 @@ export type ProcessingCapabilities = {
 }
 
 export type GeminiDiagnostic = {
-  status: 'ready' | 'not_configured' | 'auth_failed' | 'quota' | 'network_error' | 'timeout' | 'pipeline_unavailable' | 'unknown_error'
+  status?: 'ready' | 'not_configured' | 'auth_failed' | 'quota' | 'network_error' | 'timeout' | 'pipeline_unavailable' | 'unknown_error'
+  configured?: boolean
+  reachable?: boolean
   code?: string
+  error_code?: string | null
   provider?: string
   model?: string
-  latency_ms?: number
+  latency_ms?: number | null
   message?: string
 }
 
@@ -77,7 +93,23 @@ function gatewayEndpoint(baseUrl: string, path: string) {
   return `${value}${path}`
 }
 
+async function gatewayJson<T>(baseUrl: string, token: string, path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(gatewayEndpoint(baseUrl, path), {
+    ...init,
+    headers: { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}), ...(init?.headers ?? {}) }
+  })
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 240)
+    throw new Error(`Gateway ${response.status}: ${detail || response.statusText}`)
+  }
+  return (await response.json()) as T
+}
+
 export const api = {
+  gatewayHealth: (baseUrl: string, token: string) => gatewayJson<GatewayHealth>(baseUrl, token, '/health'),
+  processingCapabilities: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities>(baseUrl, token, '/v1/processing/capabilities'),
+  pipelineDiagnostic: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities & { pipeline_importable?: boolean; ffmpeg_usable?: boolean; ready?: boolean }>(baseUrl, token, '/v1/diagnostics/pipeline', { method: 'POST' }),
+  geminiDiagnostic: (baseUrl: string, token: string) => gatewayJson<GeminiDiagnostic>(baseUrl, token, '/v1/diagnostics/gemini', { method: 'POST' }),
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
   health: async (baseUrl: string, token: string) => {
@@ -89,26 +121,6 @@ export const api = {
       throw new Error(`Gateway health returned ${response.status}: ${detail}`)
     }
     return (await response.json()) as GatewayHealth
-  },
-  processingCapabilities: async (baseUrl: string, token: string) => {
-    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/processing/capabilities'), {
-      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
-    })
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 240)
-      throw new Error(`Processing capabilities returned ${response.status}: ${detail}`)
-    }
-    return (await response.json()) as ProcessingCapabilities
-  },
-  geminiDiagnostic: async (baseUrl: string, token: string) => {
-    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/diagnostics/gemini'), {
-      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
-    })
-    const payload = (await response.json().catch(() => ({}))) as GeminiDiagnostic
-    if (!response.ok && response.status !== 503) {
-      throw new Error(`Gemini diagnostic returned ${response.status}: ${payload.message ?? 'request failed'}`)
-    }
-    return payload
   },
   processingStart: async (baseUrl: string, token: string, source: string, llm: string, captions: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, '/v1/processing/jobs'), {

@@ -71,6 +71,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         settings.llm_mode = args.llm
     if args.captions:
         settings.caption_preset = args.captions
+    if args.mode:
+        settings.processing_mode = args.mode
     if args.camera:
         settings.camera.speaker_change = args.camera
     job = queue.create_job(source_type, source, json.dumps(settings.to_json()))
@@ -82,12 +84,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if job is None:
         print(f"No job {args.job_id}", file=sys.stderr)
         return 2
-    if args.llm or args.captions or args.camera:
+    if args.llm or args.captions or args.mode or args.camera:
         settings = config.Settings.from_json(json.loads(job.settings_json))
         if args.llm:
             settings.llm_mode = args.llm
         if args.captions:
             settings.caption_preset = args.captions
+        if args.mode:
+            settings.processing_mode = args.mode
         if args.camera:
             settings.camera.speaker_change = args.camera
         new_json = json.dumps(settings.to_json())
@@ -286,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("source")
     p_run.add_argument("--llm", choices=["gemini", "ollama"], default=None)
     p_run.add_argument("--captions", default=None, help="caption preset name")
+    p_run.add_argument("--mode", choices=["fast", "balanced", "quality", "maximum"], default=None)
     p_run.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
     p_run.set_defaults(fn=cmd_run)
 
@@ -293,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     p_resume.add_argument("job_id")
     p_resume.add_argument("--llm", choices=["gemini", "ollama"], default=None)
     p_resume.add_argument("--captions", default=None, help="caption preset name")
+    p_resume.add_argument("--mode", choices=["fast", "balanced", "quality", "maximum"], default=None)
     p_resume.add_argument("--camera", choices=["cut", "pan", "locked"], default=None)
     p_resume.set_defaults(fn=cmd_resume)
 

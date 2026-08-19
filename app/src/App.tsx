@@ -151,18 +151,21 @@ export default function App() {
 
         const gateway = loadProcessingGatewayConfig()
         if (!gateway.url.trim()) {
-          throw new Error('Android needs a Processing Gateway URL. Open Social Hub, enter the HTTPS Gateway URL, and save it first.')
+          throw new Error('Android needs a Processing Gateway URL. Enter it in Processing Engine inside Studio and save it first.')
         }
         if (!/^https?:\/\//i.test(source.trim())) {
           throw new Error('Android remote processing accepts a YouTube or HTTPS video URL, not a local file path.')
         }
-        await api.health(gateway.url, gateway.token)
+        const health = await api.gatewayHealth(gateway.url, gateway.token)
+        if (!health.ok) throw new Error(`Gateway is not ready: ${!health.pipeline ? 'PIPELINE_UNAVAILABLE' : !health.ffmpeg ? 'FFMPEG_UNAVAILABLE' : health.storage === false ? 'STORAGE_UNAVAILABLE' : 'GATEWAY_DEGRADED'}`)
         const capabilities = await api.processingCapabilities(gateway.url, gateway.token)
-        if (!capabilities.pipeline) throw new Error(capabilities.details?.pipeline?.message ?? 'PIPELINE_UNAVAILABLE: Pipeline is not ready on the Gateway.')
-        if (!capabilities.ffmpeg) throw new Error(capabilities.details?.ffmpeg?.message ?? 'FFMPEG_UNAVAILABLE: FFmpeg is not ready on the Gateway.')
+        if (!capabilities.pipeline || !capabilities.ffmpeg || capabilities.storage === false) {
+          throw new Error(`Processing prerequisites failed: ${!capabilities.pipeline ? 'PIPELINE_UNAVAILABLE' : !capabilities.ffmpeg ? 'FFMPEG_UNAVAILABLE' : 'STORAGE_UNAVAILABLE'}`)
+        }
         if (llm === 'gemini') {
-          const diagnostic = await api.geminiDiagnostic(gateway.url, gateway.token)
-          if (diagnostic.status !== 'ready') throw new Error(diagnostic.message ?? `${diagnostic.code ?? 'GEMINI_FAILED'}: Gemini is not ready on the Gateway.`)
+          const gemini = await api.geminiDiagnostic(gateway.url, gateway.token)
+          const geminiReady = gemini.status === 'ready' || gemini.reachable === true
+          if (!geminiReady) throw new Error(gemini.message ?? `Gemini configuration error: ${gemini.code ?? gemini.error_code ?? 'GEMINI_UNAVAILABLE'}`)
         }
         const started = await api.processingStart(gateway.url, gateway.token, source.trim(), llm, captions)
         setActiveJob(started.id)
@@ -185,6 +188,8 @@ export default function App() {
           if (status.status === 'done') {
             sessionStorage.removeItem(REMOTE_PROCESSING_JOB_SESSION_KEY)
             if (!status.results) throw new Error('Gateway completed without returning clip results.')
+            const outputs = status.results.render?.outputs ?? []
+            if (!outputs.length) throw new Error('PROCESSING COMPLETED — NO VALID CLIPS FOUND')
             setResults(status.results)
             setRunning(false)
             setView('review')

@@ -27,3 +27,9 @@ The frontend production build passes. Android-targeted Rust `cargo check --targe
 ## Operational limits
 
 Android still requires a running Processing Gateway for video clipping because the desktop Python runtime is not an Android-native runtime. Real social publishing remains disabled in the default mock mode and requires provider-approved OAuth adapters and credentials. The system intentionally does not rotate IP addresses or use proxies to bypass provider enforcement.
+
+## v0.9.3 Android processing fix
+
+The Android path now tests `/health`, `/v1/processing/capabilities`, `/v1/diagnostics/pipeline`, and `/v1/diagnostics/gemini` before creating a processing job. Studio exposes a dedicated Processing Engine section with `TEST SYSTEM`, actionable readiness states, and LAN Debug guidance. The Gateway reads Gemini only server-side from `PUBLIKCLIP_GEMINI_API_KEY` or an ignored `gateway/secrets/gemini.key` file, then maps it into `PUBLIKCLIP_GEMINI_API_KEY` for the existing Pipeline process. The Android client never transmits the Gemini key.
+
+A diagnostics smoke test confirmed JSON responses for health, capabilities, Gemini-not-configured, and Pipeline readiness without returning API keys, filesystem paths, or secrets. The actual end-to-end clip test still requires a user-controlled Gateway with WhisperX/Python 3.12, FFmpeg, a valid Gemini key, and a real YouTube URL; it cannot be honestly completed inside this sandbox without those private runtime prerequisites.

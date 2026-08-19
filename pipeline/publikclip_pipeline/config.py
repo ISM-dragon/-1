@@ -47,6 +47,18 @@ def ensure_home() -> Path:
     return root
 
 
+def candidate_budget(mode: str, duration_seconds: float) -> int:
+    """Return a bounded candidate budget that scales with source duration."""
+    mode_limits = {"fast": 20, "balanced": 40, "quality": 70, "maximum": 100}
+    normalized = mode if mode in mode_limits else "balanced"
+    density = max(1, int(duration_seconds // 180))
+    return min(mode_limits[normalized], max(8, 12 + density * 8))
+
+
+def finalist_budget(mode: str) -> int:
+    return {"fast": 6, "balanced": 12, "quality": 20, "maximum": 32}.get(mode, 12)
+
+
 # Hard per-attempt network timeouts (seconds). A blackholed connection must
 # never freeze the pipeline — every subprocess/network call takes one of these.
 HTTP_TIMEOUT = 60.0
@@ -81,6 +93,7 @@ class Settings:
     lufs_target: float = -14.0  # decision #8: configurable per destination
     true_peak_db: float = -1.0
     llm_mode: str = "gemini"  # 'gemini' (BYO key) | 'ollama' (local fallback)
+    processing_mode: str = "balanced"  # fast | balanced | quality | maximum
     caption_preset: str = "classic"
     # jrgillick laughter specialist: 10 ms precision but ~300k CPU forward
     # passes on an hour-plus source. OFF by default — PANNs' AudioSet
@@ -94,6 +107,7 @@ class Settings:
             "lufs_target": self.lufs_target,
             "true_peak_db": self.true_peak_db,
             "llm_mode": self.llm_mode,
+            "processing_mode": self.processing_mode,
             "caption_preset": self.caption_preset,
             "laughter_specialist": self.laughter_specialist,
         }
@@ -106,6 +120,7 @@ class Settings:
             lufs_target=data.get("lufs_target", -14.0),
             true_peak_db=data.get("true_peak_db", -1.0),
             llm_mode=data.get("llm_mode", "gemini"),
+            processing_mode=data.get("processing_mode", "balanced"),
             caption_preset=data.get("caption_preset", "classic"),
             laughter_specialist=data.get("laughter_specialist", False),
         )

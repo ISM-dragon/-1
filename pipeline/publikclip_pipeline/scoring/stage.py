@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import config
 from ..jobs.queue import Stage, StageContext, StageError
 from ..music import brief as music_brief
 from . import constants as constants_mod
@@ -164,7 +165,7 @@ class ScoreStage(Stage):
             return max(scores.values())
 
         scored.sort(key=_text_rank, reverse=True)
-        finalists = scored[:SELECT_COUNT]
+        finalists = scored[:config.finalist_budget(ctx.settings.processing_mode)]
 
         # T2 visual pass + music brief on finalists only.
         supports_vision = client.backend == "gemini"
@@ -232,6 +233,8 @@ class ScoreStage(Stage):
             "clips": finalists,
             "scored_count": len(scored),
             "t2_ran": supports_vision,
+            "processing_mode": ctx.settings.processing_mode,
+            "finalist_budget": config.finalist_budget(ctx.settings.processing_mode),
             "scoring_config_version": scoring_config["version"],
             "scoring_constants": cv_constants,
         }
