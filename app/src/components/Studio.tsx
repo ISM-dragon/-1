@@ -43,8 +43,14 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
   const [processingGatewayToken, setProcessingGatewayToken] = useState(() => loadProcessingGatewayConfig().token)
   const [gatewaySaved, setGatewaySaved] = useState(false)
 
+  const gatewayReady = !isAndroid || processingGatewayUrl.trim().length > 0
+
+  function persistGateway(url = processingGatewayUrl, token = processingGatewayToken) {
+    saveProcessingGatewayConfig({ url: url.trim(), token: token.trim() })
+  }
+
   function saveGateway() {
-    saveProcessingGatewayConfig({ url: processingGatewayUrl.trim(), token: processingGatewayToken.trim() })
+    persistGateway()
     setGatewaySaved(true)
     window.setTimeout(() => setGatewaySaved(false), 2200)
   }
@@ -100,16 +106,16 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
             <input
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && source.trim() && !running && onRun(source.trim(), llm, captions)}
+              onKeyDown={(e) => e.key === 'Enter' && source.trim() && !running && gatewayReady && onRun(source.trim(), llm, captions)}
               placeholder="YouTube URL or a path to a video file"
               disabled={running}
             />
             <button
               className="btn-primary"
               onClick={() => onRun(source.trim(), llm, captions)}
-              disabled={running || !source.trim()}
+              disabled={running || !source.trim() || !gatewayReady}
             >
-              {running ? 'WORKING' : 'CUT IT'}
+              {running ? 'WORKING' : isAndroid && !gatewayReady ? 'SET GATEWAY FIRST' : 'CUT IT'}
             </button>
           </div>
           {isAndroid && (
@@ -118,14 +124,14 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
               <p className="gateway-help">The Android build sends the YouTube URL to your private Gateway, which runs the Python pipeline and returns the clips.</p>
               <input
                 value={processingGatewayUrl}
-                onChange={(e) => setProcessingGatewayUrl(e.target.value)}
+                onChange={(e) => { setProcessingGatewayUrl(e.target.value); persistGateway(e.target.value, processingGatewayToken) }}
                 placeholder="https://your-gateway.example"
                 disabled={running}
               />
               <input
                 type="password"
                 value={processingGatewayToken}
-                onChange={(e) => setProcessingGatewayToken(e.target.value)}
+                onChange={(e) => { setProcessingGatewayToken(e.target.value); persistGateway(processingGatewayUrl, e.target.value) }}
                 placeholder="Gateway token (optional)"
                 disabled={running}
               />
