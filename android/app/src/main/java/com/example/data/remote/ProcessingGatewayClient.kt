@@ -47,7 +47,8 @@ class ProcessingGatewayClient(
         sourceUri: String,
         captionTheme: String,
         mode: String,
-        onProgress: suspend (Progress) -> Unit
+        onProgress: suspend (Progress) -> Unit,
+        onJobCreated: suspend (String) -> Unit = {}
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
@@ -56,7 +57,8 @@ class ProcessingGatewayClient(
                 onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
             }
             onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
-            val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode)
+            val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode, UUID.randomUUID().toString())
+            onJobCreated(gatewayJobId)
             var lastStatus = "queued"
             var completedResult: RemoteResult? = null
             while (completedResult == null) {
@@ -69,12 +71,15 @@ class ProcessingGatewayClient(
                     onProgress(Progress(percent, stage, message))
                     lastStatus = stage
                 }
-                when (statusPayload.optString("status")) {
-                    "done", "completed", "succeeded" -> {
+                val state = statusPayload.optString("state").uppercase()
+                when {
+                    state == "COMPLETED" || statusPayload.optString("status") in setOf("done", "completed", "succeeded") -> {
                         onProgress(Progress(100, "COMPLETED", "اكتملت المعالجة البعيدة"))
                         completedResult = RemoteResult(gatewayJobId, parseClips(statusPayload))
                     }
-                    "failed", "error" -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
+                    state == "CANCELLED" || statusPayload.optString("status") == "cancelled" -> error("ألغى Gateway مهمة المعالجة")
+                    state == "FAILED" || statusPayload.optString("status") in setOf("failed", "error") -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
+                    state == "INTERRUPTED" -> onProgress(Progress(percent, "INTERRUPTED", "توقفت المهمة مؤقتاً؛ يمكن استئنافها من Gateway"))
                 }
                 if (completedResult == null) delay(POLL_INTERVAL_MS)
             }
@@ -130,7 +135,7 @@ class ProcessingGatewayClient(
         }
     }
 
-    private fun start(baseUrl: String, token: String, sourceUrl: String, captionTheme: String, mode: String): String {
+    private fun start(baseUrl: String, token: String, sourceUrl: String, captionTheme: String, mode: String, idempotencyKey: String): String {
         val connection = openConnection("$baseUrl/v1/processing/jobs", token, "POST").apply {
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             doOutput = true
@@ -141,6 +146,7 @@ class ProcessingGatewayClient(
                 .put("llm", "gemini")
                 .put("captions", captionTheme.ifBlank { "classic" })
                 .put("mode", mode.ifBlank { "balanced" })
+                .put("idempotency_key", idempotencyKey)
                 .toString()
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val json = readJson(connection)
@@ -154,6 +160,28 @@ class ProcessingGatewayClient(
     private fun status(baseUrl: String, token: String, jobId: String): JSONObject {
         val connection = openConnection("$baseUrl/v1/processing/jobs/${URI.create(jobId).toASCIIString()}", token, "GET")
         return try { readJson(connection) } finally { connection.disconnect() }
+    }
+
+    suspend fun cancel(config: GatewayConfig, jobId: String): Result<JSONObject> = control(config, jobId, "cancel")
+
+    suspend fun retry(config: GatewayConfig, jobId: String): Result<JSONObject> = control(config, jobId, "retry")
+
+    suspend fun resume(config: GatewayConfig, jobId: String): Result<JSONObject> = control(config, jobId, "resume")
+
+    private suspend fun control(config: GatewayConfig, jobId: String, action: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+        runCatching {
+            val baseUrl = validateBaseUrl(config.baseUrl)
+            val connection = openConnection("$baseUrl/v1/processing/jobs/${URI.create(jobId).toASCIIString()}/$action", config.token, "POST").apply {
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                doOutput = true
+            }
+            try {
+                connection.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
+                readJson(connection)
+            } finally {
+                connection.disconnect()
+            }
+        }
     }
 
     private fun parseClips(status: JSONObject): List<RemoteClip> {

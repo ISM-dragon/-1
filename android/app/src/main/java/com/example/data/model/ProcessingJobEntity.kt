@@ -17,6 +17,7 @@ data class ProcessingJobEntity(
     val progress: Int = 0,
     val currentStage: String = "QUEUED",
     val errorMessage: String = "",
+    val remoteGatewayJobId: String? = null,
     val outputProjectId: Long = 0L,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

@@ -3,6 +3,8 @@ package com.example.data.db
 import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.RoomDatabase
 import com.example.data.model.AiUsageEntity
 import com.example.data.model.Clip
@@ -24,7 +26,7 @@ import com.example.data.model.ViralScoreMetricEntity
         RepurposingHistoryEntity::class,
         ProcessingJobEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class OpusDatabase : RoomDatabase() {
@@ -41,6 +43,12 @@ abstract class OpusDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: OpusDatabase? = null
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE processing_jobs ADD COLUMN remoteGatewayJobId TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): OpusDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -48,7 +56,7 @@ abstract class OpusDatabase : RoomDatabase() {
                     OpusDatabase::class.java,
                     "opus_pro_database"
                 )
-                .fallbackToDestructiveMigration()
+                .addMigrations(MIGRATION_4_5)
                 .build()
                 INSTANCE = instance
                 instance

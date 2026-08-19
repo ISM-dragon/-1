@@ -759,14 +759,55 @@ class OpusRepository(context: Context) {
     fun observeProcessingJob(jobId: String): Flow<ProcessingJobEntity?> = processingJobDao.observe(jobId)
 
     suspend fun cancelVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
+        val existing = processingJobDao.get(jobId)
+        val config = _gatewayConfig.value
+        val remoteMessage = if (!existing?.remoteGatewayJobId.isNullOrBlank() && config.baseUrl.isNotBlank()) {
+            ProcessingGatewayClient(appContext.contentResolver).cancel(config, requireNotNull(existing?.remoteGatewayJobId))
+                .fold({ "تم إلغاء المهمة على Gateway." }, { "تعذر تأكيد الإلغاء على Gateway: ${it.message.orEmpty()}" })
+        } else {
+            "لا يوجد job بعيد محفوظ؛ تم إلغاء العمل المحلي."
+        }
         WorkManager.getInstance(appContext).cancelUniqueWork("opus_video_processing_$jobId")
         processingJobDao.updateState(
             jobId = jobId,
             status = ProcessingJobEntity.STATUS_CANCELLED,
-            progress = 0,
+            progress = existing?.progress ?: 0,
             stage = "CANCELLED",
-            errorMessage = "تم إلغاء المهمة بواسطة المستخدم."
+            errorMessage = remoteMessage
         )
+    }
+
+    suspend fun retryVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
+        val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
+        require(existing.status == ProcessingJobEntity.STATUS_FAILED || existing.status == ProcessingJobEntity.STATUS_CANCELLED) { "لا يمكن إعادة محاولة هذه المهمة." }
+        processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "RETRY_WAIT", "إعادة المحاولة مجدولة.")
+        requeuePersistedProcessing(existing)
+    }
+
+    suspend fun resumeVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
+        val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
+        require(existing.remoteGatewayJobId?.isNotBlank() == true) { "لا يوجد job بعيد قابل للاستئناف." }
+        processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "QUEUED", "استئناف المهمة من checkpoint Gateway.")
+        requeuePersistedProcessing(existing)
+    }
+
+    private fun requeuePersistedProcessing(existing: ProcessingJobEntity) {
+        val input = workDataOf(
+            VideoProcessingWorker.KEY_JOB_ID to existing.jobId,
+            VideoProcessingWorker.KEY_TITLE to existing.title,
+            VideoProcessingWorker.KEY_SOURCE_URI to existing.sourceUri,
+            VideoProcessingWorker.KEY_TRANSCRIPT to existing.transcriptOrPrompt,
+            VideoProcessingWorker.KEY_DURATION_MINUTES to existing.durationMinutes,
+            VideoProcessingWorker.KEY_TARGET_PLATFORM to existing.targetPlatform,
+            VideoProcessingWorker.KEY_CAPTION_THEME to existing.captionTheme,
+            VideoProcessingWorker.KEY_PROCESSING_MODE to "balanced"
+        )
+        val request = OneTimeWorkRequestBuilder<VideoProcessingWorker>()
+            .setInputData(input)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .addTag("opus_video_processing")
+            .build()
+        WorkManager.getInstance(appContext).enqueueUniqueWork("opus_video_processing_${existing.jobId}", ExistingWorkPolicy.REPLACE, request)
     }
 
     fun getClipsForProject(projectId: Long): Flow<List<Clip>> = clipDao.getClipsForProject(projectId)
