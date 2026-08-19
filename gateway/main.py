@@ -5,7 +5,10 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import sqlite3
+import subprocess
+import sys
 from contextlib import closing
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -13,7 +16,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 ROOT = Path(__file__).resolve().parent
@@ -21,6 +24,9 @@ DB_PATH = Path(os.getenv("ISM_GATEWAY_DB", str(ROOT / "gateway.db")))
 GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")
 PROVIDER_MODE = os.getenv("PROVIDER_MODE", "mock")
 PUBLISH_INTERVAL_SECONDS = max(10, int(os.getenv("PUBLISH_INTERVAL_SECONDS", "30")))
+PROCESSING_ROOT = Path(os.getenv("ISM_PROCESSING_ROOT", str(ROOT / "processing")))
+PIPELINE_DIR = Path(os.getenv("ISM_PIPELINE_DIR", str(ROOT.parent / "pipeline")))
+PIPELINE_BIN = os.getenv("ISM_PIPELINE_BIN", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8787").rstrip("/")
 ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
 ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
@@ -155,6 +161,22 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_posts_due ON posts(status, auto_publish, scheduled_at);
             CREATE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key);
+            CREATE TABLE IF NOT EXISTS processing_jobs (
+                id TEXT PRIMARY KEY,
+                pipeline_job_id TEXT,
+                source TEXT NOT NULL,
+                llm TEXT NOT NULL DEFAULT 'gemini',
+                captions TEXT NOT NULL DEFAULT 'classic',
+                status TEXT NOT NULL DEFAULT 'queued',
+                stage TEXT,
+                fraction REAL,
+                message TEXT,
+                error TEXT,
+                result_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_processing_jobs_updated ON processing_jobs(updated_at);
             """
         )
         migrations = [
@@ -182,6 +204,12 @@ async def auth(request: Request) -> None:
     supplied = request.headers.get("authorization", "")
     if supplied != f"Bearer {GATEWAY_TOKEN}":
         raise HTTPException(status_code=401, detail="Invalid Gateway token")
+
+
+class ProcessingPayload(BaseModel):
+    source: HttpUrl
+    llm: str = Field(default="gemini", pattern=r"^(gemini|ollama)$")
+    captions: str = Field(default="classic", min_length=1, max_length=40)
 
 
 class AccountCreate(BaseModel):
@@ -215,6 +243,120 @@ class AccountPolicyPayload(BaseModel):
 class StatusUpdate(BaseModel):
     status: str
     error: str | None = None
+
+
+def processing_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["results"] = json.loads(result["result_json"]) if result.get("result_json") else None
+    result.pop("result_json", None)
+    return result
+
+
+def update_processing_job(job_id: str, **values: Any) -> None:
+    if not values:
+        return
+    values["updated_at"] = now_iso()
+    assignments = ", ".join(f"{key}=?" for key in values)
+    parameters = list(values.values()) + [job_id]
+    with closing(db()) as connection:
+        connection.execute(f"UPDATE processing_jobs SET {assignments} WHERE id=?", parameters)
+        connection.commit()
+
+
+def read_pipeline_checkpoint(job_dir: Path, name: str) -> dict[str, Any] | None:
+    path = job_dir / f"{name}.json"
+    try:
+        payload = json.loads(path.read_text())
+        data = payload.get("data")
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]:
+    job_dir = PROCESSING_ROOT / "jobs" / pipeline_job_id
+    ingest = read_pipeline_checkpoint(job_dir, "ingest") or {}
+    score = read_pipeline_checkpoint(job_dir, "score")
+    render = read_pipeline_checkpoint(job_dir, "render") or {}
+    events = read_pipeline_checkpoint(job_dir, "events")
+    candidates = read_pipeline_checkpoint(job_dir, "candidates")
+    outputs = []
+    for output in render.get("outputs", []):
+        filename = Path(str(output.get("path", ""))).name
+        if not filename:
+            continue
+        item = dict(output)
+        item["path"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{external_id}/media/{filename}"
+        outputs.append(item)
+    return {
+        "job_id": external_id,
+        "dir": str(job_dir),
+        "ingest": {key: ingest.get(key) for key in ("title", "heatmap", "probe")} if ingest else None,
+        "score": score,
+        "render": {**render, "outputs": outputs} if render else None,
+        "events": events,
+        "candidates": candidates,
+    }
+
+
+def pipeline_command() -> tuple[list[str], dict[str, str]]:
+    environment = os.environ.copy()
+    environment["PUBLIKCLIP_HOME"] = str(PROCESSING_ROOT)
+    environment["PYTHONPATH"] = f"{PIPELINE_DIR}{os.pathsep}{environment.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+    if PIPELINE_BIN:
+        return [PIPELINE_BIN, "--jsonl"], environment
+    uv = shutil.which("uv")
+    if uv and (PIPELINE_DIR / "pyproject.toml").exists():
+        return [uv, "run", "--project", str(PIPELINE_DIR), "publikclip", "--jsonl"], environment
+    return [sys.executable, "-m", "publikclip_pipeline.cli", "--jsonl"], environment
+
+
+def run_processing_job(external_id: str, source: str, llm: str, captions: str) -> None:
+    command, environment = pipeline_command()
+    command.extend(["run", source, "--llm", llm, "--captions", captions])
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(PIPELINE_DIR.parent),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        update_processing_job(external_id, status="running", message="Pipeline started")
+        final: dict[str, Any] | None = None
+        assert process.stdout is not None
+        for line in process.stdout:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event") == "job":
+                update_processing_job(external_id, pipeline_job_id=event.get("job_id"), message="Job created")
+            elif event.get("event") == "progress":
+                update_processing_job(
+                    external_id,
+                    status="running",
+                    stage=event.get("stage"),
+                    fraction=event.get("fraction"),
+                    message=event.get("message"),
+                )
+            elif event.get("event") == "result":
+                final = event
+        return_code = process.wait()
+        if return_code != 0 or not final or not final.get("ok"):
+            detail = (final or {}).get("error") or f"Pipeline exited with code {return_code}."
+            update_processing_job(external_id, status="failed", error=str(detail), message="Pipeline failed")
+            return
+        pipeline_job_id = str(final.get("job_id") or "")
+        if not pipeline_job_id:
+            update_processing_job(external_id, status="failed", error="Pipeline returned no job id.", message="Pipeline failed")
+            return
+        results = processing_results(external_id, pipeline_job_id)
+        update_processing_job(external_id, pipeline_job_id=pipeline_job_id, status="done", fraction=1.0, stage="render", message="Clips ready", result_json=json.dumps(results, ensure_ascii=False))
+    except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
+        update_processing_job(external_id, status="failed", error=str(error), message="Gateway worker failed")
 
 
 def account_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -419,6 +561,43 @@ async def health() -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse)
 async def dashboard() -> str:
     return DASHBOARD_HTML
+
+
+@app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
+async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
+    job_id = f"proc_{secrets.token_urlsafe(12)}"
+    timestamp = now_iso()
+    PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+    with closing(db()) as connection:
+        connection.execute(
+            "INSERT INTO processing_jobs (id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
+            (job_id, str(payload.source), payload.llm, payload.captions, timestamp, timestamp),
+        )
+        connection.commit()
+    asyncio.create_task(asyncio.to_thread(run_processing_job, job_id, str(payload.source), payload.llm, payload.captions))
+    return {"id": job_id, "status": "queued"}
+
+
+@app.get("/v1/processing/jobs/{job_id}", dependencies=[Depends(auth)])
+async def processing_status(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    return processing_dict(row)
+
+
+@app.get("/v1/processing/jobs/{job_id}/media/{filename:path}")
+async def processing_media(job_id: str, filename: str) -> FileResponse:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT pipeline_job_id, status FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row or row["status"] != "done" or not row["pipeline_job_id"]:
+        raise HTTPException(status_code=404, detail="Processing media is not ready")
+    base = (PROCESSING_ROOT / "jobs" / row["pipeline_job_id"] / "clips").resolve()
+    target = (base / filename).resolve()
+    if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Media not found")
+    return FileResponse(target, media_type="video/mp4", filename=target.name)
 
 
 @app.get("/v1/dashboard/summary", dependencies=[Depends(auth)])

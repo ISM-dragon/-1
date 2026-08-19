@@ -16,6 +16,22 @@ PROVIDER_MODE=mock uvicorn main:app --host 0.0.0.0 --port 8787
 
 افتح `http://127.0.0.1:8787` لعرض لوحة التحكم. في تطبيق ISM، ضع `http://127.0.0.1:8787` في حقل **Gateway API URL**. عناوين HTTP مسموحة محليًا فقط؛ يجب استخدام HTTPS خارج الجهاز.
 
+## معالجة فيديو Android عن بُعد
+
+نسخة Android لا تشغّل Python أو `uv` داخل APK. بعد نشر Gateway على جهاز يملك مجلد `pipeline` واعتمادياته، يرسل التطبيق رابط YouTube إلى `POST /v1/processing/jobs` ثم يستطلع `GET /v1/processing/jobs/{id}` ويعرض ملفات MP4 من مسار الوسائط. يجب ضبط `PUBLIC_BASE_URL` على عنوان HTTPS العام للخادم، وضبط `ISM_PIPELINE_DIR` على مجلد `pipeline`.
+
+```bash
+# من جذر المستودع، بعد تثبيت uv أو اعتماديات pipeline
+cd gateway
+cp .env.example .env
+export PUBLIC_BASE_URL=https://your-gateway.example
+export GATEWAY_TOKEN='ضع-رمزًا-طويلًا'
+export ISM_PIPELINE_DIR="$PWD/../pipeline"
+uvicorn main:app --host 0.0.0.0 --port 8787
+```
+
+في تطبيق Android، افتح **Social Hub** أو قسم **ANDROID PROCESSING GATEWAY** داخل Studio، أدخل عنوان HTTPS نفسه والرمز، ثم اضغط **SAVE GATEWAY**. استخدم رابط YouTube أو HTTPS فقط؛ اختيار ملف محلي من الهاتف لا يمكن للخادم الوصول إليه مباشرة.
+
 للاختبار، أضف حسابًا تجريبيًا من لوحة التحكم ثم جدولة منشور بعد دقيقتين. العامل الخلفي يفحص المنشورات كل 30 ثانية ويحوّلها إلى `published` في Mock Mode. يمكنك مراقبة `/health` و`/v1/dashboard/summary` و`/v1/social/schedule`.
 
 ## تشغيل محمي محليًا

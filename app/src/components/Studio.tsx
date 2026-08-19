@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { JobSummary } from '../types'
 import KeyModal from './KeyModal'
+import { loadProcessingGatewayConfig, saveProcessingGatewayConfig } from '../api'
 
 const STAGE_ORDER = [
   'ingest', 'asr', 'diarize', 'events', 'candidates', 'score', 'camera', 'render'
@@ -29,13 +30,23 @@ interface Props {
   onOpenSocial: () => void
   onOpenJob: (id: string) => void
   onResume: (id: string, llm?: string) => void
+  isAndroid: boolean
 }
 
-export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenSocial, onOpenJob, onResume }: Props) {
+export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenSocial, onOpenJob, onResume, isAndroid }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
   const [showKey, setShowKey] = useState(false)
+  const [processingGatewayUrl, setProcessingGatewayUrl] = useState(() => loadProcessingGatewayConfig().url)
+  const [processingGatewayToken, setProcessingGatewayToken] = useState(() => loadProcessingGatewayConfig().token)
+  const [gatewaySaved, setGatewaySaved] = useState(false)
+
+  function saveGateway() {
+    saveProcessingGatewayConfig({ url: processingGatewayUrl.trim(), token: processingGatewayToken.trim() })
+    setGatewaySaved(true)
+    window.setTimeout(() => setGatewaySaved(false), 2200)
+  }
 
   return (
     <div className="studio">
@@ -97,6 +108,28 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
               {running ? 'WORKING' : 'CUT IT'}
             </button>
           </div>
+          {isAndroid && (
+            <div className="remote-gateway-block">
+              <p className="opt-label">ANDROID PROCESSING GATEWAY</p>
+              <p className="gateway-help">The Android build sends the YouTube URL to your private Gateway, which runs the Python pipeline and returns the clips.</p>
+              <input
+                value={processingGatewayUrl}
+                onChange={(e) => setProcessingGatewayUrl(e.target.value)}
+                placeholder="https://your-gateway.example"
+                disabled={running}
+              />
+              <input
+                type="password"
+                value={processingGatewayToken}
+                onChange={(e) => setProcessingGatewayToken(e.target.value)}
+                placeholder="Gateway token (optional)"
+                disabled={running}
+              />
+              <button className="btn-secondary" onClick={saveGateway} disabled={running || !processingGatewayUrl.trim()}>
+                {gatewaySaved ? 'GATEWAY SAVED ✓' : 'SAVE GATEWAY'}
+              </button>
+            </div>
+          )}
           <div className="run-options">
             <div className="opt-group">
               <span className="opt-label">brain</span>

@@ -1,5 +1,24 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import type { JobResults, JobSummary, LoopOverview, SetupState, SyncSummary } from './types'
+
+export const PROCESSING_GATEWAY_STORAGE_KEY = 'ism.processing-gateway.v1'
+
+export type ProcessingGatewayConfig = { url: string; token: string }
+
+export function loadProcessingGatewayConfig(): ProcessingGatewayConfig {
+  try {
+    const raw = localStorage.getItem(PROCESSING_GATEWAY_STORAGE_KEY)
+    const parsed = raw ? (JSON.parse(raw) as Partial<ProcessingGatewayConfig>) : {}
+    return { url: parsed.url ?? '', token: parsed.token ?? '' }
+  } catch {
+    return { url: '', token: '' }
+  }
+}
+
+export function saveProcessingGatewayConfig(config: ProcessingGatewayConfig) {
+  localStorage.setItem(PROCESSING_GATEWAY_STORAGE_KEY, JSON.stringify(config))
+}
 
 function gatewayEndpoint(baseUrl: string, path: string) {
   const value = baseUrl.trim().replace(/\/+$/, '')
@@ -19,6 +38,33 @@ function gatewayEndpoint(baseUrl: string, path: string) {
 export const api = {
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
+  processingStart: async (baseUrl: string, token: string, source: string, llm: string, captions: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/processing/jobs'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify({ source, llm, captions })
+    })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(`Processing Gateway returned ${response.status}: ${detail.slice(0, 240)}`)
+    }
+    return (await response.json()) as { id: string; status: string }
+  },
+  processingStatus: async (baseUrl: string, token: string, jobId: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/processing/jobs/${encodeURIComponent(jobId)}`), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Processing status returned ${response.status}.`)
+    return (await response.json()) as {
+      id: string
+      status: 'queued' | 'running' | 'done' | 'failed'
+      stage?: string | null
+      fraction?: number | null
+      message?: string | null
+      error?: string | null
+      results?: JobResults | null
+    }
+  },
   resumeJob: (jobId: string, llm?: string, captions?: string, camera?: string) =>
     invoke<void>('resume_job', { jobId, llm, captions, camera }),
   jobResults: (jobId: string) => invoke<JobResults>('job_results', { jobId }),
@@ -27,8 +73,6 @@ export const api = {
   setupState: () => invoke<SetupState>('get_setup_state'),
   markOnboarded: () => invoke<void>('mark_onboarded'),
   checkOllama: () => invoke<{ running: boolean; models: string[] }>('check_ollama'),
-  exportClip: (path: string, title?: string) =>
-    invoke<string>('export_clip', { path, title }),
   igStatus: () => invoke<{ connected: boolean; username?: string }>('ig_status'),
   igSync: () => invoke<SyncSummary>('ig_tool', { args: ['sync'] }),
   igOverview: () => invoke<LoopOverview>('ig_tool', { args: ['overview'] }),
@@ -40,7 +84,14 @@ export const api = {
     invoke<{ ok: boolean }>('ig_tool', { args: ['unlink', mediaId] }),
   igReject: (mediaId: string, jobId: string, clip: number) =>
     invoke<{ ok: boolean }>('ig_tool', { args: ['reject', mediaId, jobId, String(clip)] }),
-  fileUrl: (path: string) => convertFileSrc(path),
+  fileUrl: (path: string) => /^https?:\/\//i.test(path) ? path : convertFileSrc(path),
+  exportClip: async (path: string, title?: string) => {
+    if (/^https?:\/\//i.test(path)) {
+      await openUrl(path)
+      return path
+    }
+    return invoke<string>('export_clip', { path, title })
+  },
   socialOAuthStart: async (baseUrl: string, token: string, platform: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, `/v1/social/oauth/${platform}/start`), {
       headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined

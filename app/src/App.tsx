@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import { api } from './api'
+import { api, loadProcessingGatewayConfig } from './api'
 import type { JobResults, JobSummary, PipelineEvent, SetupState } from './types'
 import Onboarding from './components/Onboarding'
 import Studio from './components/Studio'
@@ -23,6 +23,7 @@ export default function App() {
   const unlistenRef = useRef<(() => void) | null>(null)
   const activeJobRef = useRef<string | null>(null)
   activeJobRef.current = activeJob
+  const isAndroid = /Android/i.test(navigator.userAgent)
 
   const refreshJobs = useCallback(() => {
     api.listJobs().then(setJobs).catch(() => setJobs([]))
@@ -98,13 +99,46 @@ export default function App() {
       setResults(null)
       setActiveJob(null)
       try {
-        await api.runJob(source, llm, captions)
+        if (!isAndroid) {
+          await api.runJob(source, llm, captions)
+          return
+        }
+
+        const gateway = loadProcessingGatewayConfig()
+        if (!gateway.url.trim()) {
+          throw new Error('Android needs a Processing Gateway URL. Open Social Hub, enter the HTTPS Gateway URL, and save it first.')
+        }
+        if (!/^https?:\/\//i.test(source.trim())) {
+          throw new Error('Android remote processing accepts a YouTube or HTTPS video URL, not a local file path.')
+        }
+        const started = await api.processingStart(gateway.url, gateway.token, source.trim(), llm, captions)
+        setActiveJob(started.id)
+        let lastStage = ''
+        for (;;) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500))
+          const status = await api.processingStatus(gateway.url, gateway.token, started.id)
+          if (status.stage && status.stage !== lastStage) {
+            lastStage = status.stage
+            setStages((prev) => ({
+              ...prev,
+              [status.stage!]: { fraction: status.fraction ?? -1, message: status.message ?? '' }
+            }))
+          }
+          if (status.status === 'failed') throw new Error(status.error || 'Remote processing failed.')
+          if (status.status === 'done') {
+            if (!status.results) throw new Error('Gateway completed without returning clip results.')
+            setResults(status.results)
+            setRunning(false)
+            setView('review')
+            return
+          }
+        }
       } catch (error) {
         setRunning(false)
         setRunError(error instanceof Error ? error.message : String(error))
       }
     },
-    []
+    [isAndroid]
   )
 
   const openJob = useCallback(async (jobId: string) => {
@@ -160,8 +194,10 @@ export default function App() {
   }
 
   return (
-    <Studio
-      jobs={jobs}
+          <Studio
+        jobs={jobs}
+        isAndroid={isAndroid}
+
       running={running}
       stages={stages}
       error={runError}
