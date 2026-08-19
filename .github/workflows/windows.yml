@@ -66,12 +66,19 @@ jobs:
           if (-not $setup) { throw "no NSIS installer produced" }
           Write-Host "installer: $($setup.Name)"
           Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait
-          $dir = Join-Path $env:LOCALAPPDATA "publikclip"
-          if (-not (Test-Path $dir)) { throw "install dir missing: $dir" }
-          $exe = Get-ChildItem $dir -Filter *.exe |
-            Where-Object { $_.Name -notmatch "uninstall" } |
-            Select-Object -First 1
-          if (-not $exe) { throw "no app exe under $dir" }
+          $roots = @(
+            (Join-Path $env:LOCALAPPDATA "ISM"),
+            (Join-Path $env:LOCALAPPDATA "Programs\ISM"),
+            (Join-Path $env:LOCALAPPDATA "publikclip"),
+            (Join-Path $env:LOCALAPPDATA "Programs\publikclip")
+          )
+          $exe = foreach ($root in $roots) {
+            if (Test-Path $root) {
+              Get-ChildItem $root -Filter *.exe -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notmatch "uninstall" }
+            }
+          } | Select-Object -First 1
+          if (-not $exe) { throw "no installed ISM app executable found under: $($roots -join ', ')" }
           Write-Host "launching $($exe.FullName)"
           Start-Process -FilePath $exe.FullName
           Start-Sleep -Seconds 15

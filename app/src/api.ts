@@ -57,6 +57,10 @@ export type GeminiDiagnostic = {
   latency_ms?: number | null
   message?: string
 }
+export type AIModel = { id: string; provider_id: string; model_id: string; display_name: string; capabilities: string[]; context_window?: number | null; supports_structured_output: boolean; supports_vision: boolean; enabled: boolean }
+export type AIProvider = { id: string; name: string; type: string; enabled: boolean; base_url?: string | null; credential_ref?: string | null; capabilities: string[]; models: AIModel[]; created_at: string; updated_at: string }
+export type AIHealth = { provider_id: string; state: string; configured: boolean; reachable: boolean; authenticated?: boolean | null; selected_model_available?: boolean | null; required_capabilities: string[]; checked_at: string; latency_ms?: number | null; error?: string | null }
+export type AIProviderSnapshot = { provider: AIProvider; health: AIHealth }
 
 export function loadProcessingGatewayConfig(): ProcessingGatewayConfig {
   try {
@@ -110,6 +114,12 @@ export const api = {
   processingCapabilities: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities>(baseUrl, token, '/v1/processing/capabilities'),
   pipelineDiagnostic: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities & { pipeline_importable?: boolean; ffmpeg_usable?: boolean; ready?: boolean }>(baseUrl, token, '/v1/diagnostics/pipeline', { method: 'POST' }),
   geminiDiagnostic: (baseUrl: string, token: string) => gatewayJson<GeminiDiagnostic>(baseUrl, token, '/v1/diagnostics/gemini', { method: 'POST' }),
+  aiProviders: (baseUrl: string, token: string) => gatewayJson<{ providers: AIProviderSnapshot[]; secret_names: string[] }>(baseUrl, token, '/v1/ai/providers'),
+  aiProviderHealth: (baseUrl: string, token: string, providerId: string) => gatewayJson<AIProviderSnapshot>(baseUrl, token, `/v1/ai/providers/${encodeURIComponent(providerId)}/health`, { method: 'POST' }),
+  aiModels: (baseUrl: string, token: string, providerId?: string) => gatewayJson<{ models: AIModel[] }>(baseUrl, token, `/v1/ai/models${providerId ? `?provider_id=${encodeURIComponent(providerId)}` : ''}`),
+  createAIProvider: (baseUrl: string, token: string, payload: unknown) => gatewayJson<AIProviderSnapshot>(baseUrl, token, '/v1/ai/providers', { method: 'POST', body: JSON.stringify(payload) }),
+  updateAIProvider: (baseUrl: string, token: string, providerId: string, payload: unknown) => gatewayJson<AIProviderSnapshot>(baseUrl, token, `/v1/ai/providers/${encodeURIComponent(providerId)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteAIProvider: (baseUrl: string, token: string, providerId: string) => gatewayJson<{ id: string; status: string }>(baseUrl, token, `/v1/ai/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' }),
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
   health: async (baseUrl: string, token: string) => {

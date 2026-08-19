@@ -16,6 +16,7 @@ import time as time_module
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
 from contextlib import closing
+from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
 from time import perf_counter
 from pathlib import Path
@@ -29,8 +30,52 @@ from pydantic import BaseModel, Field, HttpUrl
 
 try:
     from .processing_service import classify_gemini_error, pipeline_available, pipeline_command as build_pipeline_command, pipeline_environment
+    from .worker_queue import PersistentWorkerQueue, WorkerResourceError, validate_media_artifact
+    from .provider_registry import (
+        BUILT_IN_PROVIDERS,
+        ModelDefinition,
+        ProviderDefinition,
+        ProviderHealth,
+        check_provider_health,
+        get_model,
+        get_provider,
+        health_public_dict,
+        init_registry_schema,
+        list_models,
+        list_providers,
+        provider_public_dict,
+        read_health,
+        register_provider,
+        remove_provider,
+        set_provider_enabled,
+        store_health,
+        update_provider,
+    )
+    from .secret_vault import SecretVault, SecretVaultError
 except ImportError:  # pragma: no cover - uvicorn main:app from gateway/
     from processing_service import classify_gemini_error, pipeline_available, pipeline_command as build_pipeline_command, pipeline_environment
+    from worker_queue import PersistentWorkerQueue, WorkerResourceError, validate_media_artifact
+    from provider_registry import (
+        BUILT_IN_PROVIDERS,
+        ModelDefinition,
+        ProviderDefinition,
+        ProviderHealth,
+        check_provider_health,
+        get_model,
+        get_provider,
+        health_public_dict,
+        init_registry_schema,
+        list_models,
+        list_providers,
+        provider_public_dict,
+        read_health,
+        register_provider,
+        remove_provider,
+        set_provider_enabled,
+        store_health,
+        update_provider,
+    )
+    from secret_vault import SecretVault, SecretVaultError
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("ISM_GATEWAY_DB", str(ROOT / "gateway.db")))
@@ -51,10 +96,13 @@ ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60"))
 MAX_PROVIDER_ATTEMPTS = max(1, int(os.getenv("MAX_PROVIDER_ATTEMPTS", "3")))
 MAX_ACTIVE_PROCESSING_JOBS = max(1, int(os.getenv("MAX_ACTIVE_PROCESSING_JOBS", "1")))
 MAX_ACTIVE_SOURCE_JOBS = max(1, int(os.getenv("MAX_ACTIVE_SOURCE_JOBS", "2")))
+MIN_FREE_DISK_GB = max(0.0, float(os.getenv("MIN_FREE_DISK_GB", "2")))
 GEMINI_KEY_FILE = Path(os.getenv("ISM_GEMINI_KEY_FILE", str(ROOT / "secrets" / "gemini.key")))
+AI_SECRET_FILE = Path(os.getenv("ISM_AI_SECRET_FILE", str(ROOT / "secrets" / "ai-vault.json")))
+AI_VAULT = SecretVault(AI_SECRET_FILE)
 MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
 
-app = FastAPI(title="ISM Social Gateway", version="0.9.4")
+app = FastAPI(title="ISM Social Gateway", version="0.10.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
@@ -64,6 +112,8 @@ app.add_middleware(
 )
 
 _scheduler_task: asyncio.Task | None = None
+_processing_workers = PersistentWorkerQueue("processing", PROCESSING_ROOT, MAX_ACTIVE_PROCESSING_JOBS, MIN_FREE_DISK_GB)
+_source_workers = PersistentWorkerQueue("sources", SOURCE_ROOT, MAX_ACTIVE_SOURCE_JOBS, MIN_FREE_DISK_GB)
 
 
 class PolicyDeferred(Exception):
@@ -189,6 +239,7 @@ def init_db() -> None:
                 source TEXT NOT NULL,
                 llm TEXT NOT NULL DEFAULT 'gemini',
                 captions TEXT NOT NULL DEFAULT 'classic',
+                mode TEXT NOT NULL DEFAULT 'balanced',
                 status TEXT NOT NULL DEFAULT 'queued',
                 stage TEXT,
                 fraction REAL,
@@ -242,12 +293,14 @@ def init_db() -> None:
             ("posts", "idempotency_key", "TEXT"),
             ("posts", "next_attempt_at", "TEXT"),
             ("processing_jobs", "error_code", "TEXT"),
+            ("processing_jobs", "mode", "TEXT NOT NULL DEFAULT 'balanced'"),
         ]
         for table, column, definition in migrations:
             existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
             if column not in existing:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key)")
+        init_registry_schema(connection)
         connection.commit()
 
 
@@ -271,6 +324,36 @@ class ProcessingPayload(BaseModel):
 class SourcePayload(BaseModel):
     source: HttpUrl
     max_items: int = Field(default=0, ge=0, le=1000)
+
+
+class AIModelPayload(BaseModel):
+    model_id: str = Field(min_length=1, max_length=160)
+    display_name: str = Field(min_length=1, max_length=200)
+    capabilities: list[str] = Field(default_factory=list, max_length=20)
+    context_window: int | None = Field(default=None, ge=1)
+    supports_structured_output: bool = False
+    supports_vision: bool = False
+    enabled: bool = True
+
+
+class AIProviderCreatePayload(BaseModel):
+    id: str = Field(min_length=2, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
+    name: str = Field(min_length=1, max_length=160)
+    type: str = Field(pattern=r"^(openai_compatible|gemini|openai|anthropic|ollama)$")
+    base_url: str | None = Field(default=None, max_length=500)
+    credential_ref: str | None = Field(default=None, min_length=2, max_length=120)
+    capabilities: list[str] = Field(default_factory=list, max_length=20)
+    models: list[AIModelPayload] = Field(default_factory=list, max_length=100)
+    api_key: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class AIProviderUpdatePayload(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    base_url: str | None = Field(default=None, max_length=500)
+    credential_ref: str | None = Field(default=None, min_length=2, max_length=120)
+    capabilities: list[str] | None = Field(default=None, max_length=20)
+    enabled: bool | None = None
+    api_key: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class AIProviderPayload(BaseModel):
@@ -541,6 +624,14 @@ def read_pipeline_checkpoint(job_dir: Path, name: str) -> dict[str, Any] | None:
         return None
 
 
+def run_source_job(job_id: str) -> None:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT source, max_items FROM source_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        return
+    run_source_download(job_id, row["source"], int(row["max_items"] or 0))
+
+
 def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]:
     job_dir = PROCESSING_ROOT / "jobs" / pipeline_job_id
     ingest = read_pipeline_checkpoint(job_dir, "ingest") or {}
@@ -550,8 +641,10 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
     candidates = read_pipeline_checkpoint(job_dir, "candidates")
     outputs = []
     for output in render.get("outputs", []):
-        filename = Path(str(output.get("path", ""))).name
-        if not filename:
+        raw_path = Path(str(output.get("path", "")))
+        filename = raw_path.name
+        valid, _reason = validate_media_artifact(raw_path)
+        if not filename or not valid:
             continue
         item = dict(output)
         item["path"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{external_id}/media/{filename}"
@@ -568,13 +661,13 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
 
 
 def read_server_gemini_key() -> str | None:
-    key = GEMINI_API_KEY.strip()
-    if key:
-        return key
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if key:
-        return key
-    key = os.getenv("PUBLIKCLIP_GEMINI_API_KEY", "").strip()
+    for key in (GEMINI_API_KEY.strip(), os.getenv("GEMINI_API_KEY", "").strip(), os.getenv("PUBLIKCLIP_GEMINI_API_KEY", "").strip()):
+        if key:
+            return key
+    try:
+        key = AI_VAULT.get("GEMINI_API_KEY")
+    except SecretVaultError:
+        key = None
     if key:
         return key
     try:
@@ -646,13 +739,24 @@ def uploaded_source_path(source: str) -> str | None:
     return str(candidate) if root in candidate.parents and candidate.is_file() else None
 
 
-def run_processing_job(external_id: str, source: str, llm: str, captions: str, mode: str = "balanced") -> None:
-    if llm == "gemini" and not GEMINI_API_KEY and not read_server_gemini_key():
+def run_processing_job(external_id: str, source: str | None = None, llm: str | None = None, captions: str | None = None, mode: str | None = None) -> None:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT source, llm, captions, mode, pipeline_job_id FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
+    if not row:
+        return
+    source = source or row["source"]
+    llm = llm or row["llm"]
+    captions = captions or row["captions"]
+    mode = mode or row["mode"] or "balanced"
+    if llm == "gemini" and not read_server_gemini_key():
         update_processing_job(external_id, status="failed", error="Gemini is not configured on the Gateway.", error_code="GEMINI_NOT_CONFIGURED", message="Gemini configuration is required")
         return
     command, environment = pipeline_command()
     pipeline_source = uploaded_source_path(source) or source
-    command.extend(["run", pipeline_source, "--llm", llm, "--captions", captions, "--mode", mode])
+    if row["pipeline_job_id"]:
+        command.extend(["resume", str(row["pipeline_job_id"]), "--llm", llm, "--captions", captions, "--mode", mode])
+    else:
+        command.extend(["run", pipeline_source, "--llm", llm, "--captions", captions, "--mode", mode])
     try:
         process = subprocess.Popen(
             command,
@@ -876,6 +980,14 @@ async def get_post(post_id: str) -> dict[str, Any] | None:
     return row_dict(row) if row else None
 
 
+def mark_processing_worker_error(job_id: str, error: str) -> None:
+    update_processing_job(job_id, status="failed", error=error, message="Processing worker stopped the job")
+
+
+def mark_source_worker_error(job_id: str, error: str) -> None:
+    update_source_job(job_id, status="failed", error=error, message="Source worker stopped the job")
+
+
 async def scheduler_loop() -> None:
     while True:
         try:
@@ -899,9 +1011,17 @@ async def startup() -> None:
     init_db()
     with closing(db()) as connection:
         timestamp = now_iso()
-        connection.execute("UPDATE processing_jobs SET status='failed', error='Gateway restarted before this task completed. Start it again.', message='Interrupted by Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
-        connection.execute("UPDATE source_jobs SET status='failed', error='Gateway restarted before this download completed. Start it again.', message='Interrupted by Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
+        connection.execute("UPDATE processing_jobs SET status='queued', error=NULL, message='Requeued after Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
+        connection.execute("UPDATE source_jobs SET status='queued', error=NULL, message='Requeued after Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
         connection.commit()
+        processing_ids = [row["id"] for row in connection.execute("SELECT id FROM processing_jobs WHERE status='queued' ORDER BY created_at").fetchall()]
+        source_ids = [row["id"] for row in connection.execute("SELECT id FROM source_jobs WHERE status='queued' ORDER BY created_at").fetchall()]
+    await _processing_workers.start(lambda job_id: run_processing_job(job_id), mark_processing_worker_error)
+    await _source_workers.start(run_source_job, mark_source_worker_error)
+    for job_id in processing_ids:
+        _processing_workers.submit(job_id)
+    for job_id in source_ids:
+        _source_workers.submit(job_id)
     _scheduler_task = asyncio.create_task(scheduler_loop())
 
 
@@ -910,6 +1030,8 @@ async def shutdown() -> None:
     if _scheduler_task:
         _scheduler_task.cancel()
         await asyncio.gather(_scheduler_task, return_exceptions=True)
+    await _processing_workers.stop()
+    await _source_workers.stop()
 
 
 def _ffmpeg_capability() -> dict[str, Any]:
@@ -962,8 +1084,10 @@ async def health() -> dict[str, Any]:
     with closing(db()) as connection:
         processing_active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
         source_active = connection.execute("SELECT COUNT(*) AS count FROM source_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
-    ready = bool(checks["pipeline"] and checks["ffmpeg"] and checks["storage"])
-    return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "auth_required": REQUIRE_GATEWAY_TOKEN, "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": bool(read_server_gemini_key()), "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active}
+    processing_worker = _processing_workers.info().as_dict()
+    source_worker = _source_workers.info().as_dict()
+    ready = bool(checks["pipeline"] and checks["ffmpeg"] and checks["storage"] and processing_worker["status"] != "STOPPED")
+    return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "auth_required": REQUIRE_GATEWAY_TOKEN, "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": bool(read_server_gemini_key()), "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active, "workers": {"processing": processing_worker, "sources": source_worker}, "min_free_disk_gb": MIN_FREE_DISK_GB}
 
 
 @app.get("/v1/processing/capabilities", dependencies=[Depends(auth)])
@@ -981,6 +1105,11 @@ async def gemini_diagnostic() -> dict[str, Any]:
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=503, content=result)
     return result
+
+
+@app.get("/v1/diagnostics/workers", dependencies=[Depends(auth)])
+async def diagnostics_workers() -> dict[str, Any]:
+    return {"workers": {"processing": _processing_workers.info().as_dict(), "sources": _source_workers.info().as_dict()}, "min_free_disk_gb": MIN_FREE_DISK_GB}
 
 
 @app.post("/v1/diagnostics/gemini", dependencies=[Depends(auth)])
@@ -1139,7 +1268,8 @@ async def download_source(payload: SourcePayload) -> dict[str, Any]:
             (job_id, source, payload.max_items, timestamp, timestamp),
         )
         connection.commit()
-    asyncio.create_task(asyncio.to_thread(run_source_download, job_id, source, payload.max_items))
+    if not _source_workers.submit(job_id):
+        raise HTTPException(status_code=503, detail="Source worker is not ready. Retry shortly.")
     return {"id": job_id, "status": "queued"}
 
 
@@ -1189,11 +1319,12 @@ async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
         if active >= MAX_ACTIVE_PROCESSING_JOBS:
             raise HTTPException(status_code=429, detail="A processing job is already active. Wait for it to finish.")
         connection.execute(
-            "INSERT INTO processing_jobs (id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
-            (job_id, source, payload.llm, payload.captions, timestamp, timestamp),
+            "INSERT INTO processing_jobs (id, source, llm, captions, mode, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+            (job_id, source, payload.llm, payload.captions, payload.mode, timestamp, timestamp),
         )
         connection.commit()
-    asyncio.create_task(asyncio.to_thread(run_processing_job, job_id, source, payload.llm, payload.captions, payload.mode))
+    if not _processing_workers.submit(job_id):
+        raise HTTPException(status_code=503, detail="Processing worker is not ready. Retry shortly.")
     return {"id": job_id, "status": "queued"}
 
 
@@ -1334,6 +1465,161 @@ async def resume_account(account_id: str) -> dict[str, Any]:
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Account not found")
     return account_dict(row)
+
+
+def provider_is_configured(provider: ProviderDefinition) -> bool:
+    if provider.type == "ollama":
+        return True
+    return bool(provider.credential_ref and AI_VAULT.has(provider.credential_ref))
+
+
+def provider_health_snapshot(provider: ProviderDefinition) -> dict[str, Any]:
+    with closing(db()) as connection:
+        stored = read_health(connection, provider.id)
+    health = health_public_dict(stored) if stored else health_public_dict(check_provider_health(provider, configured=provider_is_configured(provider)))
+    return {"provider": provider_public_dict(provider), "health": health}
+
+
+@app.get("/v1/ai/providers", dependencies=[Depends(auth)])
+async def ai_providers() -> dict[str, Any]:
+    with closing(db()) as connection:
+        providers = list_providers(connection)
+    return {"providers": [provider_health_snapshot(provider) for provider in providers], "secret_names": AI_VAULT.list_names()}
+
+
+@app.get("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
+async def ai_provider(provider_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        provider = get_provider(connection, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="AI provider not found")
+    return provider_health_snapshot(provider)
+
+
+@app.post("/v1/ai/providers", dependencies=[Depends(auth)])
+async def create_ai_provider(payload: AIProviderCreatePayload) -> dict[str, Any]:
+    if payload.id in {provider.id for provider in BUILT_IN_PROVIDERS}:
+        raise HTTPException(status_code=409, detail="Built-in provider IDs cannot be replaced")
+    credential_ref = payload.credential_ref or (f"CUSTOM_{payload.id.upper().replace('-', '_')}_API_KEY" if payload.api_key else None)
+    if payload.api_key and not credential_ref:
+        raise HTTPException(status_code=422, detail="credential_ref is required when api_key is provided")
+    if payload.base_url and urlparse(payload.base_url).scheme not in {"http", "https"}:
+        raise HTTPException(status_code=422, detail="base_url must be HTTP or HTTPS")
+    provider = ProviderDefinition(
+        id=payload.id,
+        name=payload.name,
+        type=payload.type,
+        enabled=True,
+        base_url=payload.base_url,
+        credential_ref=credential_ref,
+        capabilities=tuple(sorted(set(payload.capabilities))),
+        models=tuple(ModelDefinition(
+            id=f"{payload.id}:{model.model_id}", provider_id=payload.id, model_id=model.model_id,
+            display_name=model.display_name, capabilities=tuple(sorted(set(model.capabilities))),
+            context_window=model.context_window, supports_structured_output=model.supports_structured_output,
+            supports_vision=model.supports_vision, enabled=model.enabled,
+        ) for model in payload.models),
+    )
+    try:
+        if payload.api_key and credential_ref:
+            AI_VAULT.set(credential_ref, payload.api_key)
+        with closing(db()) as connection:
+            result = register_provider(connection, provider)
+    except (ValueError, SecretVaultError) as error:
+        raise HTTPException(status_code=409 if isinstance(error, ValueError) else 422, detail=str(error)) from error
+    return provider_health_snapshot(result)
+
+
+@app.patch("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
+async def edit_ai_provider(provider_id: str, payload: AIProviderUpdatePayload) -> dict[str, Any]:
+    with closing(db()) as connection:
+        provider = get_provider(connection, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="AI provider not found")
+    changes = payload.model_dump(exclude_unset=True, exclude={"api_key"})
+    if payload.api_key:
+        credential_ref = payload.credential_ref or provider.credential_ref
+        if not credential_ref:
+            raise HTTPException(status_code=422, detail="credential_ref is required before saving api_key")
+        changes["credential_ref"] = credential_ref
+        try:
+            AI_VAULT.set(credential_ref, payload.api_key)
+        except SecretVaultError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        with closing(db()) as connection:
+            result = update_provider(connection, provider_id, **changes)
+    except (KeyError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return provider_health_snapshot(result)
+
+
+@app.delete("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
+async def delete_ai_provider(provider_id: str) -> dict[str, str]:
+    with closing(db()) as connection:
+        provider = get_provider(connection, provider_id)
+        if not provider:
+            raise HTTPException(status_code=404, detail="AI provider not found")
+        try:
+            remove_provider(connection, provider_id)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+    if provider.credential_ref:
+        try:
+            AI_VAULT.delete(provider.credential_ref)
+        except SecretVaultError:
+            pass
+    return {"id": provider_id, "status": "removed"}
+
+
+@app.post("/v1/ai/providers/{provider_id}/enable", dependencies=[Depends(auth)])
+async def enable_ai_provider(provider_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        try:
+            provider = set_provider_enabled(connection, provider_id, True)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="AI provider not found") from error
+    return provider_health_snapshot(provider)
+
+
+@app.post("/v1/ai/providers/{provider_id}/disable", dependencies=[Depends(auth)])
+async def disable_ai_provider(provider_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        try:
+            provider = set_provider_enabled(connection, provider_id, False)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="AI provider not found") from error
+    return provider_health_snapshot(provider)
+
+
+@app.post("/v1/ai/providers/{provider_id}/health", dependencies=[Depends(auth)])
+async def check_ai_provider_health(provider_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        provider = get_provider(connection, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="AI provider not found")
+    configured = provider_is_configured(provider)
+    if provider.id == "gemini":
+        probe = await asyncio.to_thread(gemini_probe)
+        state = "READY" if probe.get("reachable") else {"GEMINI_NOT_CONFIGURED": "NOT_CONFIGURED", "GEMINI_AUTH_FAILED": "AUTH_ERROR", "GEMINI_MODEL_NOT_FOUND": "MODEL_ERROR", "GEMINI_QUOTA_OR_RATE_LIMIT": "RATE_LIMITED", "GEMINI_UNREACHABLE": "NETWORK_ERROR"}.get(probe.get("error_code"), "UNKNOWN_ERROR")
+        health = {"provider_id": provider.id, "state": state, "configured": bool(probe.get("configured")), "reachable": bool(probe.get("reachable")), "authenticated": state not in {"AUTH_ERROR", "NOT_CONFIGURED"}, "selected_model_available": state == "READY", "required_capabilities": [], "checked_at": now_iso(), "latency_ms": probe.get("latency_ms"), "error": probe.get("error_code")}
+    else:
+        health = health_public_dict(await asyncio.to_thread(check_provider_health, provider, configured=configured))
+    with closing(db()) as connection:
+        store_health(connection, ProviderHealth(
+            provider_id=health["provider_id"], state=health["state"], configured=health["configured"],
+            reachable=health["reachable"], authenticated=health["authenticated"],
+            selected_model_available=health["selected_model_available"],
+            required_capabilities=health["required_capabilities"], checked_at=health["checked_at"],
+            latency_ms=health["latency_ms"], error=health["error"],
+        ))
+    return {"provider": provider_public_dict(provider), "health": health}
+
+
+@app.get("/v1/ai/models", dependencies=[Depends(auth)])
+async def ai_models(provider_id: str | None = None) -> dict[str, Any]:
+    with closing(db()) as connection:
+        return {"models": [asdict(model) for model in list_models(connection, provider_id)]}
 
 
 @app.get("/v1/social/capabilities", dependencies=[Depends(auth)])
