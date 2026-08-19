@@ -39,3 +39,4 @@ testpaths = ["tests"]
 markers = [
     "slow: tests that exercise media rendering or other expensive operations",
 ]
+pythonpath = ["."]
