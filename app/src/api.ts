@@ -130,6 +130,14 @@ export const api = {
     if (!response.ok) throw new Error(`Source status returned ${response.status}.`)
     return (await response.json()) as SourceJob
   },
+  processingCancel: async (baseUrl: string, token: string, jobId: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/api/v1/jobs/${encodeURIComponent(jobId)}/cancel`), {
+      method: 'POST',
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Processing cancel returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
+    return (await response.json()) as { id: string; status: 'cancelled' }
+  },
   processingStatus: async (baseUrl: string, token: string, jobId: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, `/v1/processing/jobs/${encodeURIComponent(jobId)}`), {
       headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
@@ -137,7 +145,7 @@ export const api = {
     if (!response.ok) throw new Error(`Processing status returned ${response.status}.`)
     return (await response.json()) as {
       id: string
-      status: 'queued' | 'running' | 'done' | 'failed'
+      status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
       stage?: string | null
       fraction?: number | null
       message?: string | null

@@ -26,6 +26,7 @@ interface Props {
   stages: Record<string, { fraction: number; message: string }>
   error: string | null
   onRun: (source: string, llm: string, captions: string) => void
+  onCancel: () => void
   onOpenLoop: () => void
   onOpenSocial: () => void
   onOpenSources: () => void
@@ -34,7 +35,7 @@ interface Props {
   isAndroid: boolean
 }
 
-export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop, onOpenSocial, onOpenSources, onOpenJob, onResume, isAndroid }: Props) {
+export default function Studio({ jobs, running, stages, error, onRun, onCancel, onOpenLoop, onOpenSocial, onOpenSources, onOpenJob, onResume, isAndroid }: Props) {
   const [source, setSource] = useState('')
   const [llm, setLlm] = useState('gemini')
   const [captions, setCaptions] = useState('classic')
@@ -118,6 +119,11 @@ export default function Studio({ jobs, running, stages, error, onRun, onOpenLoop
               {running ? 'WORKING' : isAndroid && !gatewayReady ? 'SET GATEWAY FIRST' : 'CUT IT'}
             </button>
           </div>
+          {running && isAndroid && (
+            <button className="btn-ghost" onClick={onCancel}>
+              CANCEL REMOTE JOB
+            </button>
+          )}
           {isAndroid && (
             <div className="remote-gateway-block">
               <p className="opt-label">ANDROID PROCESSING GATEWAY</p>

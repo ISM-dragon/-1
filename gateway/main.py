@@ -11,6 +11,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -49,6 +50,8 @@ app.add_middleware(
 )
 
 _scheduler_task: asyncio.Task | None = None
+_processing_processes: dict[str, subprocess.Popen[str]] = {}
+_processing_processes_lock = threading.Lock()
 
 
 class PolicyDeferred(Exception):
@@ -170,6 +173,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key);
             CREATE TABLE IF NOT EXISTS processing_jobs (
                 id TEXT PRIMARY KEY,
+                project_id TEXT,
                 pipeline_job_id TEXT,
                 source TEXT NOT NULL,
                 llm TEXT NOT NULL DEFAULT 'gemini',
@@ -184,6 +188,16 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_processing_jobs_updated ON processing_jobs(updated_at);
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                source TEXT,
+                status TEXT NOT NULL DEFAULT 'created',
+                active_job_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at);
             CREATE TABLE IF NOT EXISTS source_jobs (
                 id TEXT PRIMARY KEY,
                 source TEXT NOT NULL,
@@ -216,6 +230,7 @@ def init_db() -> None:
             """
         )
         migrations = [
+            ("processing_jobs", "project_id", "TEXT"),
             ("accounts", "daily_limit", "INTEGER NOT NULL DEFAULT 10"),
             ("accounts", "min_gap_seconds", "INTEGER NOT NULL DEFAULT 60"),
             ("accounts", "last_publish_at", "TEXT"),
@@ -251,6 +266,22 @@ class ProcessingPayload(BaseModel):
 class SourcePayload(BaseModel):
     source: HttpUrl
     max_items: int = Field(default=0, ge=0, le=1000)
+
+
+class ProjectCreatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    source: HttpUrl | None = None
+
+
+class ProjectPatchPayload(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    source: HttpUrl | None = None
+
+
+class ProjectProcessPayload(BaseModel):
+    source: HttpUrl | None = None
+    llm: str = Field(default="gemini", pattern=r"^(gemini|ollama)$")
+    captions: str = Field(default="classic", min_length=1, max_length=40)
 
 
 class AnalyticsSnapshotPayload(BaseModel):
@@ -421,6 +452,15 @@ def processing_dict(row: sqlite3.Row) -> dict[str, Any]:
     return result
 
 
+def project_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return dict(row)
+
+
+def get_project_row(project_id: str) -> sqlite3.Row | None:
+    with closing(db()) as connection:
+        return connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+
+
 def update_processing_job(job_id: str, **values: Any) -> None:
     if not values:
         return
@@ -429,6 +469,23 @@ def update_processing_job(job_id: str, **values: Any) -> None:
     parameters = list(values.values()) + [job_id]
     with closing(db()) as connection:
         connection.execute(f"UPDATE processing_jobs SET {assignments} WHERE id=?", parameters)
+        if "status" in values:
+            job = connection.execute("SELECT project_id FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+            project_id = job["project_id"] if job else None
+            if project_id:
+                project_status = {
+                    "queued": "queued",
+                    "running": "processing",
+                    "done": "completed",
+                    "failed": "failed",
+                    "cancelled": "cancelled",
+                }.get(str(values["status"]))
+                if project_status:
+                    terminal = project_status in {"completed", "failed", "cancelled"}
+                    connection.execute(
+                        "UPDATE projects SET status=?, active_job_id=?, updated_at=? WHERE id=?",
+                        (project_status, None if terminal else job_id, values["updated_at"], project_id),
+                    )
         connection.commit()
 
 
@@ -493,6 +550,14 @@ def run_processing_job(external_id: str, source: str, llm: str, captions: str) -
             text=True,
             bufsize=1,
         )
+        with _processing_processes_lock:
+            _processing_processes[external_id] = process
+        with closing(db()) as connection:
+            current_status = connection.execute("SELECT status FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
+        if current_status and current_status["status"] == "cancelled":
+            process.terminate()
+            process.wait(timeout=2)
+            return
         update_processing_job(external_id, status="running", message="Pipeline started")
         final: dict[str, Any] | None = None
         assert process.stdout is not None
@@ -514,6 +579,10 @@ def run_processing_job(external_id: str, source: str, llm: str, captions: str) -
             elif event.get("event") == "result":
                 final = event
         return_code = process.wait()
+        with closing(db()) as connection:
+            current_status = connection.execute("SELECT status FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
+        if current_status and current_status["status"] == "cancelled":
+            return
         if return_code != 0 or not final or not final.get("ok"):
             detail = (final or {}).get("error") or f"Pipeline exited with code {return_code}."
             update_processing_job(external_id, status="failed", error=str(detail), message="Pipeline failed")
@@ -525,7 +594,13 @@ def run_processing_job(external_id: str, source: str, llm: str, captions: str) -
         results = processing_results(external_id, pipeline_job_id)
         update_processing_job(external_id, pipeline_job_id=pipeline_job_id, status="done", fraction=1.0, stage="render", message="Clips ready", result_json=json.dumps(results, ensure_ascii=False))
     except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
-        update_processing_job(external_id, status="failed", error=str(error), message="Gateway worker failed")
+        with closing(db()) as connection:
+            current_status = connection.execute("SELECT status FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
+        if not current_status or current_status["status"] != "cancelled":
+            update_processing_job(external_id, status="failed", error=str(error), message="Gateway worker failed")
+    finally:
+        with _processing_processes_lock:
+            _processing_processes.pop(external_id, None)
 
 
 def account_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -746,6 +821,121 @@ async def health() -> dict[str, Any]:
     return {"ok": True, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active}
 
 
+@app.get("/api/v1/health")
+async def api_health() -> dict[str, Any]:
+    return await health()
+
+
+@app.get("/api/v1/projects", dependencies=[Depends(auth)])
+async def list_projects() -> list[dict[str, Any]]:
+    with closing(db()) as connection:
+        rows = connection.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+    return [project_dict(row) for row in rows]
+
+
+@app.post("/api/v1/projects", dependencies=[Depends(auth)])
+async def create_project(payload: ProjectCreatePayload) -> dict[str, Any]:
+    source = validate_public_source(str(payload.source)) if payload.source else None
+    project_id = f"proj_{secrets.token_urlsafe(10)}"
+    timestamp = now_iso()
+    with closing(db()) as connection:
+        connection.execute(
+            "INSERT INTO projects (id, name, source, status, created_at, updated_at) VALUES (?, ?, ?, 'created', ?, ?)",
+            (project_id, payload.name.strip(), source, timestamp, timestamp),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    return project_dict(row)
+
+
+@app.get("/api/v1/projects/{project_id}", dependencies=[Depends(auth)])
+async def get_project(project_id: str) -> dict[str, Any]:
+    row = get_project_row(project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = project_dict(row)
+    if row["active_job_id"]:
+        with closing(db()) as connection:
+            job = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (row["active_job_id"],)).fetchone()
+        result["job"] = processing_dict(job) if job else None
+    else:
+        result["job"] = None
+    return result
+
+
+@app.patch("/api/v1/projects/{project_id}", dependencies=[Depends(auth)])
+async def patch_project(project_id: str, payload: ProjectPatchPayload) -> dict[str, Any]:
+    row = get_project_row(project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    values: dict[str, Any] = {"updated_at": now_iso()}
+    if payload.name is not None:
+        values["name"] = payload.name.strip()
+    if payload.source is not None:
+        values["source"] = validate_public_source(str(payload.source))
+    assignments = ", ".join(f"{key}=?" for key in values)
+    with closing(db()) as connection:
+        connection.execute(f"UPDATE projects SET {assignments} WHERE id=?", [*values.values(), project_id])
+        connection.commit()
+        updated = connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    return project_dict(updated)
+
+
+@app.post("/api/v1/projects/{project_id}/process", dependencies=[Depends(auth)])
+async def process_project(project_id: str, payload: ProjectProcessPayload) -> dict[str, Any]:
+    project = get_project_row(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    source = str(payload.source) if payload.source else project["source"]
+    if not source:
+        raise HTTPException(status_code=422, detail="Project has no source URL")
+    processing_payload = ProcessingPayload(source=source, llm=payload.llm, captions=payload.captions)
+    job_result = await start_processing(processing_payload, project_id=project_id)
+    with closing(db()) as connection:
+        connection.execute(
+            "UPDATE projects SET source=?, status='queued', active_job_id=?, updated_at=? WHERE id=?",
+            (source, job_result["id"], now_iso(), project_id),
+        )
+        connection.commit()
+    return {"project_id": project_id, "job": job_result}
+
+
+@app.get("/api/v1/jobs/{job_id}", dependencies=[Depends(auth)])
+async def get_job(job_id: str) -> dict[str, Any]:
+    return await processing_status(job_id)
+
+
+@app.post("/api/v1/jobs/{job_id}/cancel", dependencies=[Depends(auth)])
+async def cancel_job(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT project_id, status FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    if row["status"] in {"done", "failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"Job cannot be cancelled while status is {row['status']}")
+    with _processing_processes_lock:
+        process = _processing_processes.get(job_id)
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+    with closing(db()) as connection:
+        connection.execute(
+            "UPDATE processing_jobs SET status='cancelled', message='Cancelled by client', error=NULL, updated_at=? WHERE id=? AND status IN ('queued', 'running')",
+            (now_iso(), job_id),
+        )
+        if row["project_id"]:
+            connection.execute(
+                "UPDATE projects SET status='cancelled', active_job_id=NULL, updated_at=? WHERE id=?",
+                (now_iso(), row["project_id"]),
+            )
+        connection.commit()
+    return {"id": job_id, "status": "cancelled"}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard() -> str:
     return DASHBOARD_HTML
@@ -807,7 +997,7 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
 
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
-async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
+async def start_processing(payload: ProcessingPayload, project_id: str | None = None) -> dict[str, Any]:
     source = validate_public_source(str(payload.source))
     job_id = f"proc_{secrets.token_urlsafe(12)}"
     timestamp = now_iso()
@@ -820,8 +1010,8 @@ async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
         if active >= MAX_ACTIVE_PROCESSING_JOBS:
             raise HTTPException(status_code=429, detail="A processing job is already active. Wait for it to finish.")
         connection.execute(
-            "INSERT INTO processing_jobs (id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
-            (job_id, source, payload.llm, payload.captions, timestamp, timestamp),
+            "INSERT INTO processing_jobs (id, project_id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+            (job_id, project_id, source, payload.llm, payload.captions, timestamp, timestamp),
         )
         connection.commit()
     asyncio.create_task(asyncio.to_thread(run_processing_job, job_id, source, payload.llm, payload.captions))

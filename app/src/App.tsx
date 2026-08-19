@@ -131,6 +131,7 @@ export default function App() {
             }))
           }
           if (status.status === 'failed') throw new Error(status.error || 'Remote processing failed.')
+          if (status.status === 'cancelled') throw new Error('Remote processing was cancelled.')
           if (status.status === 'done') {
             if (!status.results) throw new Error('Gateway completed without returning clip results.')
             setResults(status.results)
@@ -146,6 +147,25 @@ export default function App() {
     },
     [isAndroid]
   )
+
+  const cancelRun = useCallback(async () => {
+    if (!isAndroid || !activeJobRef.current) {
+      setRunError('لا يمكن إلغاء المعالجة المحلية بأمان من الواجهة الحالية.')
+      return
+    }
+    const gateway = loadProcessingGatewayConfig()
+    if (!gateway.url.trim()) {
+      setRunError('Processing Gateway URL is missing.')
+      return
+    }
+    try {
+      await api.processingCancel(gateway.url, gateway.token, activeJobRef.current)
+      setRunning(false)
+      setRunError('Remote processing cancelled. No clip was marked as completed.')
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : String(error))
+    }
+  }, [isAndroid])
 
   const openJob = useCallback(async (jobId: string) => {
     const r = await api.jobResults(jobId)
@@ -216,6 +236,7 @@ export default function App() {
       stages={stages}
       error={runError}
       onRun={startRun}
+      onCancel={cancelRun}
       onOpenLoop={() => setView('loop')}
               onOpenSocial={() => setView('social')}
         onOpenSources={() => setView('sources')}
