@@ -12,6 +12,9 @@ export type ProcessingGatewayConfig = { url: string; token: string }
 export type GatewayHealth = { status: string; ok: boolean; provider_mode?: string; auth_configured?: boolean; pipeline: boolean; python: boolean; ffmpeg: boolean; gemini_configured: boolean; storage: boolean; processing_active?: number; source_active?: number }
 export type ProcessingCapabilities = GatewayHealth & { uv?: boolean; ffprobe?: boolean; ollama?: boolean; youtube_urls?: boolean; https_urls?: boolean; android_remote_processing?: boolean }
 export type GeminiDiagnostic = { configured: boolean; reachable: boolean; model: string; latency_ms?: number | null; error_code?: string | null }
+export type GatewayProviderModel = { id: string; name: string; type: string; base_url?: string; default_model: string; fallback_model?: string; enabled: boolean; credential_configured: boolean; capabilities: Record<string, boolean>; input_cost_per_million: number; output_cost_per_million: number }
+export type GatewayUsageAggregate = { provider: string; model: string; requests: number; input_tokens: number; output_tokens: number; total_tokens: number; estimated_requests: number; average_latency_ms: number; cost_usd: number }
+export type GatewayUsageSummary = { days: number; events: number; aggregates: GatewayUsageAggregate[] }
 
 export function loadProcessingGatewayConfig(): ProcessingGatewayConfig {
   try {
@@ -65,6 +68,8 @@ export const api = {
   processingCapabilities: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities>(baseUrl, token, '/v1/processing/capabilities'),
   pipelineDiagnostic: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities & { pipeline_importable?: boolean; ffmpeg_usable?: boolean; ready?: boolean }>(baseUrl, token, '/v1/diagnostics/pipeline', { method: 'POST' }),
   geminiDiagnostic: (baseUrl: string, token: string) => gatewayJson<GeminiDiagnostic>(baseUrl, token, '/v1/diagnostics/gemini', { method: 'POST' }),
+  aiProviders: (baseUrl: string, token: string) => gatewayJson<{ providers: GatewayProviderModel[] }>(baseUrl, token, '/v1/ai/providers'),
+  aiUsageSummary: (baseUrl: string, token: string, days = 30) => gatewayJson<GatewayUsageSummary>(baseUrl, token, `/v1/ai/usage?days=${days}`),
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
   createProject: async (baseUrl: string, token: string, name: string, source?: string) => {

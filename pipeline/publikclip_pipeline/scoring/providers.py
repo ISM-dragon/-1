@@ -44,6 +44,8 @@ class ProviderProfile:
     fallback_model: str = ""
     enabled: bool = True
     capabilities: ProviderCapabilities = field(default_factory=ProviderCapabilities)
+    input_cost_per_million: float = 0.0
+    output_cost_per_million: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,53 @@ class AIResponse:
     latency_ms: int
     finish_reason: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
+
+
+def _usage_counts(raw: dict[str, Any], prompt: str, output: str) -> dict[str, Any]:
+    """Normalize provider-specific usage without claiming estimates are actual."""
+    input_tokens = raw.get("input_tokens", raw.get("prompt_tokens", raw.get("promptTokenCount")))
+    output_tokens = raw.get("output_tokens", raw.get("completion_tokens", raw.get("candidatesTokenCount")))
+    total_tokens = raw.get("total_tokens", raw.get("totalTokenCount"))
+    actual = all(isinstance(value, (int, float)) for value in (input_tokens, output_tokens))
+    if actual and total_tokens is None:
+        total_tokens = int(input_tokens) + int(output_tokens)
+    if not actual:
+        input_tokens = max(1, round(len(prompt) / 4))
+        output_tokens = max(1, round(len(output) / 4))
+        total_tokens = input_tokens + output_tokens
+    return {
+        "input_tokens": int(input_tokens),
+        "output_tokens": int(output_tokens),
+        "total_tokens": int(total_tokens),
+        "usage_source": "actual" if actual else "estimated",
+    }
+
+
+def _record_usage(profile: ProviderProfile, model: str, latency_ms: int, raw_usage: dict[str, Any], prompt: str, output: str) -> dict[str, Any]:
+    usage = _usage_counts(raw_usage, prompt, output)
+    event = {
+        "provider": profile.id,
+        "provider_name": profile.name,
+        "model": model,
+        "latency_ms": max(0, int(latency_ms)),
+        "status": "success",
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        "total_tokens": usage["total_tokens"],
+        "usage_source": usage["usage_source"],
+        "input_cost_per_million": float(getattr(profile, "input_cost_per_million", 0.0)),
+        "output_cost_per_million": float(getattr(profile, "output_cost_per_million", 0.0)),
+        "timestamp": time.time(),
+    }
+    try:
+        path = config.home_dir() / "ai_usage.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except OSError:
+        # Usage telemetry must never break an otherwise successful AI request.
+        pass
+    return usage
 
 
 class AIProvider(Protocol):
@@ -140,7 +189,8 @@ class GeminiProvider(_HttpProvider):
             body,
         )
         text = payload["candidates"][0]["content"]["parts"][0]["text"]
-        return AIResponse(_strip_fences(text), _parse_json(text), self.model, self.profile.id, latency)
+        usage = _record_usage(self.profile, self.model, latency, payload.get("usageMetadata", {}), prompt, text)
+        return AIResponse(_strip_fences(text), _parse_json(text), self.model, self.profile.id, latency, usage=usage)
 
 
 class OpenAICompatibleProvider(_HttpProvider):
@@ -158,7 +208,8 @@ class OpenAICompatibleProvider(_HttpProvider):
         payload, latency = self._request(f"{self.profile.base_url.rstrip('/')}/chat/completions", body, _headers(self.key))
         choice = payload.get("choices", [{}])[0]
         text = choice.get("message", {}).get("content", "")
-        return AIResponse(text, _parse_json(text), self.model, self.profile.id, latency, choice.get("finish_reason", ""), payload.get("usage", {}))
+        usage = _record_usage(self.profile, self.model, latency, payload.get("usage", {}), prompt, text)
+        return AIResponse(text, _parse_json(text), self.model, self.profile.id, latency, choice.get("finish_reason", ""), usage)
 
 
 class AnthropicProvider(_HttpProvider):
@@ -170,7 +221,8 @@ class AnthropicProvider(_HttpProvider):
         headers = {"x-api-key": self.key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         payload, latency = self._request(f"{self.profile.base_url.rstrip('/') or 'https://api.anthropic.com'}/v1/messages", body, headers)
         text = payload.get("content", [{}])[0].get("text", "")
-        return AIResponse(text, _parse_json(text), self.model, self.profile.id, latency, payload.get("stop_reason", ""), payload.get("usage", {}))
+        usage = _record_usage(self.profile, self.model, latency, payload.get("usage", {}), prompt, text)
+        return AIResponse(text, _parse_json(text), self.model, self.profile.id, latency, payload.get("stop_reason", ""), usage)
 
 
 class OllamaProvider(OpenAICompatibleProvider):

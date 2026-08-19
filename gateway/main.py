@@ -234,6 +234,23 @@ def init_db() -> None:
                 FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_analytics_account_date ON analytics_snapshots(account_id, metric_date);
+            CREATE TABLE IF NOT EXISTS ai_usage_events (
+                id TEXT PRIMARY KEY,
+                job_id TEXT,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                usage_source TEXT NOT NULL DEFAULT 'estimated',
+                latency_ms INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'success',
+                input_cost_per_million REAL NOT NULL DEFAULT 0,
+                output_cost_per_million REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_usage_created ON ai_usage_events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_ai_usage_provider_model ON ai_usage_events(provider, model);
             """
         )
         migrations = [
@@ -302,6 +319,8 @@ class AIProviderPayload(BaseModel):
     fallback_model: str = ""
     enabled: bool = True
     capabilities: dict[str, bool] = Field(default_factory=dict)
+    input_cost_per_million: float = Field(default=0.0, ge=0.0)
+    output_cost_per_million: float = Field(default=0.0, ge=0.0)
 
 
 class PersonalEventPayload(BaseModel):
@@ -523,11 +542,12 @@ def public_provider_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "name": profile.get("name", ""),
         "type": profile.get("type", ""),
         "base_url": profile.get("base_url", ""),
-        "credential_ref": profile.get("credential_ref", ""),
         "default_model": profile.get("default_model", ""),
         "fallback_model": profile.get("fallback_model", ""),
         "enabled": bool(profile.get("enabled", True)),
         "capabilities": profile.get("capabilities", {}),
+        "input_cost_per_million": float(profile.get("input_cost_per_million", 0.0) or 0.0),
+        "output_cost_per_million": float(profile.get("output_cost_per_million", 0.0) or 0.0),
         "credential_configured": bool(profile.get("credential_ref")),
     }
 
@@ -1053,6 +1073,45 @@ async def save_ai_provider(payload: AIProviderPayload) -> dict[str, Any]:
     profiles.append(item)
     write_provider_profiles(profiles)
     return {"provider": public_provider_profile(item), "status": "saved"}
+
+
+@app.get("/v1/ai/usage", dependencies=[Depends(auth)])
+async def ai_usage_summary(days: int = 30) -> dict[str, Any]:
+    days = max(1, min(days, 3650))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    usage_path = PROCESSING_ROOT / "ai_usage.jsonl"
+    events: list[dict[str, Any]] = []
+    if usage_path.exists():
+        try:
+            for line in usage_path.read_text(encoding="utf-8").splitlines()[-10000:]:
+                try:
+                    item = json.loads(line)
+                    timestamp = float(item.get("timestamp", 0))
+                    if datetime.fromtimestamp(timestamp, timezone.utc) >= cutoff:
+                        events.append(item)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    continue
+        except OSError:
+            events = []
+    aggregates: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in events:
+        key = (str(event.get("provider", "unknown")), str(event.get("model", "unknown")))
+        row = aggregates.setdefault(key, {"provider": key[0], "model": key[1], "requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_requests": 0, "latency_ms_total": 0, "cost_usd": 0.0})
+        input_tokens = int(event.get("input_tokens", 0) or 0)
+        output_tokens = int(event.get("output_tokens", 0) or 0)
+        row["requests"] += 1
+        row["input_tokens"] += input_tokens
+        row["output_tokens"] += output_tokens
+        row["total_tokens"] += int(event.get("total_tokens", input_tokens + output_tokens) or 0)
+        row["estimated_requests"] += 1 if event.get("usage_source") != "actual" else 0
+        row["latency_ms_total"] += int(event.get("latency_ms", 0) or 0)
+        row["cost_usd"] += (input_tokens / 1_000_000) * float(event.get("input_cost_per_million", 0) or 0) + (output_tokens / 1_000_000) * float(event.get("output_cost_per_million", 0) or 0)
+    rows = []
+    for row in aggregates.values():
+        row["average_latency_ms"] = round(row["latency_ms_total"] / row["requests"], 2) if row["requests"] else 0
+        row.pop("latency_ms_total", None)
+        rows.append(row)
+    return {"days": days, "from": cutoff.isoformat(), "to": now_iso(), "events": len(events), "aggregates": sorted(rows, key=lambda item: (item["provider"], item["model"]))}
 
 
 @app.delete("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
