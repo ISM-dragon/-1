@@ -9,6 +9,9 @@ export const PROCESSING_GATEWAY_STORAGE_KEY = 'ism.processing-gateway.v1'
 export const PROCESSING_GATEWAY_SESSION_KEY = 'ism.processing-gateway.session.v1'
 
 export type ProcessingGatewayConfig = { url: string; token: string }
+export type GatewayHealth = { status: string; ok: boolean; provider_mode?: string; auth_configured?: boolean; pipeline: boolean; python: boolean; ffmpeg: boolean; gemini_configured: boolean; storage: boolean; processing_active?: number; source_active?: number }
+export type ProcessingCapabilities = GatewayHealth & { uv?: boolean; ffprobe?: boolean; ollama?: boolean; youtube_urls?: boolean; https_urls?: boolean; android_remote_processing?: boolean }
+export type GeminiDiagnostic = { configured: boolean; reachable: boolean; model: string; latency_ms?: number | null; error_code?: string | null }
 
 export function loadProcessingGatewayConfig(): ProcessingGatewayConfig {
   try {
@@ -45,7 +48,23 @@ function gatewayEndpoint(baseUrl: string, path: string) {
   return `${value}${path}`
 }
 
+async function gatewayJson<T>(baseUrl: string, token: string, path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(gatewayEndpoint(baseUrl, path), {
+    ...init,
+    headers: { ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}), ...(init?.headers ?? {}) }
+  })
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 240)
+    throw new Error(`Gateway ${response.status}: ${detail || response.statusText}`)
+  }
+  return (await response.json()) as T
+}
+
 export const api = {
+  gatewayHealth: (baseUrl: string, token: string) => gatewayJson<GatewayHealth>(baseUrl, token, '/health'),
+  processingCapabilities: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities>(baseUrl, token, '/v1/processing/capabilities'),
+  pipelineDiagnostic: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities & { pipeline_importable?: boolean; ffmpeg_usable?: boolean; ready?: boolean }>(baseUrl, token, '/v1/diagnostics/pipeline', { method: 'POST' }),
+  geminiDiagnostic: (baseUrl: string, token: string) => gatewayJson<GeminiDiagnostic>(baseUrl, token, '/v1/diagnostics/gemini', { method: 'POST' }),
   runJob: (source: string, llm: string, captions: string) =>
     invoke<void>('run_job', { source, llm, captions }),
   createProject: async (baseUrl: string, token: string, name: string, source?: string) => {

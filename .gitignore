@@ -17,6 +17,9 @@ app/dist/
 
 # Local data — never commit media, models, or job artifacts
 .publikclip/
+gateway/secrets/
+gateway/*.db
+gateway/.env
 *.mp4
 *.wav
 *.mkv

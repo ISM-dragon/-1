@@ -65,3 +65,28 @@ GATEWAY_TOKEN='ضع-رمزًا-محليًا-طويلًا' PROVIDER_MODE=mock uvi
 يتم إنشاء مفتاح idempotency ثابت لكل منشور لمنع تكرار نفس المحتوى والموعد. توجد أيضًا مسارات `POST /v1/accounts/{account_id}/resume` لاستئناف الحساب بعد معالجة التحذير، و`GET /v1/accounts` لإظهار حالة الحساب وعدد منشورات اليوم وآخر نشر وفترة التهدئة.
 
 هذه الآليات مخصصة للاستقرار والالتزام بالحدود الرسمية، وليست لتجاوز الحظر أو إخفاء الأتمتة. لا يستخدم Gateway تدوير عناوين IP أو Proxies للتحايل على المنصات.
+
+## Android Processing Engine diagnostics
+
+نسخة Android لا تحتاج إلى Gemini key داخل الهاتف عند استخدام المعالجة البعيدة. على جهاز Gateway أنشئ الملف المحلي غير المتعقب:
+
+```bash
+mkdir -p gateway/secrets
+umask 077
+printf '%s' "$GEMINI_API_KEY" > gateway/secrets/gemini.key
+export GATEWAY_TOKEN="ضع-رمزاً-عشوائياً-طويلاً"
+export ISM_GEMINI_KEY_FILE="$PWD/gateway/secrets/gemini.key"
+```
+
+بعد تشغيل Gateway، اختبر:
+
+```bash
+curl http://127.0.0.1:8787/health
+curl -H "Authorization: Bearer $GATEWAY_TOKEN" http://127.0.0.1:8787/v1/processing/capabilities
+curl -H "Authorization: Bearer $GATEWAY_TOKEN" -X POST http://127.0.0.1:8787/v1/diagnostics/pipeline
+curl -H "Authorization: Bearer $GATEWAY_TOKEN" -X POST http://127.0.0.1:8787/v1/diagnostics/gemini
+```
+
+يجب أن تكون `pipeline`, `python`, `ffmpeg`, و`storage` جاهزة قبل الضغط على CUT IT. إذا كان llm هو Gemini فيجب أن يعيد diagnostic قيمة `reachable: true`. لا يعيد أي مسار diagnostic المفتاح أو قيمة Bearer token.
+
+إذا لم يملك الخادم اعتماديات Pipeline بعد، لا تضغط CUT IT انتظاراً لنتيجة وهمية. ثبّت بيئة `pipeline` كما يشرح `pipeline/pyproject.toml`، وثبّت FFmpeg وffprobe، ثم أعد اختبار TEST SYSTEM. Android يقبل عنوان LAN في Debug مثل `http://192.168.1.10:8787`، بينما الاتصالات العامة يجب أن تستخدم HTTPS.

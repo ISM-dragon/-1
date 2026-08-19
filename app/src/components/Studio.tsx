@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { JobSummary } from '../types'
 import KeyModal from './KeyModal'
-import { loadProcessingGatewayConfig, saveProcessingGatewayConfig } from '../api'
+import { api, loadProcessingGatewayConfig, saveProcessingGatewayConfig, type GeminiDiagnostic, type ProcessingCapabilities } from '../api'
 
 const STAGE_ORDER = [
   'ingest', 'asr', 'diarize', 'events', 'candidates', 'score', 'camera', 'render'
@@ -43,8 +43,44 @@ export default function Studio({ jobs, running, stages, error, onRun, onCancel, 
   const [processingGatewayUrl, setProcessingGatewayUrl] = useState(() => loadProcessingGatewayConfig().url)
   const [processingGatewayToken, setProcessingGatewayToken] = useState(() => loadProcessingGatewayConfig().token)
   const [gatewaySaved, setGatewaySaved] = useState(false)
+  const [engineState, setEngineState] = useState<'idle' | 'checking' | 'connected' | 'failed'>('idle')
+  const [engineMessage, setEngineMessage] = useState('Not tested yet.')
+  const [engineCapabilities, setEngineCapabilities] = useState<ProcessingCapabilities | null>(null)
+  const [geminiDiagnostic, setGeminiDiagnostic] = useState<GeminiDiagnostic | null>(null)
 
   const gatewayReady = !isAndroid || processingGatewayUrl.trim().length > 0
+
+  async function testEngine() {
+    if (!processingGatewayUrl.trim()) {
+      setEngineState('failed')
+      setEngineMessage('Enter the Gateway URL first.')
+      return
+    }
+    setEngineState('checking')
+    setEngineMessage('Checking Gateway, Pipeline, FFmpeg, and Gemini…')
+    setEngineCapabilities(null)
+    setGeminiDiagnostic(null)
+    persistGateway()
+    try {
+      const health = await api.gatewayHealth(processingGatewayUrl, processingGatewayToken)
+      const capabilities = await api.processingCapabilities(processingGatewayUrl, processingGatewayToken)
+      const pipeline = await api.pipelineDiagnostic(processingGatewayUrl, processingGatewayToken)
+      const gemini = llm === 'gemini' ? await api.geminiDiagnostic(processingGatewayUrl, processingGatewayToken) : null
+      const merged = { ...capabilities, ...pipeline }
+      setEngineCapabilities(merged)
+      setGeminiDiagnostic(gemini)
+      const ready = health.ok && merged.ready !== false && merged.pipeline !== false && merged.ffmpeg_usable !== false && (llm !== 'gemini' || gemini?.reachable)
+      setEngineState(ready ? 'connected' : 'failed')
+      setEngineMessage(ready ? 'READY — remote processing can start.' : `Not ready: ${gemini?.error_code || (!merged.pipeline ? 'PIPELINE_UNAVAILABLE' : !merged.ffmpeg_usable ? 'FFMPEG_UNAVAILABLE' : 'GATEWAY_DEGRADED')}`)
+    } catch (error) {
+      setEngineState('failed')
+      setEngineMessage(error instanceof Error ? error.message : 'Gateway test failed.')
+    }
+  }
+
+  useEffect(() => {
+    if (isAndroid && processingGatewayUrl.trim()) void testEngine()
+  }, [])
 
   function persistGateway(url = processingGatewayUrl, token = processingGatewayToken) {
     saveProcessingGatewayConfig({ url: url.trim(), token: token.trim() })
@@ -127,7 +163,7 @@ export default function Studio({ jobs, running, stages, error, onRun, onCancel, 
           {isAndroid && (
             <div className="remote-gateway-block">
               <p className="opt-label">ANDROID PROCESSING GATEWAY</p>
-              <p className="gateway-help">The Android build sends the YouTube URL to your private Gateway, which runs the Python pipeline and returns the clips.</p>
+              <p className="gateway-help">The Android build sends the YouTube URL to your private Gateway, which runs the Python pipeline and returns real clips. Use HTTPS publicly or a LAN address such as http://192.168.1.10:8787 in Debug.</p>
               <input
                 value={processingGatewayUrl}
                 onChange={(e) => { setProcessingGatewayUrl(e.target.value); persistGateway(e.target.value, processingGatewayToken) }}
@@ -141,9 +177,19 @@ export default function Studio({ jobs, running, stages, error, onRun, onCancel, 
                 placeholder="Gateway token (optional)"
                 disabled={running}
               />
-              <button className="btn-secondary" onClick={saveGateway} disabled={running || !processingGatewayUrl.trim()}>
-                {gatewaySaved ? 'GATEWAY SAVED ✓' : 'SAVE GATEWAY'}
-              </button>
+              <div className="gateway-actions">
+                <button className="btn-secondary" onClick={saveGateway} disabled={running || !processingGatewayUrl.trim()}>
+                  {gatewaySaved ? 'GATEWAY SAVED ✓' : 'SAVE GATEWAY'}
+                </button>
+                <button className="btn-secondary" onClick={() => void testEngine()} disabled={running || engineState === 'checking' || !processingGatewayUrl.trim()}>
+                  {engineState === 'checking' ? 'TESTING…' : 'TEST SYSTEM'}
+                </button>
+              </div>
+              <div className={`engine-status engine-${engineState}`}>
+                <strong>PROCESSING ENGINE: {engineState === 'connected' ? 'CONNECTED' : engineState === 'checking' ? 'CHECKING' : engineState === 'failed' ? 'DISCONNECTED' : 'NOT TESTED'}</strong>
+                <span>{engineMessage}</span>
+                {engineCapabilities && <small>Pipeline {engineCapabilities.pipeline ? '✓' : '✕'} · FFmpeg {engineCapabilities.ffmpeg ? '✓' : '✕'} · Storage {engineCapabilities.storage ? '✓' : '✕'} · Gemini {geminiDiagnostic ? (geminiDiagnostic.reachable ? '✓' : `✕ ${geminiDiagnostic.error_code ?? ''}`) : engineCapabilities.gemini_configured ? 'configured' : 'not configured'}</small>}
+              </div>
             </div>
           )}
           <div className="run-options">
