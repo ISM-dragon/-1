@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from .. import config
+from .providers import ProviderRouter
 
 # The rolling alias, deliberately: Google retires pinned models for NEW api
 # keys while still advertising them in ListModels (learned live — 404 "no
@@ -210,7 +211,21 @@ def _pick_ollama_model(models: list[str]) -> str:
     return models[0]
 
 
+class RoutedProviderClient:
+    backend = "provider-router"
+
+    def __init__(self, task: str = "content_analysis"):
+        self.router = ProviderRouter.from_disk()
+        self.task = task
+        self.model = "provider-router"
+
+    def generate_json(self, prompt: str, schema: dict, images: list[bytes] | None = None) -> dict:
+        return self.router.generate_json(self.task, prompt, schema, images)
+
+
 def make_client(llm_mode: str):
     if llm_mode == "ollama":
         return OllamaClient()
-    return GeminiClient()
+    if llm_mode == "gemini":
+        return GeminiClient()
+    return RoutedProviderClient()
