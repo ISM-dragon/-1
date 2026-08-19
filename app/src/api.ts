@@ -71,6 +71,13 @@ export const api = {
     if (!response.ok) throw new Error(`Source download returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
     return (await response.json()) as { id: string; status: string }
   },
+  analyticsSummary: async (baseUrl: string, token: string, days = 30) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/analytics/summary?days=${days}`), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Analytics request returned ${response.status}.`)
+    return (await response.json()) as { days: number; from: string; to: string; totals: { views: number; likes: number; comments: number }; accounts: Array<{ account_id: string; platform: string; account_name: string; data_available: boolean; days: Array<{ metric_date: string; views: number; likes: number; comments: number; followers?: number | null; watch_time_seconds?: number | null; source: string; fetched_at: string }> }> }
+  },
   socialCapabilities: async (baseUrl: string, token: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/capabilities'), {
       headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
@@ -84,6 +91,15 @@ export const api = {
     })
     if (!response.ok) throw new Error(`Accounts request returned ${response.status}.`)
     return (await response.json()) as Array<{ id: string; platform: string; account_name: string; status: string; daily_limit: number; min_gap_seconds: number; publish_count: number; last_publish_at?: string | null; pause_reason?: string | null; cooldown_until?: string | null }>
+  },
+  saveAnalyticsSnapshot: async (baseUrl: string, token: string, payload: { account_id: string; metric_date: string; views: number; likes: number; comments: number; followers?: number | null; watch_time_seconds?: number | null; source: string }) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/analytics/snapshots'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify(payload)
+    })
+    if (!response.ok) throw new Error(`Analytics snapshot returned ${response.status}.`)
+    return (await response.json()) as { status: string; account_id: string; metric_date: string }
   },
   deleteAccount: async (baseUrl: string, token: string, accountId: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, `/v1/accounts/${encodeURIComponent(accountId)}`), {

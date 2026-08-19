@@ -24,7 +24,7 @@ interface SocialPost extends SocialForm {
   error?: string
 }
 
-interface Props { onBack: () => void }
+interface Props { onBack: () => void; onOpenAnalytics?: () => void }
 
 const PLATFORMS: { id: Platform; label: string; hint: string }[] = [
   { id: 'instagram', label: 'Instagram', hint: 'Business / Creator' },
@@ -79,7 +79,7 @@ function copyForm(post: SocialPost): SocialForm {
   }
 }
 
-export default function SocialHub({ onBack }: Props) {
+export default function SocialHub({ onBack, onOpenAnalytics }: Props) {
   const savedGateway = loadProcessingGatewayConfig()
   const [gatewayUrl, setGatewayUrl] = useState(savedGateway.url)
   const [gatewayToken, setGatewayToken] = useState(savedGateway.token)
@@ -326,7 +326,7 @@ export default function SocialHub({ onBack }: Props) {
     <div className="social-hub">
       <div className="grain" />
       <header className="social-head">
-        <button className="btn-ghost" onClick={onBack}>← studio</button>
+        <div className="social-head-actions"><button className="btn-ghost" onClick={onBack}>← studio</button>{onOpenAnalytics && <button className="btn-secondary" onClick={onOpenAnalytics}>VIEW ANALYTICS</button>}</div>
         <div>
           <p className="social-kicker">ISM / social hub</p>
           <h1 className="social-title">PUBLISH ON YOUR TERMS<span className="amber">.</span></h1>

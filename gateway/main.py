@@ -11,7 +11,7 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -194,6 +194,22 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS analytics_snapshots (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                metric_date TEXT NOT NULL,
+                views INTEGER NOT NULL DEFAULT 0,
+                likes INTEGER NOT NULL DEFAULT 0,
+                comments INTEGER NOT NULL DEFAULT 0,
+                followers INTEGER,
+                watch_time_seconds INTEGER,
+                source TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                UNIQUE(account_id, metric_date),
+                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_analytics_account_date ON analytics_snapshots(account_id, metric_date);
             """
         )
         migrations = [
@@ -232,6 +248,17 @@ class ProcessingPayload(BaseModel):
 class SourcePayload(BaseModel):
     source: HttpUrl
     max_items: int = Field(default=0, ge=0, le=1000)
+
+
+class AnalyticsSnapshotPayload(BaseModel):
+    account_id: str = Field(min_length=1, max_length=160)
+    metric_date: date
+    views: int = Field(default=0, ge=0)
+    likes: int = Field(default=0, ge=0)
+    comments: int = Field(default=0, ge=0)
+    followers: int | None = Field(default=None, ge=0)
+    watch_time_seconds: int | None = Field(default=None, ge=0)
+    source: str = Field(min_length=2, max_length=80)
 
 
 class AccountCreate(BaseModel):
@@ -776,6 +803,51 @@ async def processing_media(job_id: str, filename: str) -> FileResponse:
     if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
         raise HTTPException(status_code=404, detail="Media not found")
     return FileResponse(target, media_type="video/mp4", filename=target.name)
+
+
+@app.post("/v1/analytics/snapshots", dependencies=[Depends(auth)])
+async def save_analytics_snapshot(payload: AnalyticsSnapshotPayload) -> dict[str, Any]:
+    timestamp = now_iso()
+    with closing(db()) as connection:
+        account = connection.execute("SELECT id, platform FROM accounts WHERE id=?", (payload.account_id,)).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if account["platform"] != payload.source.split(":", 1)[0].lower() and payload.source != "manual":
+            raise HTTPException(status_code=422, detail="Analytics source does not match account platform")
+        snapshot_id = f"metric_{secrets.token_urlsafe(10)}"
+        connection.execute(
+            """INSERT INTO analytics_snapshots (id, account_id, platform, metric_date, views, likes, comments, followers, watch_time_seconds, source, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(account_id, metric_date) DO UPDATE SET views=excluded.views, likes=excluded.likes,
+                 comments=excluded.comments, followers=excluded.followers, watch_time_seconds=excluded.watch_time_seconds,
+                 source=excluded.source, fetched_at=excluded.fetched_at""",
+            (snapshot_id, payload.account_id, account["platform"], payload.metric_date.isoformat(), payload.views, payload.likes, payload.comments, payload.followers, payload.watch_time_seconds, payload.source, timestamp),
+        )
+        connection.commit()
+    return {"account_id": payload.account_id, "metric_date": payload.metric_date.isoformat(), "status": "stored", "source": payload.source, "fetched_at": timestamp}
+
+
+@app.get("/v1/analytics/summary", dependencies=[Depends(auth)])
+async def analytics_summary(days: int = 30) -> dict[str, Any]:
+    days = max(1, min(days, 90))
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+    with closing(db()) as connection:
+        rows = connection.execute(
+            """SELECT a.id, a.platform, a.account_name, s.metric_date, s.views, s.likes, s.comments,
+                      s.followers, s.watch_time_seconds, s.source, s.fetched_at
+               FROM accounts a LEFT JOIN analytics_snapshots s ON s.account_id=a.id AND s.metric_date>=?
+               ORDER BY a.created_at DESC, s.metric_date ASC""",
+            (cutoff,),
+        ).fetchall()
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = grouped.setdefault(row["id"], {"account_id": row["id"], "platform": row["platform"], "account_name": row["account_name"], "data_available": False, "days": []})
+        if row["metric_date"]:
+            item["data_available"] = True
+            item["days"].append({key: row[key] for key in ("metric_date", "views", "likes", "comments", "followers", "watch_time_seconds", "source", "fetched_at")})
+    accounts_data = list(grouped.values())
+    totals = {"views": sum(day["views"] for account in accounts_data for day in account["days"]), "likes": sum(day["likes"] for account in accounts_data for day in account["days"]), "comments": sum(day["comments"] for account in accounts_data for day in account["days"])}
+    return {"days": days, "from": cutoff, "to": datetime.now(timezone.utc).date().isoformat(), "totals": totals, "accounts": accounts_data}
 
 
 @app.get("/v1/dashboard/summary", dependencies=[Depends(auth)])

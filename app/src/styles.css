@@ -612,7 +612,26 @@ body {
   padding: 28px 32px 32px;
   animation: rise 0.35s ease both;
 }
-.modal-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+.analytics-screen { min-height: 100%; padding: 28px 44px 60px; background: radial-gradient(900px 400px at 100% 0%, rgba(255, 178, 36, 0.06), transparent 55%), var(--ink); }
+.analytics-head { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 24px; }
+.social-head-actions { display: flex; gap: 9px; align-items: center; }
+.analytics-controls { display: flex; gap: 8px; align-items: center; }
+.analytics-controls select { padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); color: var(--text); font: 11px var(--mono); }
+.analytics-main { max-width: 1150px; }
+.analytics-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+.analytics-cards > div { padding: 16px; background: var(--panel); border: 1px solid var(--line); }
+.analytics-cards span { display: block; color: var(--dim); font: 10px var(--mono); letter-spacing: .08em; }
+.analytics-cards b { display: block; margin-top: 8px; color: var(--amber); font-size: 26px; }
+.analytics-panel { margin-top: 14px; padding: 18px; background: var(--panel); border: 1px solid var(--line); }
+.analytics-account, .analytics-row { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.analytics-account:last-child, .analytics-row:last-child { border-bottom: 0; }
+.analytics-account strong, .analytics-account small, .analytics-row strong, .analytics-row small { display: block; }
+.analytics-account small, .analytics-row small { margin-top: 5px; color: var(--faint); font: 10px var(--mono); }
+.analytics-account-numbers { display: flex; gap: 18px; color: var(--amber); font: 15px var(--mono); text-align: right; }
+.analytics-account-numbers small { color: var(--dim); font-size: 9px; }
+.analytics-row > span:last-child { color: var(--dim); font: 11px var(--mono); text-align: right; }
+.social-head { display: flex;
+ justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
 .ig-intro { font-size: 14px; line-height: 1.6; color: var(--dim); margin-bottom: 22px; }
 .ig-intro em { color: var(--text); font-style: normal; }
 .ig-steps { list-style: none; padding: 0; margin: 0 0 24px; }
@@ -1122,6 +1141,13 @@ body {
 .social-queue-actions .danger { color: var(--red); }
 .status-row-cancelled { opacity: .5; }
 @media (max-width: 760px) {
+  .analytics-screen { padding: 22px 16px 44px; }
+  .analytics-head { display: block; }
+  .social-head-actions { flex-wrap: wrap; }
+  .analytics-controls { margin-top: 16px; }
+  .analytics-cards { grid-template-columns: repeat(2, 1fr); }
+  .analytics-account, .analytics-row { align-items: flex-start; flex-direction: column; }
+  .analytics-row > span:last-child { text-align: left; }
   .source-library { padding: 22px 16px 44px; }
   .source-library-head { display: block; }
   .source-library-head .btn-ghost { margin-top: 16px; }
