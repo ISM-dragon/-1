@@ -2,6 +2,9 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import type { JobResults, JobSummary, LoopOverview, SetupState, SyncSummary } from './types'
 
+export type SourceItem = { index: number; id: string; title: string; duration?: number | null; url: string; thumbnail?: string | null; path?: string; media_url?: string }
+export type SourceJob = { id: string; status: 'queued' | 'running' | 'done' | 'failed'; total: number; completed: number; message?: string | null; error?: string | null; items?: SourceItem[] }
+
 export const PROCESSING_GATEWAY_STORAGE_KEY = 'ism.processing-gateway.v1'
 
 export type ProcessingGatewayConfig = { url: string; token: string }
@@ -49,6 +52,31 @@ export const api = {
       throw new Error(`Processing Gateway returned ${response.status}: ${detail.slice(0, 240)}`)
     }
     return (await response.json()) as { id: string; status: string }
+  },
+  sourceInspect: async (baseUrl: string, token: string, source: string, maxItems: number) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/sources/inspect'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify({ source, max_items: maxItems })
+    })
+    if (!response.ok) throw new Error(`Source inspection returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
+    return (await response.json()) as { source: string; count: number; items: SourceItem[] }
+  },
+  sourceDownload: async (baseUrl: string, token: string, source: string, maxItems: number) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/sources/download'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}) },
+      body: JSON.stringify({ source, max_items: maxItems })
+    })
+    if (!response.ok) throw new Error(`Source download returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
+    return (await response.json()) as { id: string; status: string }
+  },
+  sourceStatus: async (baseUrl: string, token: string, jobId: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/sources/jobs/${encodeURIComponent(jobId)}`), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Source status returned ${response.status}.`)
+    return (await response.json()) as SourceJob
   },
   processingStatus: async (baseUrl: string, token: string, jobId: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, `/v1/processing/jobs/${encodeURIComponent(jobId)}`), {

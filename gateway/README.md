@@ -16,6 +16,10 @@ PROVIDER_MODE=mock uvicorn main:app --host 0.0.0.0 --port 8787
 
 افتح `http://127.0.0.1:8787` لعرض لوحة التحكم. في تطبيق ISM، ضع `http://127.0.0.1:8787` في حقل **Gateway API URL**. عناوين HTTP مسموحة محليًا فقط؛ يجب استخدام HTTPS خارج الجهاز.
 
+## مكتبة المصادر v0.6
+
+تدعم Gateway الآن معاينة وتنزيل رابط فيديو مفرد أو قناة أو قائمة تشغيل عبر `POST /v1/sources/inspect` و`POST /v1/sources/download`. يتابع التطبيق المهمة عبر `GET /v1/sources/jobs/{id}`، وتُخدم الملفات الناتجة من `GET /v1/sources/jobs/{id}/media/{filename}`. يطبق Gateway حدًا أقصى قدره 1000 عنصر للمهمة، ويمنع عناوين localhost والشبكات الخاصة لتقليل مخاطر SSRF. استخدم هذه الميزة فقط للمصادر التي يملك المستخدم حق تنزيلها أو معالجتها، والتزم بشروط كل منصة.
+
 ## معالجة فيديو Android عن بُعد
 
 نسخة Android لا تشغّل Python أو `uv` داخل APK. بعد نشر Gateway على جهاز يملك مجلد `pipeline` واعتمادياته، يرسل التطبيق رابط YouTube إلى `POST /v1/processing/jobs` ثم يستطلع `GET /v1/processing/jobs/{id}` ويعرض ملفات MP4 من مسار الوسائط. يجب ضبط `PUBLIC_BASE_URL` على عنوان HTTPS العام للخادم، وضبط `ISM_PIPELINE_DIR` على مجلد `pipeline`.

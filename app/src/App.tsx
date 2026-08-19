@@ -7,9 +7,10 @@ import Studio from './components/Studio'
 import Review from './components/Review'
 import Loop from './components/Loop'
 import SocialHub from './components/SocialHub'
+import SourceLibrary from './components/SourceLibrary'
 import './styles.css'
 
-type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'social'
+type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'social' | 'sources'
 
 export default function App() {
   const [view, setView] = useState<View>('boot')
@@ -170,6 +171,10 @@ export default function App() {
     return <SocialHub onBack={() => setView('studio')} />
   }
 
+  if (view === 'sources') {
+    return <SourceLibrary onClose={() => setView('studio')} />
+  }
+
   if (view === 'review' && results) {
     return (
       <Review
@@ -203,7 +208,9 @@ export default function App() {
       error={runError}
       onRun={startRun}
       onOpenLoop={() => setView('loop')}
-      onOpenSocial={() => setView('social')}
+              onOpenSocial={() => setView('social')}
+        onOpenSources={() => setView('sources')}
+
       onOpenJob={openJob}
       onResume={(id, llm) => {
         setRunning(true)

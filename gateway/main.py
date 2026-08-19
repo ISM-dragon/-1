@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
@@ -13,6 +14,7 @@ from contextlib import closing
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +29,8 @@ PUBLISH_INTERVAL_SECONDS = max(10, int(os.getenv("PUBLISH_INTERVAL_SECONDS", "30
 PROCESSING_ROOT = Path(os.getenv("ISM_PROCESSING_ROOT", str(ROOT / "processing")))
 PIPELINE_DIR = Path(os.getenv("ISM_PIPELINE_DIR", str(ROOT.parent / "pipeline")))
 PIPELINE_BIN = os.getenv("ISM_PIPELINE_BIN", "").strip()
+YTDLP_BIN = os.getenv("ISM_YTDLP_BIN", "yt-dlp").strip()
+SOURCE_ROOT = Path(os.getenv("ISM_SOURCE_ROOT", str(ROOT / "sources")))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8787").rstrip("/")
 ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
 ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
@@ -177,6 +181,19 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_processing_jobs_updated ON processing_jobs(updated_at);
+            CREATE TABLE IF NOT EXISTS source_jobs (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                max_items INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'queued',
+                total INTEGER NOT NULL DEFAULT 0,
+                completed INTEGER NOT NULL DEFAULT 0,
+                message TEXT,
+                error TEXT,
+                items_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         migrations = [
@@ -212,6 +229,11 @@ class ProcessingPayload(BaseModel):
     captions: str = Field(default="classic", min_length=1, max_length=40)
 
 
+class SourcePayload(BaseModel):
+    source: HttpUrl
+    max_items: int = Field(default=0, ge=0, le=1000)
+
+
 class AccountCreate(BaseModel):
     platform: str = Field(pattern=r"^(instagram|facebook|tiktok|youtube|x)$")
     account_name: str = Field(min_length=1, max_length=160)
@@ -243,6 +265,114 @@ class AccountPolicyPayload(BaseModel):
 class StatusUpdate(BaseModel):
     status: str
     error: str | None = None
+
+
+def source_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["items"] = json.loads(result["items_json"]) if result.get("items_json") else []
+    result.pop("items_json", None)
+    return result
+
+
+def validate_public_source(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=422, detail="Source must be an HTTP or HTTPS URL.")
+    host = parsed.hostname.lower().rstrip(".")
+    blocked = {"localhost", "localhost.localdomain", "0.0.0.0", "::1"}
+    if host in blocked:
+        raise HTTPException(status_code=422, detail="Local network sources are not allowed.")
+    try:
+        address = ipaddress.ip_address(host)
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+            raise HTTPException(status_code=422, detail="Private network sources are not allowed.")
+    except ValueError:
+        pass
+    return value
+
+
+def ytdlp_module():
+    if str(PIPELINE_DIR) not in sys.path:
+        sys.path.insert(0, str(PIPELINE_DIR))
+    from publikclip_pipeline.ingest import ytdlp
+    return ytdlp
+
+
+def ytdlp_binary(module):
+    configured = Path(YTDLP_BIN)
+    if configured.is_file() and os.access(configured, os.X_OK):
+        return configured
+    discovered = shutil.which(YTDLP_BIN)
+    if discovered:
+        return Path(discovered)
+    return module.ensure_ytdlp(lambda _fraction, _message: None)
+
+
+def source_preview(source: str, max_items: int) -> list[dict[str, Any]]:
+    module = ytdlp_module()
+    binary = ytdlp_binary(module)
+    args = ["-J", "--flat-playlist", "--no-warnings"]
+    if max_items:
+        args += ["--playlist-end", str(max_items)]
+    raw = module._run(binary, args + [source])
+    payload = json.loads(raw)
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not entries:
+        entries = [payload]
+    result = []
+    for index, item in enumerate(entries):
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        webpage = item.get("webpage_url") or item.get("url") or source
+        result.append({
+            "index": index,
+            "id": str(item.get("id")),
+            "title": str(item.get("title") or "Untitled"),
+            "duration": item.get("duration"),
+            "url": str(webpage),
+            "thumbnail": item.get("thumbnail"),
+        })
+    if not result:
+        raise ValueError("The source did not contain downloadable video entries.")
+    return result
+
+
+def update_source_job(job_id: str, **values: Any) -> None:
+    if not values:
+        return
+    values["updated_at"] = now_iso()
+    assignments = ", ".join(f"{key}=?" for key in values)
+    parameters = list(values.values()) + [job_id]
+    with closing(db()) as connection:
+        connection.execute(f"UPDATE source_jobs SET {assignments} WHERE id=?", parameters)
+        connection.commit()
+
+
+def run_source_download(job_id: str, source: str, max_items: int) -> None:
+    target_dir = (SOURCE_ROOT / job_id).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        module = ytdlp_module()
+        binary = ytdlp_binary(module)
+        output_template = str(target_dir / "%(playlist_index)05d - %(title)s.%(ext)s")
+        args = [
+            "--newline", "--no-warnings", "--yes-playlist", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "--merge-output-format", "mp4", "-o", output_template,
+        ]
+        if max_items:
+            args += ["--playlist-end", str(max_items)]
+        update_source_job(job_id, status="running", message="Downloading source entries")
+        module._run(binary, args + [source], on_line=lambda line: update_source_job(job_id, message=line[-300:]))
+        files = sorted(target_dir.glob("*.mp4"))
+        if not files:
+            raise ValueError("Download finished without MP4 files.")
+        items = [
+            {"index": index, "title": path.stem, "path": str(path), "media_url": f"{PUBLIC_BASE_URL}/v1/sources/jobs/{job_id}/media/{quote(path.name, safe='')}"}
+            for index, path in enumerate(files)
+        ]
+        update_source_job(job_id, status="done", total=len(items), completed=len(items), message="Downloads ready", items_json=json.dumps(items, ensure_ascii=False))
+    except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
+        update_source_job(job_id, status="failed", error=str(error), message="Source download failed")
 
 
 def processing_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -561,6 +691,54 @@ async def health() -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse)
 async def dashboard() -> str:
     return DASHBOARD_HTML
+
+
+@app.post("/v1/sources/inspect", dependencies=[Depends(auth)])
+async def inspect_source(payload: SourcePayload) -> dict[str, Any]:
+    source = validate_public_source(str(payload.source))
+    try:
+        items = await asyncio.to_thread(source_preview, source, payload.max_items)
+    except Exception as error:  # noqa: BLE001 — normalize extractor errors
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"source": source, "count": len(items), "items": items}
+
+
+@app.post("/v1/sources/download", dependencies=[Depends(auth)])
+async def download_source(payload: SourcePayload) -> dict[str, Any]:
+    source = validate_public_source(str(payload.source))
+    job_id = f"src_{secrets.token_urlsafe(12)}"
+    timestamp = now_iso()
+    SOURCE_ROOT.mkdir(parents=True, exist_ok=True)
+    with closing(db()) as connection:
+        connection.execute(
+            "INSERT INTO source_jobs (id, source, max_items, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+            (job_id, source, payload.max_items, timestamp, timestamp),
+        )
+        connection.commit()
+    asyncio.create_task(asyncio.to_thread(run_source_download, job_id, source, payload.max_items))
+    return {"id": job_id, "status": "queued"}
+
+
+@app.get("/v1/sources/jobs/{job_id}", dependencies=[Depends(auth)])
+async def source_status(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM source_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Source job not found")
+    return source_dict(row)
+
+
+@app.get("/v1/sources/jobs/{job_id}/media/{filename:path}")
+async def source_media(job_id: str, filename: str) -> FileResponse:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT status FROM source_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row or row["status"] != "done":
+        raise HTTPException(status_code=404, detail="Source media is not ready")
+    base = (SOURCE_ROOT / job_id).resolve()
+    target = (base / filename).resolve()
+    if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Source media not found")
+    return FileResponse(target, media_type="video/mp4", filename=target.name)
 
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])

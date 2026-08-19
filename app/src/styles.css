@@ -401,6 +401,30 @@ body {
 }
 
 /* ---------- review ---------- */
+.source-library {
+  position: relative;
+  min-height: 100%;
+  padding: 30px 44px 60px;
+  background: radial-gradient(900px 400px at 0% 0%, rgba(255, 178, 36, 0.05), transparent 55%), var(--ink);
+}
+.source-library-head { display: flex; justify-content: space-between; gap: 28px; align-items: flex-start; margin-bottom: 24px; }
+.source-library-head .gateway-help { max-width: 700px; margin-top: 9px; color: var(--dim); line-height: 1.5; }
+.source-panel { display: grid; grid-template-columns: 1.2fr 1fr 2fr 140px; gap: 12px; align-items: end; max-width: 1100px; padding: 18px; background: var(--panel); border: 1px solid var(--line); }
+.source-field { display: grid; gap: 6px; color: var(--dim); font: 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.source-field input { width: 100%; min-width: 0; margin-top: 3px; padding: 11px 12px; background: var(--ink); border: 1px solid var(--line); color: var(--text); font: 12px var(--mono); outline: none; }
+.source-field input:focus { border-color: var(--amber); }
+.source-actions { display: flex; gap: 8px; align-items: center; grid-column: 1 / -1; }
+.source-notice { max-width: 1100px; margin-top: 14px; padding: 13px 16px; border: 1px solid rgba(255, 178, 36, .35); color: var(--amber); font-size: 13px; line-height: 1.5; }
+.source-job { max-width: 1100px; margin-top: 14px; color: var(--dim); font-size: 11px; }
+.source-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; max-width: 1100px; margin-top: 22px; }
+.source-card { display: flex; gap: 12px; min-width: 0; padding: 12px; background: var(--panel); border: 1px solid var(--line); }
+.source-card img { width: 94px; height: 62px; object-fit: cover; background: var(--panel-2); flex: none; }
+.source-card-body { min-width: 0; display: grid; gap: 6px; align-content: start; }
+.source-card-body strong { font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
+.source-card-body .mono { color: var(--dim); font-size: 10px; }
+.source-card-body a { color: var(--amber); font: 10px var(--mono); text-decoration: none; }
+.source-card-body a:hover { text-decoration: underline; }
+.source-dim { color: var(--faint); font: 10px var(--mono); }
 .review {
   position: relative;
   min-height: 100%;
@@ -1081,6 +1105,11 @@ body {
 .social-queue-actions .danger { color: var(--red); }
 .status-row-cancelled { opacity: .5; }
 @media (max-width: 760px) {
+  .source-library { padding: 22px 16px 44px; }
+  .source-library-head { display: block; }
+  .source-library-head .btn-ghost { margin-top: 16px; }
+  .source-panel { grid-template-columns: 1fr; }
+  .source-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .remote-gateway-block { margin-top: 14px; }
   .remote-gateway-block .btn-secondary { width: 100%; }
   .social-calendar-head { align-items: center; }
