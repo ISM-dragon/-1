@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { api } from '../api'
+import { api, loadProcessingGatewayConfig, saveProcessingGatewayConfig } from '../api'
 
 type Platform = 'instagram' | 'facebook' | 'tiktok' | 'youtube' | 'x'
 type PostStatus = 'draft' | 'awaiting_approval' | 'scheduled' | 'published' | 'failed' | 'cancelled'
@@ -80,15 +80,57 @@ function copyForm(post: SocialPost): SocialForm {
 }
 
 export default function SocialHub({ onBack }: Props) {
-  const [gatewayUrl, setGatewayUrl] = useState('')
-  const [gatewayToken, setGatewayToken] = useState('')
+  const savedGateway = loadProcessingGatewayConfig()
+  const [gatewayUrl, setGatewayUrl] = useState(savedGateway.url)
+  const [gatewayToken, setGatewayToken] = useState(savedGateway.token)
   const [queue, setQueue] = useState<SocialPost[]>(loadQueue)
   const [form, setForm] = useState<SocialForm>(DEFAULT_FORM)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [calendarCursor, setCalendarCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [accounts, setAccounts] = useState<Array<{ id: string; platform: string; account_name: string; status: string; daily_limit: number; min_gap_seconds: number; publish_count: number; last_publish_at?: string | null; pause_reason?: string | null; cooldown_until?: string | null }>>([])
+  const [summary, setSummary] = useState<{ accounts: number; posts: Record<string, number>; recent: Array<Record<string, unknown>> } | null>(null)
+  const [accountNotice, setAccountNotice] = useState<string | null>(null)
+  const [capabilities, setCapabilities] = useState<Array<{ platform: string; configured: boolean; publish_mode: string; analytics: string; note: string }>>([])
   const publishingRef = useRef(new Set<string>())
+
+  useEffect(() => {
+    saveProcessingGatewayConfig({ url: gatewayUrl.trim(), token: gatewayToken.trim() })
+  }, [gatewayUrl, gatewayToken])
+
+  useEffect(() => {
+    if (!gatewayUrl.trim()) {
+      setAccounts([])
+      setSummary(null)
+      setCapabilities([])
+      return
+    }
+    let disposed = false
+    const refreshAccountData = async () => {
+      try {
+        const [nextAccounts, nextSummary, nextCapabilities] = await Promise.all([
+          api.accounts(gatewayUrl, gatewayToken),
+          api.dashboardSummary(gatewayUrl, gatewayToken),
+          api.socialCapabilities(gatewayUrl, gatewayToken)
+        ])
+        if (!disposed) {
+          setAccounts(nextAccounts)
+          setSummary(nextSummary)
+          setCapabilities(nextCapabilities.providers)
+          setAccountNotice(null)
+        }
+      } catch (error) {
+        if (!disposed) setAccountNotice(error instanceof Error ? error.message : 'Account dashboard unavailable.')
+      }
+    }
+    void refreshAccountData()
+    const timer = window.setInterval(refreshAccountData, 60_000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [gatewayUrl, gatewayToken])
 
   function outboundPost(post: SocialPost): SocialPost {
     return {
@@ -175,6 +217,20 @@ export default function SocialHub({ onBack }: Props) {
       setNotice(`تم فتح تسجيل الدخول لـ ${platform}. أكمل الموافقة في المتصفح ثم ارجع للتطبيق.`)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'تعذر بدء تسجيل الدخول.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function disconnectAccount(accountId: string) {
+    if (!gatewayUrl.trim()) return
+    setBusy(true)
+    try {
+      await api.deleteAccount(gatewayUrl, gatewayToken, accountId)
+      setAccounts((items) => items.filter((item) => item.id !== accountId))
+      setNotice('تم فصل الحساب وإلغاء ربط منشوراته بالحساب المحذوف.')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'تعذر فصل الحساب.')
     } finally {
       setBusy(false)
     }
@@ -281,10 +337,14 @@ export default function SocialHub({ onBack }: Props) {
       <main className="social-grid">
         <section className="social-panel">
           <p className="social-label">01 / CONNECTED ACCOUNTS</p>
-          <p className="social-help">The app opens OAuth in the system browser. The Gateway stores refresh tokens; this APK keeps only the session token in memory.</p>
+          <p className="social-help">The app opens OAuth in the system browser. The Gateway stores refresh tokens; this APK stores only the bearer session token locally.</p>
           <label className="social-field">Gateway API URL<input value={gatewayUrl} onChange={(e) => setGatewayUrl(e.target.value)} placeholder="https://your-publishing-api.example" /></label>
           <label className="social-field">Session token <input type="password" value={gatewayToken} onChange={(e) => setGatewayToken(e.target.value)} placeholder="Optional bearer token" /></label>
+          {summary && <div className="social-summary-cards"><span><b>{summary.accounts}</b> connected</span><span><b>{summary.posts.scheduled || 0}</b> scheduled</span><span><b>{summary.posts.published || 0}</b> published</span><span><b>{summary.posts.failed || 0}</b> failed</span></div>}
+          {accountNotice && <p className="social-error">{accountNotice}</p>}
           <div className="social-platforms">{PLATFORMS.map((platform) => <div className="social-platform" key={platform.id}><div><strong>{platform.label}</strong><span>{platform.hint}</span></div><button className="btn-secondary" onClick={() => connect(platform.id)} disabled={busy}>Connect</button></div>)}</div>
+          {capabilities.length > 0 && <div className="provider-capabilities"><p className="social-label">PROVIDER CAPABILITIES</p>{capabilities.map((item) => <div className="provider-capability" key={item.platform}><span><strong>{item.platform}</strong><small>{item.publish_mode} · {item.analytics}</small></span><span className={item.configured ? 'account-connected' : 'account-status'}>{item.configured ? 'configured' : 'needs setup'}</span></div>)}</div>}
+          {accounts.length > 0 && <div className="account-dashboard"><p className="social-label">ACCOUNT HEALTH / DAILY COUNT</p>{accounts.map((account) => <div className="account-row" key={account.id}><span><strong>{account.platform} · {account.account_name}</strong><small>{account.publish_count}/{account.daily_limit} today · gap {account.min_gap_seconds}s</small></span><span className={`account-status account-${account.status}`}>{account.status} <button className="btn-link" onClick={() => disconnectAccount(account.id)} disabled={busy}>disconnect</button></span></div>)}</div>}
         </section>
 
         <section className="social-panel">

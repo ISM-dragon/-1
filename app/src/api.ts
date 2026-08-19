@@ -71,6 +71,35 @@ export const api = {
     if (!response.ok) throw new Error(`Source download returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
     return (await response.json()) as { id: string; status: string }
   },
+  socialCapabilities: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/capabilities'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Provider capabilities returned ${response.status}.`)
+    return (await response.json()) as { mode: string; providers: Array<{ platform: string; configured: boolean; publish_mode: string; analytics: string; note: string }> }
+  },
+  accounts: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/accounts'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Accounts request returned ${response.status}.`)
+    return (await response.json()) as Array<{ id: string; platform: string; account_name: string; status: string; daily_limit: number; min_gap_seconds: number; publish_count: number; last_publish_at?: string | null; pause_reason?: string | null; cooldown_until?: string | null }>
+  },
+  deleteAccount: async (baseUrl: string, token: string, accountId: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/accounts/${encodeURIComponent(accountId)}`), {
+      method: 'DELETE',
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Account disconnect returned ${response.status}.`)
+    return (await response.json()) as { id: string; status: string }
+  },
+  dashboardSummary: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/dashboard/summary'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Dashboard request returned ${response.status}.`)
+    return (await response.json()) as { accounts: number; posts: Record<string, number>; recent: Array<Record<string, unknown>> }
+  },
   sourceStatus: async (baseUrl: string, token: string, jobId: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, `/v1/sources/jobs/${encodeURIComponent(jobId)}`), {
       headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined

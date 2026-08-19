@@ -1018,7 +1018,24 @@ body {
 .social-field input, .social-field textarea, .social-field select { width: 100%; background: var(--ink); border: 1px solid var(--line); color: var(--text); font: 13px var(--body); letter-spacing: normal; padding: 10px 12px; outline: none; resize: vertical; }
 .social-field input:focus, .social-field textarea:focus, .social-field select:focus { border-color: var(--amber-dim); }
 .social-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.social-platforms { display: grid; gap: 8px; margin-top: 18px; }
+.social-summary-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 14px 0; }
+.social-summary-cards span { padding: 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--dim); font: 10px var(--mono); }
+.social-summary-cards b { display: block; color: var(--amber); font-size: 19px; margin-bottom: 4px; }
+.account-dashboard { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.account-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); align-items: center; }
+.account-row strong, .account-row small { display: block; }
+.account-row strong { font-size: 12px; }
+.account-row small { margin-top: 4px; color: var(--faint); font: 10px var(--mono); }
+.account-status { font: 10px var(--mono); color: var(--amber); text-transform: uppercase; }
+.account-connected { color: var(--green); }
+.account-paused, .account-failed { color: var(--red); }
+.provider-capabilities { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.provider-capability { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); font: 10px var(--mono); }
+.provider-capability strong, .provider-capability small { display: block; }
+.provider-capability small { margin-top: 4px; color: var(--faint); font-size: 9px; }
+.btn-link { border: 0; background: transparent; color: var(--red); padding: 0; font: inherit; cursor: pointer; text-decoration: underline; }
+.social-platforms { display: grid;
+ gap: 8px; margin-top: 18px; }
 .social-platform { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--panel-2); border: 1px solid var(--line); padding: 10px 12px; }
 .social-platform strong, .social-platform span { display: block; }
 .social-platform strong { font-size: 13px; }

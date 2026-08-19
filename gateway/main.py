@@ -808,6 +808,18 @@ async def create_mock_account(payload: AccountCreate) -> dict[str, Any]:
     return account_dict(row)
 
 
+@app.delete("/v1/accounts/{account_id}", dependencies=[Depends(auth)])
+async def disconnect_account(account_id: str) -> dict[str, str]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        connection.execute("UPDATE posts SET account_id=NULL WHERE account_id=?", (account_id,))
+        connection.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        connection.commit()
+    return {"id": account_id, "status": "disconnected"}
+
+
 @app.patch("/v1/accounts/{account_id}/policy", dependencies=[Depends(auth)])
 async def update_account_policy(account_id: str, payload: AccountPolicyPayload) -> dict[str, Any]:
     with closing(db()) as connection:
@@ -834,6 +846,27 @@ async def resume_account(account_id: str) -> dict[str, Any]:
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Account not found")
     return account_dict(row)
+
+
+@app.get("/v1/social/capabilities", dependencies=[Depends(auth)])
+async def social_capabilities() -> dict[str, Any]:
+    configured = {
+        "instagram": bool(os.getenv("META_CLIENT_ID")),
+        "facebook": bool(os.getenv("META_CLIENT_ID")),
+        "tiktok": bool(os.getenv("TIKTOK_CLIENT_KEY")),
+        "youtube": bool(os.getenv("GOOGLE_CLIENT_ID")),
+        "x": bool(os.getenv("X_CLIENT_ID")),
+    }
+    return {
+        "mode": PROVIDER_MODE,
+        "providers": [
+            {"platform": "instagram", "configured": configured["instagram"], "publish_mode": "professional account direct post", "analytics": "Instagram Insights", "note": "Requires Instagram professional account and Meta permissions."},
+            {"platform": "facebook", "configured": configured["facebook"], "publish_mode": "Page publishing", "analytics": "Page insights", "note": "Requires Page access and Meta app review where applicable."},
+            {"platform": "tiktok", "configured": configured["tiktok"], "publish_mode": "Direct Post or Draft", "analytics": "Display/approved business scope", "note": "The provider may require product approval; Draft mode is supported by design."},
+            {"platform": "youtube", "configured": configured["youtube"], "publish_mode": "videos.insert", "analytics": "YouTube Analytics", "note": "Uses Google OAuth and resumable uploads."},
+            {"platform": "x", "configured": configured["x"], "publish_mode": "chunked media + post", "analytics": "public/private metrics", "note": "Private metrics require user context and have provider-specific windows."},
+        ],
+    }
 
 
 @app.get("/v1/social/oauth/{platform}/start", dependencies=[Depends(auth)])
