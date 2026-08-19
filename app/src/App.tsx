@@ -112,10 +112,20 @@ export default function App() {
 
         const gateway = loadProcessingGatewayConfig()
         if (!gateway.url.trim()) {
-          throw new Error('Android needs a Processing Gateway URL. Open Social Hub, enter the HTTPS Gateway URL, and save it first.')
+          throw new Error('Android needs a Processing Gateway URL. Enter it in Processing Engine inside Studio and save it first.')
         }
         if (!/^https?:\/\//i.test(source.trim())) {
           throw new Error('Android remote processing accepts a YouTube or HTTPS video URL, not a local file path.')
+        }
+        const health = await api.gatewayHealth(gateway.url, gateway.token)
+        if (!health.ok) throw new Error(`Gateway is not ready: ${!health.pipeline ? 'PIPELINE_UNAVAILABLE' : !health.ffmpeg ? 'FFMPEG_UNAVAILABLE' : !health.storage ? 'STORAGE_UNAVAILABLE' : 'GATEWAY_DEGRADED'}`)
+        const capabilities = await api.processingCapabilities(gateway.url, gateway.token)
+        if (!capabilities.pipeline || !capabilities.ffmpeg || !capabilities.storage) {
+          throw new Error(`Processing prerequisites failed: ${!capabilities.pipeline ? 'PIPELINE_UNAVAILABLE' : !capabilities.ffmpeg ? 'FFMPEG_UNAVAILABLE' : 'STORAGE_UNAVAILABLE'}`)
+        }
+        if (llm === 'gemini') {
+          const gemini = await api.geminiDiagnostic(gateway.url, gateway.token)
+          if (!gemini.reachable) throw new Error(`Gemini configuration error: ${gemini.error_code ?? 'GEMINI_UNAVAILABLE'}`)
         }
         const started = await api.processingStart(gateway.url, gateway.token, source.trim(), llm, captions)
         setActiveJob(started.id)
@@ -133,6 +143,8 @@ export default function App() {
           if (status.status === 'failed') throw new Error(status.error || 'Remote processing failed.')
           if (status.status === 'done') {
             if (!status.results) throw new Error('Gateway completed without returning clip results.')
+            const outputs = status.results.render?.outputs ?? []
+            if (!outputs.length) throw new Error('PROCESSING COMPLETED — NO VALID CLIPS FOUND')
             setResults(status.results)
             setRunning(false)
             setView('review')

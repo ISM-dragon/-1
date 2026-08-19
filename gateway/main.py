@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -11,6 +12,9 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import time as time_module
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest, urlopen
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -33,13 +37,15 @@ PIPELINE_BIN = os.getenv("ISM_PIPELINE_BIN", "").strip()
 YTDLP_BIN = os.getenv("ISM_YTDLP_BIN", "yt-dlp").strip()
 SOURCE_ROOT = Path(os.getenv("ISM_SOURCE_ROOT", str(ROOT / "sources")))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8787").rstrip("/")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
 ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
 MAX_PROVIDER_ATTEMPTS = max(1, int(os.getenv("MAX_PROVIDER_ATTEMPTS", "3")))
 MAX_ACTIVE_PROCESSING_JOBS = max(1, int(os.getenv("MAX_ACTIVE_PROCESSING_JOBS", "1")))
 MAX_ACTIVE_SOURCE_JOBS = max(1, int(os.getenv("MAX_ACTIVE_SOURCE_JOBS", "2")))
+GEMINI_KEY_FILE = Path(os.getenv("ISM_GEMINI_KEY_FILE", str(ROOT / "secrets" / "gemini.key")))
 
-app = FastAPI(title="ISM Social Gateway", version="0.9.2")
+app = FastAPI(title="ISM Social Gateway", version="0.9.3")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
@@ -468,8 +474,58 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
     }
 
 
+def read_server_gemini_key() -> str | None:
+    key = os.getenv("PUBLIKCLIP_GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        key = GEMINI_KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return key or None
+
+
+def pipeline_checks() -> dict[str, Any]:
+    manifest = PIPELINE_DIR / "pyproject.toml"
+    package = PIPELINE_DIR / "publikclip_pipeline"
+    uv_path = shutil.which("uv")
+    ffmpeg_path = shutil.which("ffmpeg")
+    ffprobe_path = shutil.which("ffprobe")
+    storage_ok = False
+    try:
+        PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+        storage_ok = os.access(PROCESSING_ROOT, os.W_OK)
+    except OSError:
+        storage_ok = False
+    return {
+        "pipeline": manifest.is_file() and package.is_dir(),
+        "pipeline_dir_configured": manifest.is_file() and package.is_dir(),
+        "python": sys.version_info >= (3, 12) or bool(uv_path),
+        "uv": bool(uv_path),
+        "ffmpeg": bool(ffmpeg_path),
+        "ffprobe": bool(ffprobe_path),
+        "storage": storage_ok,
+        "gemini_configured": bool(read_server_gemini_key()),
+        "ollama": ollama_available(),
+        "youtube_urls": True,
+        "https_urls": True,
+        "android_remote_processing": True,
+    }
+
+
+def ollama_available() -> bool:
+    try:
+        with urlopen(UrlRequest("http://127.0.0.1:11434/api/tags"), timeout=1.5) as response:
+            return response.status == 200
+    except (OSError, URLError):
+        return False
+
+
 def pipeline_command() -> tuple[list[str], dict[str, str]]:
     environment = os.environ.copy()
+    server_key = read_server_gemini_key()
+    if server_key:
+        environment["PUBLIKCLIP_GEMINI_API_KEY"] = server_key
     environment["PUBLIKCLIP_HOME"] = str(PROCESSING_ROOT)
     environment["PYTHONPATH"] = f"{PIPELINE_DIR}{os.pathsep}{environment.get('PYTHONPATH', '')}".rstrip(os.pathsep)
     if PIPELINE_BIN:
@@ -738,12 +794,76 @@ async def shutdown() -> None:
         await asyncio.gather(_scheduler_task, return_exceptions=True)
 
 
+def gemini_probe() -> dict[str, Any]:
+    key = read_server_gemini_key()
+    result: dict[str, Any] = {"configured": bool(key), "reachable": False, "model": GEMINI_MODEL, "latency_ms": None, "error_code": None}
+    if not key:
+        result["error_code"] = "GEMINI_NOT_CONFIGURED"
+        return result
+    body = json.dumps({"contents": [{"parts": [{"text": "Reply with the single word OK."}]}], "generationConfig": {"maxOutputTokens": 4}}).encode()
+    request = UrlRequest(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        data=body,
+        headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        method="POST",
+    )
+    started = time_module.monotonic()
+    try:
+        with urlopen(request, timeout=15) as response:
+            response.read(1024)
+            result["reachable"] = response.status == 200
+            result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
+            if response.status != 200:
+                result["error_code"] = f"GEMINI_HTTP_{response.status}"
+    except HTTPError as error:
+        result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
+        result["error_code"] = {401: "GEMINI_AUTH_FAILED", 403: "GEMINI_AUTH_FAILED", 404: "GEMINI_MODEL_NOT_FOUND", 429: "GEMINI_QUOTA_OR_RATE_LIMIT"}.get(error.code, f"GEMINI_HTTP_{error.code}")
+    except (OSError, URLError, TimeoutError):
+        result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
+        result["error_code"] = "GEMINI_UNREACHABLE"
+    return result
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    checks = pipeline_checks()
     with closing(db()) as connection:
         processing_active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
         source_active = connection.execute("SELECT COUNT(*) AS count FROM source_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
-    return {"ok": True, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active}
+    ready = bool(checks["pipeline"] and checks["ffmpeg"] and checks["storage"])
+    return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": checks["gemini_configured"], "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active}
+
+
+@app.get("/v1/processing/capabilities", dependencies=[Depends(auth)])
+async def processing_capabilities() -> dict[str, Any]:
+    return pipeline_checks()
+
+
+@app.post("/v1/diagnostics/gemini", dependencies=[Depends(auth)])
+async def diagnostics_gemini() -> dict[str, Any]:
+    return await asyncio.to_thread(gemini_probe)
+
+
+@app.post("/v1/diagnostics/pipeline", dependencies=[Depends(auth)])
+async def diagnostics_pipeline() -> dict[str, Any]:
+    checks = pipeline_checks()
+    importable = False
+    if checks["pipeline"]:
+        pipeline_text = str(PIPELINE_DIR)
+        if pipeline_text not in sys.path:
+            sys.path.insert(0, pipeline_text)
+        importable = importlib.util.find_spec("publikclip_pipeline") is not None
+    checks["pipeline_importable"] = importable
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        try:
+            checks["ffmpeg_usable"] = subprocess.run([ffmpeg, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            checks["ffmpeg_usable"] = False
+    else:
+        checks["ffmpeg_usable"] = False
+    checks["ready"] = bool(checks["pipeline"] and checks["pipeline_importable"] and checks["python"] and checks["ffmpeg_usable"] and checks["storage"])
+    return checks
 
 
 @app.get("/", response_class=HTMLResponse)

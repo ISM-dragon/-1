@@ -338,6 +338,12 @@ body {
 }
 .remote-gateway-block input { width: 100%; min-width: 0; }
 .remote-gateway-block .btn-secondary { justify-self: start; }
+.gateway-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.engine-status { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); font-size: 11px; line-height: 1.4; }
+.engine-status span { color: var(--dim); overflow-wrap: anywhere; }
+.engine-status small { color: var(--faint); font: 10px var(--mono); }
+.engine-connected { border-color: var(--green); }
+.engine-failed { border-color: var(--red); }
 .opt-group { display: flex; align-items: center; gap: 6px; }
 .opt-label {
   font-family: var(--mono);
@@ -1159,6 +1165,7 @@ body {
   .source-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .remote-gateway-block { margin-top: 14px; }
   .remote-gateway-block .btn-secondary { width: 100%; }
+  .gateway-actions { display: grid; grid-template-columns: 1fr; }
   .social-calendar-head { align-items: center; }
   .social-calendar-actions .btn-ghost { padding: 8px 7px; min-width: 0; }
   .social-calendar-day { min-height: 76px; padding: 5px; }
