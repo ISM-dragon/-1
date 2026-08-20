@@ -1,0 +1,15 @@
+[Unit]
+Description=Opus Pro video processing Gateway
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/opus-pro
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose -f docker-compose.gateway.yml up -d --build
+ExecStop=/usr/bin/docker compose -f docker-compose.gateway.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

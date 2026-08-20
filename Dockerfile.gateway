@@ -1,0 +1,35 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    ISM_GATEWAY_DB=/data/gateway.db \
+    ISM_PROCESSING_ROOT=/data/processing \
+    ISM_SOURCE_ROOT=/data/sources \
+    ISM_PIPELINE_DIR=/srv/opus/pipeline \
+    PUBLIC_BASE_URL=http://127.0.0.1:8787 \
+    REQUIRE_GATEWAY_TOKEN=true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    ffmpeg \
+    git \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv/opus
+COPY gateway/requirements.txt ./gateway/requirements.txt
+RUN pip install -r gateway/requirements.txt
+
+COPY pipeline ./pipeline
+RUN pip install ./pipeline
+
+COPY gateway ./gateway
+RUN mkdir -p /data/processing /data/sources /data/secrets \
+    && useradd --system --create-home --uid 10001 opus \
+    && chown -R opus:opus /srv/opus /data
+
+USER opus
+EXPOSE 8787
+CMD ["uvicorn", "gateway.main:app", "--host", "0.0.0.0", "--port", "8787"]
