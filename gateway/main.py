@@ -12,6 +12,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time as time_module
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
@@ -52,6 +53,7 @@ try:
         update_provider,
     )
     from .secret_vault import SecretVault, SecretVaultError
+    from .job_state import canonical_state, legacy_status, transition_payload, validate_transition, TERMINAL_STATES, RECOVERABLE_DEFAULT
 except ImportError:  # pragma: no cover - uvicorn main:app from gateway/
     from processing_service import classify_gemini_error, pipeline_available, pipeline_command as build_pipeline_command, pipeline_environment
     from worker_queue import PersistentWorkerQueue, WorkerResourceError, validate_media_artifact
@@ -76,6 +78,7 @@ except ImportError:  # pragma: no cover - uvicorn main:app from gateway/
         update_provider,
     )
     from secret_vault import SecretVault, SecretVaultError
+    from job_state import canonical_state, legacy_status, transition_payload, validate_transition, TERMINAL_STATES, RECOVERABLE_DEFAULT
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("ISM_GATEWAY_DB", str(ROOT / "gateway.db")))
@@ -96,13 +99,14 @@ ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60"))
 MAX_PROVIDER_ATTEMPTS = max(1, int(os.getenv("MAX_PROVIDER_ATTEMPTS", "3")))
 MAX_ACTIVE_PROCESSING_JOBS = max(1, int(os.getenv("MAX_ACTIVE_PROCESSING_JOBS", "1")))
 MAX_ACTIVE_SOURCE_JOBS = max(1, int(os.getenv("MAX_ACTIVE_SOURCE_JOBS", "2")))
+MAX_RETRY_COUNT = max(0, int(os.getenv("ISM_MAX_RETRY_COUNT", "3")))
 MIN_FREE_DISK_GB = max(0.0, float(os.getenv("MIN_FREE_DISK_GB", "2")))
 GEMINI_KEY_FILE = Path(os.getenv("ISM_GEMINI_KEY_FILE", str(ROOT / "secrets" / "gemini.key")))
 AI_SECRET_FILE = Path(os.getenv("ISM_AI_SECRET_FILE", str(ROOT / "secrets" / "ai-vault.json")))
 AI_VAULT = SecretVault(AI_SECRET_FILE)
 MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
 
-app = FastAPI(title="ISM Social Gateway", version="0.10.0")
+app = FastAPI(title="ISM Social Gateway", version="0.10.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
@@ -111,9 +115,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", "").strip()[:120] or f"req_{secrets.token_urlsafe(10)}"
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 _scheduler_task: asyncio.Task | None = None
 _processing_workers = PersistentWorkerQueue("processing", PROCESSING_ROOT, MAX_ACTIVE_PROCESSING_JOBS, MIN_FREE_DISK_GB)
 _source_workers = PersistentWorkerQueue("sources", SOURCE_ROOT, MAX_ACTIVE_SOURCE_JOBS, MIN_FREE_DISK_GB)
+_processing_cancel_events: dict[str, threading.Event] = {}
+_processing_processes: dict[str, subprocess.Popen[str]] = {}
+_processing_runtime_lock = threading.Lock()
 
 
 class PolicyDeferred(Exception):
@@ -241,16 +258,36 @@ def init_db() -> None:
                 captions TEXT NOT NULL DEFAULT 'classic',
                 mode TEXT NOT NULL DEFAULT 'balanced',
                 status TEXT NOT NULL DEFAULT 'queued',
+                state TEXT NOT NULL DEFAULT 'QUEUED',
                 stage TEXT,
                 fraction REAL,
                 message TEXT,
                 error TEXT,
                 error_code TEXT,
+                recoverable INTEGER NOT NULL DEFAULT 1,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                cancel_requested INTEGER NOT NULL DEFAULT 0,
+                correlation_id TEXT,
+                idempotency_key TEXT UNIQUE,
                 result_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_processing_jobs_updated ON processing_jobs(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_processing_jobs_state ON processing_jobs(state);
+            CREATE TABLE IF NOT EXISTS processing_job_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                from_state TEXT,
+                to_state TEXT NOT NULL,
+                stage TEXT,
+                fraction REAL,
+                message TEXT,
+                error_code TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES processing_jobs(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_processing_transitions_job ON processing_job_transitions(job_id, id);
             CREATE TABLE IF NOT EXISTS source_jobs (
                 id TEXT PRIMARY KEY,
                 source TEXT NOT NULL,
@@ -294,12 +331,21 @@ def init_db() -> None:
             ("posts", "next_attempt_at", "TEXT"),
             ("processing_jobs", "error_code", "TEXT"),
             ("processing_jobs", "mode", "TEXT NOT NULL DEFAULT 'balanced'"),
+            ("processing_jobs", "state", "TEXT NOT NULL DEFAULT 'QUEUED'"),
+            ("processing_jobs", "recoverable", "INTEGER NOT NULL DEFAULT 1"),
+            ("processing_jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("processing_jobs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
+            ("processing_jobs", "correlation_id", "TEXT"),
+            ("processing_jobs", "idempotency_key", "TEXT"),
         ]
         for table, column, definition in migrations:
             existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
             if column not in existing:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key)")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_jobs_idempotency ON processing_jobs(idempotency_key)")
+        connection.execute("UPDATE processing_jobs SET state='QUEUED' WHERE state IS NULL OR state=''")
+        connection.execute("UPDATE processing_jobs SET recoverable=CASE WHEN status='failed' THEN 1 ELSE recoverable END WHERE recoverable IS NULL")
         init_registry_schema(connection)
         connection.commit()
 
@@ -319,6 +365,7 @@ class ProcessingPayload(BaseModel):
     llm: str = Field(default="gemini", pattern=r"^(gemini|ollama)$")
     captions: str = Field(default="classic", min_length=1, max_length=40)
     mode: str = Field(default="balanced", pattern=r"^(fast|balanced|quality|maximum)$")
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=180)
 
 
 class SourcePayload(BaseModel):
@@ -600,6 +647,9 @@ def processing_dict(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     result["results"] = json.loads(result["result_json"]) if result.get("result_json") else None
     result.pop("result_json", None)
+    result.update(transition_payload(row))
+    result["transitions"] = processing_transition_history(str(row["id"]))
+    result["artifacts"] = (result.get("results") or {}).get("artifacts", []) if isinstance(result.get("results"), dict) else []
     return result
 
 
@@ -612,6 +662,60 @@ def update_processing_job(job_id: str, **values: Any) -> None:
     with closing(db()) as connection:
         connection.execute(f"UPDATE processing_jobs SET {assignments} WHERE id=?", parameters)
         connection.commit()
+
+
+def processing_transition(job_id: str, target: str, *, stage: str | None = None, fraction: float | None = None, message: str | None = None, error_code: str | None = None, error: str | None = None, recoverable: bool | None = None, retry_count: int | None = None, cancel_requested: bool | None = None) -> None:
+    """Persist a state transition and the current projection in one SQLite transaction."""
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return
+        current = canonical_state(row)
+        validate_transition(current, target)
+        timestamp = now_iso()
+        values: dict[str, Any] = {
+            "state": target,
+            "status": legacy_status(target),
+            "updated_at": timestamp,
+        }
+        if stage is not None:
+            values["stage"] = stage
+        if fraction is not None:
+            values["fraction"] = max(0.0, min(1.0, float(fraction)))
+        if message is not None:
+            values["message"] = message
+        if error_code is not None:
+            values["error_code"] = error_code
+        if error is not None:
+            values["error"] = error
+        if target in {"QUEUED", "RETRY_WAIT"}:
+            values["error_code"] = None
+            values["error"] = None
+        if recoverable is not None:
+            values["recoverable"] = int(recoverable)
+        if retry_count is not None:
+            values["retry_count"] = int(retry_count)
+        if cancel_requested is not None:
+            values["cancel_requested"] = int(cancel_requested)
+        assignment = ", ".join(f"{key}=?" for key in values)
+        connection.execute(f"UPDATE processing_jobs SET {assignment} WHERE id=?", (*values.values(), job_id))
+        connection.execute(
+            "INSERT INTO processing_job_transitions (job_id, from_state, to_state, stage, fraction, message, error_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (job_id, current, target, stage or row["stage"], values.get("fraction", row["fraction"]), message or row["message"], error_code or row["error_code"], timestamp),
+        )
+        connection.commit()
+
+
+def processing_transition_history(job_id: str) -> list[dict[str, Any]]:
+    with closing(db()) as connection:
+        rows = connection.execute("SELECT * FROM processing_job_transitions WHERE job_id=? ORDER BY id", (job_id,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def processing_cancel_requested(job_id: str) -> bool:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT cancel_requested FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    return bool(row and row["cancel_requested"])
 
 
 def read_pipeline_checkpoint(job_dir: Path, name: str) -> dict[str, Any] | None:
@@ -741,15 +845,18 @@ def uploaded_source_path(source: str) -> str | None:
 
 def run_processing_job(external_id: str, source: str | None = None, llm: str | None = None, captions: str | None = None, mode: str | None = None) -> None:
     with closing(db()) as connection:
-        row = connection.execute("SELECT source, llm, captions, mode, pipeline_job_id FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
+        row = connection.execute("SELECT source, llm, captions, mode, pipeline_job_id, state, cancel_requested FROM processing_jobs WHERE id=?", (external_id,)).fetchone()
     if not row:
+        return
+    if row["cancel_requested"] or row["state"] == "CANCELLED":
+        processing_transition(external_id, "CANCELLED", message="Cancellation was requested before execution", error_code="JOB_CANCELLED", recoverable=False, cancel_requested=True)
         return
     source = source or row["source"]
     llm = llm or row["llm"]
     captions = captions or row["captions"]
     mode = mode or row["mode"] or "balanced"
     if llm == "gemini" and not read_server_gemini_key():
-        update_processing_job(external_id, status="failed", error="Gemini is not configured on the Gateway.", error_code="GEMINI_NOT_CONFIGURED", message="Gemini configuration is required")
+        processing_transition(external_id, "FAILED", error="Gemini is not configured on the Gateway.", error_code="GEMINI_NOT_CONFIGURED", message="Gemini configuration is required", recoverable=False)
         return
     command, environment = pipeline_command()
     pipeline_source = uploaded_source_path(source) or source
@@ -757,20 +864,33 @@ def run_processing_job(external_id: str, source: str | None = None, llm: str | N
         command.extend(["resume", str(row["pipeline_job_id"]), "--llm", llm, "--captions", captions, "--mode", mode])
     else:
         command.extend(["run", pipeline_source, "--llm", llm, "--captions", captions, "--mode", mode])
+    cancel_event = threading.Event()
+    with _processing_runtime_lock:
+        _processing_cancel_events[external_id] = cancel_event
+    process: subprocess.Popen[str] | None = None
+    stage_map = {"PREPARE": "PREPARING", "DOWNLOAD": "DOWNLOADING", "INGEST": "INGESTING", "ASR": "TRANSCRIBING", "TRANSCRIB": "TRANSCRIBING", "DIARIZ": "DIARIZING", "ANALYZ": "ANALYZING", "CANDIDATE": "CANDIDATES_READY", "SCOR": "SCORING", "EDIT": "EDITING", "RENDER": "RENDERING", "FINAL": "FINALIZING"}
     try:
+        working_directory = PIPELINE_DIR.parent if PIPELINE_DIR.parent.is_dir() else ROOT
         process = subprocess.Popen(
             command,
-            cwd=str(PIPELINE_DIR.parent),
+            cwd=str(working_directory),
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
         )
-        update_processing_job(external_id, status="running", message="Pipeline started")
+        with _processing_runtime_lock:
+            _processing_processes[external_id] = process
+        processing_transition(external_id, "PREPARING", message="Pipeline started")
         final: dict[str, Any] | None = None
         assert process.stdout is not None
         for line in process.stdout:
+            if cancel_event.is_set() or processing_cancel_requested(external_id):
+                cancel_event.set()
+                process.terminate()
+                processing_transition(external_id, "CANCELLED", message="Pipeline cancellation requested", error_code="JOB_CANCELLED", recoverable=False, cancel_requested=True)
+                return
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -778,32 +898,36 @@ def run_processing_job(external_id: str, source: str | None = None, llm: str | N
             if event.get("event") == "job":
                 update_processing_job(external_id, pipeline_job_id=event.get("job_id"), message="Job created")
             elif event.get("event") == "progress":
-                update_processing_job(
-                    external_id,
-                    status="running",
-                    stage=event.get("stage"),
-                    fraction=event.get("fraction"),
-                    message=event.get("message"),
-                )
+                raw_stage = str(event.get("stage") or "").upper()
+                target = next((value for key, value in stage_map.items() if key in raw_stage), "ANALYZING")
+                processing_transition(external_id, target, stage=event.get("stage"), fraction=event.get("fraction"), message=event.get("message"))
             elif event.get("event") == "result":
                 final = event
         process.stdout.close()
         return_code = process.wait()
+        if processing_cancel_requested(external_id) or cancel_event.is_set():
+            processing_transition(external_id, "CANCELLED", message="Pipeline cancelled", error_code="JOB_CANCELLED", recoverable=False, cancel_requested=True)
+            return
         if return_code != 0 or not final or not final.get("ok"):
             detail = (final or {}).get("error") or f"Pipeline exited with code {return_code}."
             error_code = (final or {}).get("error_code") or ("PIPELINE_START_FAILED" if return_code == 127 else "PIPELINE_FAILED")
-            update_processing_job(external_id, status="failed", error=str(detail), error_code=error_code, message="Pipeline failed")
+            processing_transition(external_id, "FAILED", error=str(detail), error_code=error_code, message="Pipeline failed", recoverable=True)
             return
         pipeline_job_id = str(final.get("job_id") or "")
         if not pipeline_job_id:
-            update_processing_job(external_id, status="failed", error="Pipeline returned no job id.", error_code="PIPELINE_RESULT_INVALID", message="Pipeline failed")
+            processing_transition(external_id, "FAILED", error="Pipeline returned no job id.", error_code="PIPELINE_RESULT_INVALID", message="Pipeline failed", recoverable=False)
             return
         results = processing_results(external_id, pipeline_job_id)
-        update_processing_job(external_id, pipeline_job_id=pipeline_job_id, status="done", fraction=1.0, stage="render", message="Clips ready", result_json=json.dumps(results, ensure_ascii=False))
-    except FileNotFoundError as error:
-        update_processing_job(external_id, status="failed", error="Pipeline executable could not be started.", error_code="PIPELINE_START_FAILED", message="Gateway worker failed")
+        update_processing_job(external_id, pipeline_job_id=pipeline_job_id, result_json=json.dumps(results, ensure_ascii=False))
+        processing_transition(external_id, "COMPLETED", fraction=1.0, stage="render", message="Clips ready", recoverable=False)
+    except FileNotFoundError:
+        processing_transition(external_id, "FAILED", error="Pipeline executable could not be started.", error_code="PIPELINE_START_FAILED", message="Gateway worker failed", recoverable=True)
     except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
-        update_processing_job(external_id, status="failed", error="Pipeline worker failed.", error_code="PIPELINE_WORKER_FAILED", message="Gateway worker failed")
+        processing_transition(external_id, "FAILED", error="Pipeline worker failed.", error_code="PIPELINE_WORKER_FAILED", message="Gateway worker failed", recoverable=True)
+    finally:
+        with _processing_runtime_lock:
+            _processing_cancel_events.pop(external_id, None)
+            _processing_processes.pop(external_id, None)
 
 
 def account_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -1011,7 +1135,10 @@ async def startup() -> None:
     init_db()
     with closing(db()) as connection:
         timestamp = now_iso()
-        connection.execute("UPDATE processing_jobs SET status='queued', error=NULL, message='Requeued after Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
+        interrupted = connection.execute("SELECT id FROM processing_jobs WHERE state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED') AND cancel_requested=0").fetchall()
+        for interrupted_row in interrupted:
+            connection.execute("UPDATE processing_jobs SET state='INTERRUPTED', status='queued', error=NULL, message='Interrupted by Gateway restart; checkpoint resume is available', recoverable=1, updated_at=? WHERE id=?", (timestamp, interrupted_row['id']))
+            connection.execute("INSERT INTO processing_job_transitions (job_id, from_state, to_state, message, created_at) VALUES (?, 'RUNNING', 'INTERRUPTED', ?, ?)", (interrupted_row['id'], 'Gateway restart recovery', timestamp))
         connection.execute("UPDATE source_jobs SET status='queued', error=NULL, message='Requeued after Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
         connection.commit()
         processing_ids = [row["id"] for row in connection.execute("SELECT id FROM processing_jobs WHERE status='queued' ORDER BY created_at").fetchall()]
@@ -1090,6 +1217,18 @@ async def health() -> dict[str, Any]:
     return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "auth_required": REQUIRE_GATEWAY_TOKEN, "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": bool(read_server_gemini_key()), "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active, "workers": {"processing": processing_worker, "sources": source_worker}, "min_free_disk_gb": MIN_FREE_DISK_GB}
 
 
+@app.get("/v1/auth/session", dependencies=[Depends(auth)])
+async def auth_session(request: Request) -> dict[str, Any]:
+    return {
+        "authenticated": bool(GATEWAY_TOKEN) or not REQUIRE_GATEWAY_TOKEN,
+        "auth_required": REQUIRE_GATEWAY_TOKEN,
+        "product": "ISM",
+        "api_version": "v1",
+        "gateway_version": app.version,
+        "request_id": getattr(request.state, "request_id", None),
+    }
+
+
 @app.get("/v1/processing/capabilities", dependencies=[Depends(auth)])
 async def processing_capabilities() -> dict[str, Any]:
     checks = pipeline_checks()
@@ -1117,6 +1256,7 @@ async def diagnostics_gemini() -> dict[str, Any]:
     return await asyncio.to_thread(gemini_probe)
 
 
+@app.get("/v1/diagnostics/pipeline", dependencies=[Depends(auth)])
 @app.post("/v1/diagnostics/pipeline", dependencies=[Depends(auth)])
 async def diagnostics_pipeline() -> dict[str, Any]:
     checks = pipeline_checks()
@@ -1282,7 +1422,7 @@ async def source_status(job_id: str) -> dict[str, Any]:
     return source_dict(row)
 
 
-@app.get("/v1/sources/jobs/{job_id}/media/{filename:path}")
+@app.get("/v1/sources/jobs/{job_id}/media/{filename:path}", dependencies=[Depends(auth)])
 async def source_media(job_id: str, filename: str) -> FileResponse:
     with closing(db()) as connection:
         row = connection.execute("SELECT status FROM source_jobs WHERE id=?", (job_id,)).fetchone()
@@ -1296,7 +1436,7 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
 
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
-async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
+async def start_processing(payload: ProcessingPayload, request: Request) -> dict[str, Any]:
     source = validate_processing_source(str(payload.source))
     if payload.llm == "gemini" and not read_server_gemini_key():
         raise HTTPException(status_code=503, detail="GEMINI_NOT_CONFIGURED: Configure Gemini on the personal Gateway.")
@@ -1310,22 +1450,26 @@ async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail="FFMPEG_UNAVAILABLE: Install FFmpeg on the processing server.")
     job_id = f"proc_{secrets.token_urlsafe(12)}"
     timestamp = now_iso()
+    correlation_id = f"cor_{secrets.token_urlsafe(10)}"
+    idempotency = payload.idempotency_key or hashlib.sha256(f"{source}|{payload.llm}|{payload.captions}|{payload.mode}".encode()).hexdigest()
     PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
     with closing(db()) as connection:
-        existing = connection.execute("SELECT id, status FROM processing_jobs WHERE source=? AND llm=? AND captions=? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1", (source, payload.llm, payload.captions)).fetchone()
+        existing = connection.execute("SELECT id, status, state FROM processing_jobs WHERE idempotency_key=? OR (source=? AND llm=? AND captions=? AND mode=? AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')) ORDER BY created_at DESC LIMIT 1", (idempotency, source, payload.llm, payload.captions, payload.mode)).fetchone()
         if existing:
-            return {"id": existing["id"], "status": existing["status"], "reused": True}
-        active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+            return {"id": existing["id"], "status": existing["status"], "state": existing["state"], "reused": True}
+        active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE state IN ('QUEUED', 'PREPARING', 'DOWNLOADING', 'INGESTING', 'TRANSCRIBING', 'DIARIZING', 'ANALYZING', 'CANDIDATES_READY', 'SCORING', 'EDITING', 'RENDERING', 'FINALIZING', 'RETRY_WAIT', 'INTERRUPTED') AND cancel_requested=0").fetchone()["count"]
         if active >= MAX_ACTIVE_PROCESSING_JOBS:
             raise HTTPException(status_code=429, detail="A processing job is already active. Wait for it to finish.")
         connection.execute(
-            "INSERT INTO processing_jobs (id, source, llm, captions, mode, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
-            (job_id, source, payload.llm, payload.captions, payload.mode, timestamp, timestamp),
+            "INSERT INTO processing_jobs (id, source, llm, captions, mode, status, state, recoverable, retry_count, cancel_requested, correlation_id, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'QUEUED', 1, 0, 0, ?, ?, ?, ?)",
+            (job_id, source, payload.llm, payload.captions, payload.mode, correlation_id, idempotency, timestamp, timestamp),
         )
+        connection.execute("INSERT INTO processing_job_transitions (job_id, from_state, to_state, message, created_at) VALUES (?, NULL, 'QUEUED', ?, ?)", (job_id, "Job accepted", timestamp))
         connection.commit()
     if not _processing_workers.submit(job_id):
+        processing_transition(job_id, "FAILED", error="Processing worker is not ready.", error_code="WORKER_NOT_READY", message="Retry shortly", recoverable=True)
         raise HTTPException(status_code=503, detail="Processing worker is not ready. Retry shortly.")
-    return {"id": job_id, "status": "queued"}
+    return {"id": job_id, "job_id": job_id, "status": "queued", "state": "QUEUED", "correlation_id": correlation_id, "request_id": getattr(request.state, "request_id", None)}
 
 
 @app.get("/v1/processing/jobs/{job_id}", dependencies=[Depends(auth)])
@@ -1337,7 +1481,66 @@ async def processing_status(job_id: str) -> dict[str, Any]:
     return processing_dict(row)
 
 
-@app.get("/v1/processing/jobs/{job_id}/media/{filename:path}")
+@app.post("/v1/processing/jobs/{job_id}/cancel", dependencies=[Depends(auth)])
+async def cancel_processing(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    state = canonical_state(row)
+    if state == "COMPLETED":
+        raise HTTPException(status_code=409, detail="Completed processing jobs cannot be cancelled")
+    if state == "CANCELLED":
+        return processing_dict(row)
+    with closing(db()) as connection:
+        connection.execute("UPDATE processing_jobs SET cancel_requested=1, updated_at=? WHERE id=?", (now_iso(), job_id))
+        connection.commit()
+    with _processing_runtime_lock:
+        event = _processing_cancel_events.get(job_id)
+        process = _processing_processes.get(job_id)
+        if event:
+            event.set()
+        if process and process.poll() is None:
+            process.terminate()
+    processing_transition(job_id, "CANCELLED", message="Cancellation requested", error_code="JOB_CANCELLED", recoverable=False, cancel_requested=True)
+    return await processing_status(job_id)
+
+
+@app.post("/v1/processing/jobs/{job_id}/retry", dependencies=[Depends(auth)])
+async def retry_processing(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    state = canonical_state(row)
+    if state not in {"FAILED", "RETRY_WAIT"}:
+        raise HTTPException(status_code=409, detail="Only failed or retry-waiting jobs can be retried")
+    retry_count = int(row["retry_count"] or 0) + 1
+    if retry_count > MAX_RETRY_COUNT:
+        raise HTTPException(status_code=409, detail="Maximum processing retries exceeded")
+    processing_transition(job_id, "RETRY_WAIT", message="Retry scheduled", error_code="RETRY_SCHEDULED", recoverable=True, retry_count=retry_count, cancel_requested=False)
+    processing_transition(job_id, "QUEUED", message="Retry queued", error=None, error_code=None, cancel_requested=False)
+    if not _processing_workers.submit(job_id):
+        raise HTTPException(status_code=503, detail="Processing worker is not ready. Retry shortly.")
+    return await processing_status(job_id)
+
+
+@app.post("/v1/processing/jobs/{job_id}/resume", dependencies=[Depends(auth)])
+async def resume_processing(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    state = canonical_state(row)
+    if state not in {"INTERRUPTED", "FAILED", "RETRY_WAIT"}:
+        raise HTTPException(status_code=409, detail="Only interrupted or recoverable jobs can be resumed")
+    processing_transition(job_id, "QUEUED", message="Resume queued from pipeline checkpoint", error_code=None, cancel_requested=False, recoverable=True)
+    if not _processing_workers.submit(job_id):
+        raise HTTPException(status_code=503, detail="Processing worker is not ready. Retry shortly.")
+    return await processing_status(job_id)
+
+
+@app.get("/v1/processing/jobs/{job_id}/media/{filename:path}", dependencies=[Depends(auth)])
 async def processing_media(job_id: str, filename: str) -> FileResponse:
     with closing(db()) as connection:
         row = connection.execute("SELECT pipeline_job_id, status FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
@@ -1372,6 +1575,7 @@ async def save_analytics_snapshot(payload: AnalyticsSnapshotPayload) -> dict[str
     return {"account_id": payload.account_id, "metric_date": payload.metric_date.isoformat(), "status": "stored", "source": payload.source, "fetched_at": timestamp}
 
 
+@app.get("/v1/analytics", dependencies=[Depends(auth)])
 @app.get("/v1/analytics/summary", dependencies=[Depends(auth)])
 async def analytics_summary(days: int = 30) -> dict[str, Any]:
     days = max(1, min(days, 90))
@@ -1644,6 +1848,73 @@ async def social_capabilities() -> dict[str, Any]:
     }
 
 
+@app.get("/v1/social/accounts", dependencies=[Depends(auth)])
+async def social_accounts() -> dict[str, Any]:
+    with closing(db()) as connection:
+        rows = connection.execute("SELECT * FROM accounts ORDER BY created_at DESC").fetchall()
+    return {"accounts": [account_dict(row) for row in rows], "capabilities": await social_capabilities()}
+
+
+@app.post("/v1/social/{platform}/connect", dependencies=[Depends(auth)])
+async def social_connect(platform: str) -> dict[str, Any]:
+    if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
+        raise HTTPException(status_code=400, detail="Unsupported platform")
+    if PROVIDER_MODE == "mock":
+        return {"platform": platform, "status": "CONNECTING", "development_only": True, "url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}"}
+    configured = {
+        "instagram": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
+        "facebook": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
+        "tiktok": bool(os.getenv("TIKTOK_CLIENT_KEY") and os.getenv("TIKTOK_CLIENT_SECRET")),
+        "youtube": bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET")),
+        "x": bool(os.getenv("X_CLIENT_ID") and os.getenv("X_CLIENT_SECRET")),
+    }[platform]
+    if not configured:
+        raise HTTPException(status_code=503, detail=f"OAUTH_NOT_CONFIGURED: Configure the {platform} OAuth adapter on the Gateway.")
+    raise HTTPException(status_code=501, detail=f"OAUTH_ADAPTER_NOT_IMPLEMENTED: The live {platform} adapter requires provider review and credentials.")
+
+
+@app.get("/v1/social/{platform}/callback")
+async def social_callback(platform: str, state: str | None = None, code: str | None = None) -> dict[str, Any]:
+    if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
+        raise HTTPException(status_code=400, detail="Unsupported platform")
+    if PROVIDER_MODE != "mock":
+        raise HTTPException(status_code=501, detail="OAUTH_CALLBACK_NOT_CONFIGURED: Live OAuth callback is not configured.")
+    if not state or not code:
+        raise HTTPException(status_code=422, detail="OAUTH_CALLBACK_INVALID: state and code are required")
+    account_id = f"acct_{secrets.token_urlsafe(8)}"
+    timestamp = now_iso()
+    with closing(db()) as connection:
+        connection.execute("INSERT INTO accounts (id, platform, account_name, provider_account_id, status, daily_limit, min_gap_seconds, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', ?, ?, ?, ?)", (account_id, platform, f"mock_{platform}_account", f"mock_{account_id}", ACCOUNT_DAILY_LIMIT, ACCOUNT_MIN_GAP_SECONDS, timestamp, timestamp))
+        connection.commit()
+        row = connection.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+    return {"platform": platform, "status": "CONNECTED", "account": account_dict(row), "development_only": True}
+
+
+@app.post("/v1/social/{platform}/disconnect", dependencies=[Depends(auth)])
+async def social_disconnect(platform: str, account_id: str | None = None) -> dict[str, Any]:
+    if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
+        raise HTTPException(status_code=400, detail="Unsupported platform")
+    with closing(db()) as connection:
+        if account_id:
+            cursor = connection.execute("DELETE FROM accounts WHERE id=? AND platform=?", (account_id, platform))
+        else:
+            cursor = connection.execute("DELETE FROM accounts WHERE platform=?", (platform,))
+        connection.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Social account not found")
+    return {"platform": platform, "status": "DISCONNECTED", "account_id": account_id}
+
+
+@app.get("/v1/social/{platform}/status", dependencies=[Depends(auth)])
+async def social_status(platform: str) -> dict[str, Any]:
+    if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
+        raise HTTPException(status_code=400, detail="Unsupported platform")
+    with closing(db()) as connection:
+        rows = connection.execute("SELECT * FROM accounts WHERE platform=? ORDER BY created_at DESC", (platform,)).fetchall()
+    capability = next(item for item in (await social_capabilities())["providers"] if item["platform"] == platform)
+    return {"platform": platform, "status": "CONNECTED" if rows else ("NOT_CONFIGURED" if not capability["configured"] else "DISCONNECTED"), "accounts": [account_dict(row) for row in rows], "capabilities": capability}
+
+
 @app.get("/v1/social/oauth/{platform}/start", dependencies=[Depends(auth)])
 async def oauth_start(platform: str) -> dict[str, str]:
     if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
@@ -1666,6 +1937,42 @@ async def oauth_complete(platform: str) -> str:
         )
         connection.commit()
     return f"<h1>ISM mock OAuth complete</h1><p>Connected {platform}. You can close this tab and return to ISM.</p>"
+
+
+@app.get("/v1/publishing/jobs", dependencies=[Depends(auth)])
+async def list_publishing_jobs() -> list[dict[str, Any]]:
+    return await list_scheduled()
+
+
+@app.post("/v1/publishing/jobs", dependencies=[Depends(auth)])
+async def create_publishing_job(payload: PostPayload) -> dict[str, Any]:
+    return save_post(payload)
+
+
+@app.get("/v1/publishing/jobs/{post_id}", dependencies=[Depends(auth)])
+async def get_publishing_job(post_id: str) -> dict[str, Any]:
+    result = await get_post(post_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Publishing job not found")
+    return result
+
+
+@app.post("/v1/publishing/jobs/{post_id}/cancel", dependencies=[Depends(auth)])
+async def cancel_publishing_job(post_id: str) -> dict[str, Any]:
+    return await cancel_schedule(post_id)
+
+
+@app.post("/v1/publishing/jobs/{post_id}/retry", dependencies=[Depends(auth)])
+async def retry_publishing_job(post_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        cursor = connection.execute("UPDATE posts SET status='scheduled', error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=? AND status IN ('failed', 'cancelled')", (now_iso(), post_id))
+        connection.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=409, detail="Publishing job is not retryable")
+    result = await get_post(post_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Publishing job not found")
+    return result
 
 
 @app.get("/v1/social/schedule", dependencies=[Depends(auth)])

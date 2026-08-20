@@ -241,6 +241,9 @@ class VideoProcessingWorker(
             sourceUri = sourceUri,
             captionTheme = captionTheme,
             mode = processingMode,
+            onJobCreated = { remoteJobId ->
+                jobs.setRemoteGatewayJobId(jobId, remoteJobId)
+            },
             onProgress = { progress ->
                 jobs.updateState(
                     jobId = jobId,

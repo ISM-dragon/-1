@@ -17,7 +17,8 @@ class SocialGatewayClient {
         runCatching {
             val baseUrl = validateBaseUrl(config.baseUrl)
             val summary = JSONObject(getBody("$baseUrl/v1/dashboard/summary", config.token))
-            val accountsJson = JSONArray(getBody("$baseUrl/v1/accounts", config.token))
+            val accountsPayload = JSONObject(getBody("$baseUrl/v1/social/accounts", config.token))
+            val accountsJson = accountsPayload.optJSONArray("accounts") ?: JSONArray()
             val postsJson = JSONArray(getBody("$baseUrl/v1/social/schedule", config.token))
 
             val statusCounts = mutableMapOf<String, Int>()
@@ -42,9 +43,15 @@ class SocialGatewayClient {
     suspend fun testConnection(config: GatewayConfig): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val baseUrl = validateBaseUrl(config.baseUrl)
-            val response = JSONObject(getBody("$baseUrl/health", ""))
-            if (!response.optBoolean("ok", false)) error("Gateway returned an unhealthy response")
-            "Gateway متصل · وضع ${response.optString("provider_mode", "unknown")}"
+            val response = JSONObject(getBody("$baseUrl/health", config.token))
+            if (!response.optBoolean("ok", false)) error("Gateway FAILED: ${response.optString("status", "degraded")}")
+            val session = JSONObject(getBody("$baseUrl/v1/auth/session", config.token))
+            require(session.optBoolean("authenticated", false)) { "Gateway authentication FAILED" }
+            val capabilities = JSONObject(getBody("$baseUrl/v1/processing/capabilities", config.token))
+            val processingReady = capabilities.optBoolean("gateway", false) && capabilities.optBoolean("storage", false)
+            val pipelineReady = capabilities.optBoolean("pipeline", false) && capabilities.optBoolean("ffmpeg", false)
+            val aiReady = capabilities.optBoolean("gemini", false) || capabilities.optBoolean("ollama", false)
+            "Gateway CONNECTED · Processing ${if (processingReady) "READY" else "NOT READY"} · Pipeline ${if (pipelineReady) "READY" else "NOT READY"} · AI ${if (aiReady) "READY" else "NOT CONFIGURED"}"
         }
     }
 

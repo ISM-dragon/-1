@@ -263,6 +263,13 @@ export const api = {
     if (!response.ok) throw new Error(`OAuth gateway returned ${response.status}.`)
     return (await response.json()) as { url: string }
   },
+  socialScheduleList: async (baseUrl: string, token: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/schedule'), {
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Schedule list request returned ${response.status}.`)
+    return (await response.json()) as Array<Record<string, unknown>>
+  },
   socialSchedule: async (baseUrl: string, token: string, post: unknown) => {
     const response = await fetch(gatewayEndpoint(baseUrl, '/v1/social/schedule'), {
       method: 'POST',

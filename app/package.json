@@ -1,10 +1,12 @@
 {
   "name": "publikclip-app",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.10.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc -b",
+    "check": "tsc -b",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

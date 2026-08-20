@@ -50,7 +50,7 @@ class GeminiGatewayTests(unittest.TestCase):
             fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
             db_path = root / "gateway.db"
             processing_root = root / "processing"
-            with patch.object(main, "DB_PATH", db_path), patch.object(main, "PROCESSING_ROOT", processing_root), patch.object(main, "PIPELINE_DIR", Path("/home/ubuntu/github_clone/repo/pipeline")), patch.object(main, "PIPELINE_BIN", str(fake)), patch.object(main, "GEMINI_API_KEY", "server-secret-value"), patch.dict(os.environ, {"ISM_TEST_MARKER": str(marker)}, clear=False):
+            with patch.object(main, "DB_PATH", db_path), patch.object(main, "PROCESSING_ROOT", processing_root), patch.object(main, "PIPELINE_DIR", main.ROOT.parent / "pipeline"), patch.object(main, "PIPELINE_BIN", str(fake)), patch.object(main, "GEMINI_API_KEY", "server-secret-value"), patch.dict(os.environ, {"ISM_TEST_MARKER": str(marker)}, clear=False):
                 main.init_db()
                 with main.closing(main.db()) as connection:
                     connection.execute("INSERT INTO processing_jobs (id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)", ("proc_test", "https://example.com/video", "gemini", "classic", main.now_iso(), main.now_iso()))
