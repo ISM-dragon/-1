@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -62,19 +63,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
-import com.example.data.model.AutoPublishResult
 import com.example.data.model.Clip
 import com.example.data.repository.OpusRepository
 import com.example.ui.components.AutoCaptionStudioCard
-import com.example.ui.components.AutoPublishResultDialog
-import com.example.ui.components.AutoPublishSettingsDialog
-import com.example.ui.components.BRollSuggestionCard
-import com.example.ui.components.CaptionStylePicker
-import com.example.ui.components.DedicatedCaptionGeneratorCard
-import com.example.ui.components.DirectPublisherDialog
-import com.example.ui.components.SocialCopyCard
 import com.example.ui.components.VideoSimPlayer
 import com.example.ui.components.ViralityRadarCard
 import com.example.ui.theme.OpusBorder
@@ -88,16 +79,13 @@ import com.example.ui.theme.OpusPrimaryViolet
 import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusViralEmerald
-import com.example.ui.theme.OpusVioletGlow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
 fun ClipStudioScreen(
     repository: OpusRepository,
     initialProjectId: Long?,
-    modifier: Modifier = Modifier,
-    onOpenComparison: ((Long) -> Unit)? = null
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -119,7 +107,7 @@ fun ClipStudioScreen(
 
     var selectedCaptionTheme by remember { mutableStateOf("Opus Neon") }
     var selectedLayout by remember { mutableStateOf("9:16 Full Screen") }
-    var activeTab by remember { mutableIntStateOf(1) } // Default to Auto-Captions tab for direct editing
+    var activeTab by remember { mutableIntStateOf(0) } // Start with the score summary and top clips
     var captionPosition by remember { mutableStateOf("Bottom (Safe Zone)") }
     var fontSizeSp by remember { mutableIntStateOf(14) }
     var showAutoEmojis by remember { mutableStateOf(true) }
@@ -132,40 +120,6 @@ fun ClipStudioScreen(
     var exportProgress by remember { mutableIntStateOf(0) }
     var exportResolution by remember { mutableStateOf("1080p (Full HD)") }
     var removeWatermark by remember { mutableStateOf(true) }
-
-    var showAutoPublishSettingsDialog by remember { mutableStateOf(false) }
-    var autoPublishDialogData by remember { mutableStateOf<Pair<Clip, AutoPublishResult>?>(null) }
-    var isPublishingNow by remember { mutableStateOf(false) }
-
-    var showDirectPublisherDialog by remember { mutableStateOf(false) }
-    var directPubPlatform by remember { mutableStateOf("TikTok") }
-    var directPubCaption by remember { mutableStateOf("") }
-
-    if (showAutoPublishSettingsDialog) {
-        AutoPublishSettingsDialog(
-            repository = repository,
-            onDismiss = { showAutoPublishSettingsDialog = false }
-        )
-    }
-
-    if (showDirectPublisherDialog && activeClip != null) {
-        DirectPublisherDialog(
-            clip = activeClip,
-            repository = repository,
-            initialPlatform = directPubPlatform,
-            initialCaption = directPubCaption,
-            onDismiss = { showDirectPublisherDialog = false }
-        )
-    }
-
-    autoPublishDialogData?.let { (clip, result) ->
-        AutoPublishResultDialog(
-            clip = clip,
-            publishResult = result,
-            onDismiss = { autoPublishDialogData = null },
-            onOpenStudio = { autoPublishDialogData = null }
-        )
-    }
 
     if (displayedClips.isEmpty()) {
         Box(
@@ -183,7 +137,7 @@ fun ClipStudioScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = if (initialProjectId != null && initialProjectId > 0) "لا توجد مقاطع محفوظة لهذا المشروع" else "No Clips Generated Yet",
+                    text = if (initialProjectId != null && initialProjectId > 0) "لا توجد مقاطع محفوظة لهذا المشروع" else "لم تُولّد مقاطع بعد",
                     style = MaterialTheme.typography.titleMedium.copy(
                         color = OpusTextPrimary,
                         fontWeight = FontWeight.Bold
@@ -191,9 +145,9 @@ fun ClipStudioScreen(
                 )
                 Text(
                     text = if (initialProjectId != null && initialProjectId > 0) {
-                        "لم يتم إنشاء ملفات مقاطع لهذا المشروع بعد. افحص حالة المعالجة أو أعد التصدير."
+                        "ستظهر المقاطع هنا بعد اكتمال التوليد.",
                     } else {
-                        "ارفع فيديو محلياً أولاً لإنشاء مقاطعك الحقيقية."
+                        "ابدأ من Home باختيار فيديو طويل.",
                     },
                     style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary),
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
@@ -219,14 +173,14 @@ fun ClipStudioScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Generated Viral Shorts (${displayedClips.size})",
+                    text = "أفضل المقاطع (${displayedClips.size})",
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
                         color = OpusTextPrimary
                     )
                 )
                 Text(
-                    text = "Ranked by Virality",
+                    text = "مرتبة حسب النتيجة",
                     fontSize = 11.sp,
                     color = OpusViralEmerald,
                     fontWeight = FontWeight.SemiBold
@@ -273,7 +227,7 @@ fun ClipStudioScreen(
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text(
-                                        text = "${clip.viralityScore} Score",
+                                        text = "${clip.viralityScore} / 100",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Black,
                                         color = scoreColor
@@ -327,38 +281,6 @@ fun ClipStudioScreen(
             }
 
             item {
-                var isExecutingAiCommand by remember { mutableStateOf(false) }
-                var lastAiCommandFeedback by remember { mutableStateOf<String?>(null) }
-
-                com.example.ui.components.AiEditingCommandBar(
-                    isProcessing = isExecutingAiCommand,
-                    lastAiFeedback = lastAiCommandFeedback,
-                    onExecuteCommand = { cmd ->
-                        isExecutingAiCommand = true
-                        coroutineScope.launch {
-                            try {
-                                val feedback = repository.executeAiEditingCommand(
-                                    commandPrompt = cmd,
-                                    clipTitle = activeClip.title,
-                                    currentTranscript = activeClip.transcript,
-                                    currentViralityScore = activeClip.viralityScore
-                                )
-                                lastAiCommandFeedback = feedback
-                                Toast.makeText(context, "تم تطبيق أمر التحرير بنجاح", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                val message = e.localizedMessage?.takeIf { it.isNotBlank() }
-                                    ?: "تعذر تنفيذ أمر التحرير."
-                                lastAiCommandFeedback = "فشل التحرير: $message"
-                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                            } finally {
-                                isExecutingAiCommand = false
-                            }
-                        }
-                    }
-                )
-            }
-
-            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -388,40 +310,13 @@ fun ClipStudioScreen(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         Text(
-                            text = if (activeClip.isFavorite) "Saved in Favorites" else "Save Clip",
+                            text = if (activeClip.isFavorite) "محفوظ" else "حفظ المقطع",
                             fontSize = 12.sp,
                             color = OpusTextSecondary
                         )
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Direct In-App API Publish Action Button
-                        Button(
-                            onClick = {
-                                directPubPlatform = "TikTok"
-                                directPubCaption = ""
-                                showDirectPublisherDialog = true
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = OpusDarkSurfaceHighlight),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, OpusElectricCyan),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.testTag("direct_publish_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Send,
-                                contentDescription = "Publish",
-                                tint = OpusElectricCyan,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "نشر API مباشر",
-                                fontWeight = FontWeight.Bold,
-                                color = OpusElectricCyan,
-                                fontSize = 12.sp
-                            )
-                        }
-
                         // Export Short Button
                         Button(
                             onClick = { showExportModal = true },
@@ -437,7 +332,7 @@ fun ClipStudioScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Export",
+                                text = "تصدير",
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
                                 fontSize = 12.sp
@@ -464,7 +359,7 @@ fun ClipStudioScreen(
                         .clip(RoundedCornerShape(10.dp))
                         .border(1.dp, OpusBorder, RoundedCornerShape(10.dp))
                 ) {
-                    listOf("Virality Radar", "Auto-Captions & STT", "مولد الكابشن الذكي", "AI B-Roll", "Social Copy").forEachIndexed { index, title ->
+                    listOf("النتيجة", "الترجمة", "التحرير").forEachIndexed { index, title ->
                         Tab(
                             selected = activeTab == index,
                             onClick = { activeTab = index },
@@ -486,9 +381,7 @@ fun ClipStudioScreen(
                 0 -> item {
                     ViralityRadarCard(
                         clip = activeClip,
-                        onCompareClick = {
-                            onOpenComparison?.invoke(activeClip.id)
-                        }
+                            onCompareClick = null
                     )
                 }
                 1 -> item {
@@ -509,21 +402,13 @@ fun ClipStudioScreen(
                     )
                 }
                 2 -> item {
-                    DedicatedCaptionGeneratorCard(
-                        clip = activeClip,
-                        repository = repository,
-                        onDirectPublishClick = { platform, caption ->
-                            directPubPlatform = platform
-                            directPubCaption = caption
-                            showDirectPublisherDialog = true
+                    EditorControls(
+                        selectedLayout = selectedLayout,
+                        onLayoutChange = { newLayout ->
+                            selectedLayout = newLayout
+                            coroutineScope.launch { repository.updateLayoutType(activeClip.id, newLayout) }
                         }
                     )
-                }
-                3 -> item {
-                    BRollSuggestionCard(bRollPromptsJson = activeClip.bRollPromptsJson)
-                }
-                4 -> item {
-                    SocialCopyCard(socialCopyJson = activeClip.socialCopyJson)
                 }
             }
         }
@@ -539,7 +424,7 @@ fun ClipStudioScreen(
             containerColor = OpusDarkSurface,
             title = {
                 Text(
-                    text = "Export High-Definition Short",
+                    text = "تصدير المقطع",
                     fontWeight = FontWeight.Bold,
                     color = OpusTextPrimary,
                     fontSize = 16.sp
@@ -548,7 +433,7 @@ fun ClipStudioScreen(
             text = {
                 Column {
                     Text(
-                        text = "Choose resolution & rendering parameters:",
+                        text = "اختر الجودة وإعدادات التصدير.",
                         fontSize = 12.sp,
                         color = OpusTextSecondary
                     )
@@ -600,13 +485,13 @@ fun ClipStudioScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Burn-In AI Dynamic Subtitles",
+                                text = "تضمين الترجمة داخل الفيديو",
                                 fontSize = 12.sp,
                                 color = OpusTextPrimary,
                                 fontWeight = FontWeight.Medium
                             )
                             Text(
-                                text = "Theme: $selectedCaptionTheme ($captionPosition)",
+                                text = "النمط: $selectedCaptionTheme • $captionPosition",
                                 fontSize = 10.sp,
                                 color = OpusElectricCyan
                             )
@@ -618,7 +503,7 @@ fun ClipStudioScreen(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = if (burnInSubtitles) "Hardcoded" else "Soft Sub",
+                                text = if (burnInSubtitles) "مضمّنة" else "ملف ترجمة",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (burnInSubtitles) Color.Black else OpusTextSecondary
@@ -639,7 +524,7 @@ fun ClipStudioScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Remove ISM Watermark",
+                            text = "إزالة علامة ISM",
                             fontSize = 12.sp,
                             color = OpusTextPrimary,
                             fontWeight = FontWeight.Medium
@@ -651,7 +536,7 @@ fun ClipStudioScreen(
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = if (removeWatermark) "Pro Enabled" else "Free Tier",
+                                text = if (removeWatermark) "مفعّل" else "افتراضي",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (removeWatermark) Color.Black else OpusTextSecondary
@@ -662,7 +547,7 @@ fun ClipStudioScreen(
                     if (isExporting) {
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = "Encoding video: $exportProgress%",
+                            text = "جارٍ تجهيز الفيديو: $exportProgress%",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = OpusElectricCyan
@@ -719,19 +604,98 @@ fun ClipStudioScreen(
                     if (isExporting) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Rendering...", color = Color.White, fontSize = 12.sp)
+                        Text("جارٍ التصدير…", color = Color.White, fontSize = 12.sp)
                     } else {
-                        Text("Start Export (Instant)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("تصدير وحفظ في المعرض", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             },
             dismissButton = {
                 if (!isExporting) {
                     TextButton(onClick = { showExportModal = false }) {
-                        Text("Cancel", color = OpusTextSecondary)
+                        Text("إلغاء", color = OpusTextSecondary)
                     }
                 }
             }
         )
+    }
+}
+
+
+@Composable
+private fun EditorControls(
+    selectedLayout: String,
+    onLayoutChange: (String) -> Unit
+) {
+    val layouts = listOf(
+        "9:16 Full Screen" to "9:16 عمودي",
+        "Auto Split-Screen" to "تقسيم تلقائي",
+        "1:1 Square" to "1:1 مربع"
+    )
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("editor_framing_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, OpusBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Crop,
+                    contentDescription = "تأطير الكاميرا",
+                    tint = OpusElectricCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = "تأطير الكاميرا",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            color = OpusTextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Text(
+                        text = "اختر كيف يظهر المتحدث داخل المقطع.",
+                        style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            layouts.forEach { (value, label) ->
+                val selected = selectedLayout == value
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (selected) OpusDarkSurfaceHighlight else OpusDarkSurfaceVariant)
+                        .border(1.dp, if (selected) OpusElectricCyan else OpusBorder, RoundedCornerShape(10.dp))
+                        .clickable { onLayoutChange(value) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag("editor_layout_$value"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (selected) Icons.Default.Check else Icons.Default.Crop,
+                        contentDescription = null,
+                        tint = if (selected) OpusElectricCyan else OpusTextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = if (selected) OpusTextPrimary else OpusTextSecondary,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Text(
+                text = "تظهر الترجمة من تبويب الترجمة، ويحفظ التصدير هذا الإطار.",
+                style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary)
+            )
+        }
     }
 }

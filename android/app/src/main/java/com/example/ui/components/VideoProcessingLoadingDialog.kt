@@ -187,7 +187,7 @@ fun VideoProcessingLoadingDialog(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "محرك الذكاء الاصطناعي Gemini API قيد التشغيل",
+                                text = "ISM يحلل الفيديو الآن",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = OpusElectricCyan
@@ -298,25 +298,25 @@ fun VideoProcessingLoadingDialog(
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             ProcessingStageRow(
                                 stepIndex = 1,
-                                title = "تفريغ وتحليل الصوت (AI Speech)",
+                                title = "تفريغ وتحليل الصوت",
                                 icon = Icons.Default.GraphicEq,
                                 currentStepNum = timelineStep
                             )
                             ProcessingStageRow(
                                 stepIndex = 2,
-                                title = "فحص منحنى الاحتفاظ والخطاف (Hooks)",
+                                title = "اكتشاف أفضل اللحظات",
                                 icon = Icons.Default.TrendingUp,
                                 currentStepNum = timelineStep
                             )
                             ProcessingStageRow(
                                 stepIndex = 3,
-                                title = "احتساب درجات الفيروسية ومطابقة النماذج",
+                                title = "حساب نتيجة كل مقطع",
                                 icon = Icons.Default.Psychology,
                                 currentStepNum = timelineStep
                             )
                             ProcessingStageRow(
                                 stepIndex = 4,
-                                title = "توليد الترجمة الحركية وأبعاد 9:16",
+                                title = "تجهيز الترجمة والتأطير",
                                 icon = Icons.Default.Subtitles,
                                 currentStepNum = timelineStep
                             )
@@ -340,7 +340,7 @@ fun VideoProcessingLoadingDialog(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "المعالجة جارية حتى استجابة API...",
+                                text = "يمكنك ترك التطبيق مفتوحاً أو العودة لاحقاً.",
                                 fontSize = 10.sp,
                                 color = OpusTextSecondary
                             )
@@ -377,8 +377,8 @@ private fun localizedStageName(stage: String): String = when (stage.uppercase())
     "SEMANTIC_ANALYSIS" -> "التحليل الدلالي"
     "CLIP_DETECTION" -> "اختيار المقاطع"
     "VIRALITY_SCORING" -> "تقييم المقاطع"
-    "HOOK_GENERATION" -> "تحليل Gemini"
-    "CAPTION_SYNTHESIS" -> "إنشاء الكابتشن"
+    "HOOK_GENERATION" -> "تحليل الذكاء الاصطناعي"
+    "CAPTION_SYNTHESIS" -> "إنشاء الترجمة"
     "SMART_REFRAMING" -> "إعادة التأطير"
     "RENDERING_EXPORT" -> "تصدير MP4"
     "RETRY_WAIT" -> "انتظار إعادة المحاولة"
