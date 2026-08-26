@@ -145,9 +145,9 @@ fun ClipStudioScreen(
                 )
                 Text(
                     text = if (initialProjectId != null && initialProjectId > 0) {
-                        "ستظهر المقاطع هنا بعد اكتمال التوليد.",
+                        "ستظهر المقاطع هنا بعد اكتمال التوليد."
                     } else {
-                        "ابدأ من Home باختيار فيديو طويل.",
+                        "ابدأ من Home باختيار فيديو طويل."
                     },
                     style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary),
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
