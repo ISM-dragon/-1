@@ -108,6 +108,7 @@ fun AutoCaptionStudioCard(
     onUppercaseChange: (Boolean) -> Unit,
     onSeekToSec: (Float) -> Unit,
     repository: OpusRepository,
+    sourceUri: String,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -220,7 +221,7 @@ fun AutoCaptionStudioCard(
                             try {
                                 repository.reparseAndSyncSpeechToText(
                                     clipId = clip.id,
-                                    transcriptOrAudio = clip.transcript,
+                                    transcriptOrAudio = sourceUri,
                                     durationSec = clip.durationSec.toFloat(),
                                     language = selectedLanguage,
                                     captionTheme = selectedCaptionTheme

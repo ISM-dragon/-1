@@ -91,6 +91,8 @@ fun ClipStudioScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val allClips by repository.allClips.collectAsState(initial = emptyList())
+    val allProjects by repository.allProjects.collectAsState(initial = emptyList())
+    val activeProject = allProjects.firstOrNull { it.id == initialProjectId }
     val displayedClips = remember(allClips, initialProjectId) {
         if (initialProjectId != null && initialProjectId > 0) allClips.filter { it.projectId == initialProjectId } else emptyList()
     }
@@ -230,7 +232,8 @@ fun ClipStudioScreen(
                     isUppercase = isUppercase,
                     onUppercaseChange = { isUppercase = it },
                     onSeekToSec = { externalSeekSec = it },
-                    repository = repository
+                    repository = repository,
+                    sourceUri = activeProject?.sourceUrl.orEmpty()
                 )
             } else {
                 CropCard(

@@ -25,6 +25,7 @@ import com.example.data.model.AiTemplateRecommendation
 import com.example.data.model.AnimatedWord
 import com.example.data.model.AutoPublishConfig
 import com.example.data.model.AutoPublishResult
+import com.example.data.model.BRollIdea
 import com.example.data.model.Clip
 import com.example.data.model.ClipGenerationData
 import com.example.data.model.DedicatedCaptionResult
@@ -45,7 +46,9 @@ import com.example.data.remote.GeminiClipService
 import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.remote.SpeechToTextService
 import com.example.data.remote.SocialGatewayClient
+import com.example.data.video.CaptionCue
 import com.example.data.video.CaptionSidecarWriter
+import com.example.data.video.ExportAspectRatio
 import com.example.data.video.FaceTrackingAnalyzer
 import com.example.data.video.LocalMediaAnalyzer
 import com.example.data.video.Media3VideoProcessor
@@ -53,6 +56,9 @@ import com.example.data.video.MediaUriStabilizer
 import com.example.data.worker.VideoProcessingWorker
 import com.example.domain.analysis.AnalysisValidator
 import com.example.domain.analysis.Transcript
+import com.example.domain.ai.OnDeviceAnalysisResult
+import com.example.domain.model.ClipEditState
+import kotlin.math.roundToInt
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -701,7 +707,9 @@ class OpusRepository(context: Context) {
             .setInputData(input)
             .setConstraints(
                 Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .setRequiredNetworkType(
+                        if (_gatewayConfig.value.baseUrl.isBlank()) NetworkType.NOT_REQUIRED else NetworkType.CONNECTED
+                    )
                     .build()
             )
             .addTag("opus_video_processing")
@@ -754,6 +762,89 @@ class OpusRepository(context: Context) {
             )
         }
         clipDao.insertClips(entities)
+        projectId
+    }
+
+    suspend fun importOnDeviceProcessingResult(
+        title: String,
+        sourceUri: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String,
+        result: OnDeviceAnalysisResult
+    ): Long = withContext(Dispatchers.IO) {
+        require(result.candidates.isNotEmpty()) { "لم يُنتج المسار المحلي أي مقاطع قابلة للحفظ." }
+        val sourceDurationSec = result.transcript.durationSec.roundToInt().coerceAtLeast(durationMinutes * 60)
+        val projectId = projectDao.insertProject(
+            Project(
+                title = title,
+                sourceUrl = sourceUri,
+                sourceDurationSec = sourceDurationSec,
+                status = "COMPLETED",
+                targetPlatform = targetPlatform,
+                captionTheme = captionTheme,
+                clipCount = result.candidates.size,
+                bestViralityScore = result.candidates.maxOf { (it.confidence * 100f).roundToInt() }
+            )
+        )
+        val wordsAdapter: JsonAdapter<List<AnimatedWord>> = moshi.adapter(
+            Types.newParameterizedType(List::class.java, AnimatedWord::class.java)
+        )
+        val emptyBroll = moshi.adapter<List<BRollIdea>>(
+            Types.newParameterizedType(List::class.java, BRollIdea::class.java)
+        ).toJson(emptyList())
+        val emptySocial = moshi.adapter<List<SocialPostCopy>>(
+            Types.newParameterizedType(List::class.java, SocialPostCopy::class.java)
+        ).toJson(emptyList())
+
+        val clips = result.candidates.mapIndexed { index, candidate ->
+            val duration = (candidate.endSec - candidate.startSec).roundToInt().coerceAtLeast(1)
+            val timedWords = result.transcript.segments.flatMap { it.words }
+                .filter { it.startSec >= candidate.startSec && it.endSec <= candidate.endSec }
+                .ifEmpty {
+                    result.transcript.segments
+                        .filter { it.startSec < candidate.endSec && it.endSec > candidate.startSec }
+                        .map { segment ->
+                            com.example.domain.analysis.WordTimestamp(
+                                word = segment.text,
+                                startSec = segment.startSec,
+                                endSec = segment.endSec,
+                                confidence = segment.confidence
+                            )
+                        }
+                }
+                .map { word ->
+                    val text = word.word.trim()
+                    AnimatedWord(
+                        word = text,
+                        startSec = (word.startSec - candidate.startSec).coerceAtLeast(0f),
+                        endSec = (word.endSec - candidate.startSec).coerceAtMost(duration.toFloat()),
+                        isHighlight = candidate.hook.contains(text.trimEnd('.', ',', '!', '?', '؟'), ignoreCase = true),
+                        colorHex = if (captionTheme == "Opus Neon") "#38BDF8" else "#FFFFFF"
+                    )
+                }
+                .filter { it.word.isNotBlank() && it.endSec > it.startSec }
+            val transcript = result.transcript.segments
+                .filter { it.startSec < candidate.endSec && it.endSec > candidate.startSec }
+                .joinToString(" ") { it.text }
+                .ifBlank { candidate.hook }
+            Clip(
+                projectId = projectId,
+                title = candidate.topic.ifBlank { "Clip ${index + 1}" },
+                startTimeSec = candidate.startSec.roundToInt().coerceAtLeast(0),
+                endTimeSec = candidate.endSec.roundToInt().coerceAtLeast(candidate.startSec.roundToInt() + 1),
+                durationSec = duration,
+                viralityScore = (candidate.confidence * 100f).roundToInt().coerceIn(0, 100),
+                hookScore = (candidate.confidence * 100f).roundToInt().coerceIn(0, 100),
+                retentionScore = (result.interestCurve.points.maxOfOrNull { (it.score * 100f).roundToInt() } ?: 0).coerceIn(0, 100),
+                hookExplanation = "تحليل محلي: ${candidate.reason} الإشارات: ${candidate.signals.joinToString(", ")}",
+                transcript = transcript,
+                animatedCaptionsJson = wordsAdapter.toJson(timedWords),
+                bRollPromptsJson = emptyBroll,
+                socialCopyJson = emptySocial
+            )
+        }
+        clipDao.insertClips(clips)
         projectId
     }
 
@@ -1144,12 +1235,27 @@ class OpusRepository(context: Context) {
         language: String = "English",
         captionTheme: String = "Opus Neon"
     ): List<AnimatedWord> = withContext(Dispatchers.IO) {
-        val timedWords = geminiService.generateSpeechToTextCaptions(
-            spokenTextOrAudioPrompt = transcriptOrAudio,
-            durationSec = durationSec,
-            language = language,
-            captionTheme = captionTheme
-        )
+        val transcript = transcribeLocalMediaDetailed(
+            sourceUrl = transcriptOrAudio,
+            language = language.takeIf { it.length == 2 }
+        ).getOrThrow()
+        val timedWords = transcript.segments.flatMap { segment ->
+            if (segment.words.isNotEmpty()) segment.words.map { word ->
+                AnimatedWord(
+                    word = word.word,
+                    startSec = word.startSec.coerceAtLeast(0f),
+                    endSec = word.endSec.coerceAtMost(durationSec),
+                    colorHex = if (captionTheme == "Opus Neon") "#38BDF8" else "#FFFFFF"
+                )
+            } else listOf(
+                AnimatedWord(
+                    word = segment.text,
+                    startSec = segment.startSec.coerceAtLeast(0f),
+                    endSec = segment.endSec.coerceAtMost(durationSec),
+                    colorHex = if (captionTheme == "Opus Neon") "#38BDF8" else "#FFFFFF"
+                )
+            )
+        }.filter { it.word.isNotBlank() && it.endSec > it.startSec }
 
         val animatedWordsAdapter: JsonAdapter<List<AnimatedWord>> = moshi.adapter(
             Types.newParameterizedType(List::class.java, AnimatedWord::class.java)
@@ -1181,6 +1287,65 @@ class OpusRepository(context: Context) {
             animatedWordsAdapter.fromJson(clip.animatedCaptionsJson) ?: emptyList()
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    suspend fun enqueueClipRender(clipId: Long, editState: ClipEditState): UUID = withContext(Dispatchers.IO) {
+        require(clipDao.getClipByIdSync(clipId) != null) { "المقطع المطلوب للتصيير غير موجود." }
+        val input = workDataOf(
+            com.example.data.worker.ClipRenderWorker.KEY_CLIP_ID to clipId,
+            com.example.data.worker.ClipRenderWorker.KEY_START_SEC to editState.startTimeSec,
+            com.example.data.worker.ClipRenderWorker.KEY_END_SEC to editState.endTimeSec,
+            com.example.data.worker.ClipRenderWorker.KEY_ASPECT_RATIO to editState.aspectRatio,
+            com.example.data.worker.ClipRenderWorker.KEY_CROP_CENTER_X to editState.cropCenterX,
+            com.example.data.worker.ClipRenderWorker.KEY_CAPTIONS_ENABLED to editState.captionsEnabled,
+            com.example.data.worker.ClipRenderWorker.KEY_CAPTION_PRESET to editState.captionPreset,
+            com.example.data.worker.ClipRenderWorker.KEY_CAPTION_POSITION to editState.captionPosition,
+            com.example.data.worker.ClipRenderWorker.KEY_CAPTION_STYLE to editState.captionStyle
+        )
+        val request = OneTimeWorkRequestBuilder<com.example.data.worker.ClipRenderWorker>()
+            .setInputData(input)
+            .addTag("opus_clip_render")
+            .build()
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            "opus_clip_render_$clipId",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+        request.id
+    }
+
+    suspend fun renderClip(
+        clipId: Long,
+        editState: ClipEditState,
+        onProgress: (Int) -> Unit = {}
+    ): Result<File> = withContext(Dispatchers.IO) {
+        runCatching {
+            val clip = clipDao.getClipByIdSync(clipId) ?: error("المقطع المطلوب للتصيير غير موجود.")
+            val project = projectDao.getProjectByIdSync(clip.projectId) ?: error("مشروع المقطع غير موجود.")
+            val source = project.sourceUrl.toMediaUriOrNull()
+                ?: error("مصدر الفيديو المحلي غير صالح للتصيير.")
+            val aspect = when (editState.aspectRatio) {
+                "1:1" -> ExportAspectRatio.SQUARE_1_1
+                "4:5" -> ExportAspectRatio.PORTRAIT_4_5
+                "16:9" -> ExportAspectRatio.LANDSCAPE_16_9
+                else -> ExportAspectRatio.VERTICAL_9_16
+            }
+            val cues = if (editState.captionsEnabled) decodeCaptionCues(clip) else emptyList()
+            val output = File(appContext.cacheDir, "ism_exports/clip_${clip.id}_${System.currentTimeMillis()}.mp4")
+            val rendered = videoProcessor.exportClip(
+                inputUri = source,
+                outputFile = output,
+                startTimeSec = editState.startTimeSec,
+                endTimeSec = editState.endTimeSec,
+                vertical = aspect != ExportAspectRatio.LANDSCAPE_16_9,
+                aspectRatio = aspect,
+                captionCues = cues,
+                cropCenterX = editState.cropCenterX,
+                onProgress = onProgress
+            )
+            clipDao.updateExportPath(clip.id, rendered.absolutePath)
+            rendered
         }
     }
 

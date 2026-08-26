@@ -50,7 +50,7 @@ object PipelineWorkScheduler {
             .setInputData(input)
             .setConstraints(
                 Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
                     .build()
             )
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)

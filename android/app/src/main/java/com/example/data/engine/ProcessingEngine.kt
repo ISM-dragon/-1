@@ -9,6 +9,7 @@ import java.net.URI
  */
 class ProcessingEngine {
     enum class Route {
+        LOCAL_ON_DEVICE,
         REMOTE_GATEWAY
     }
 
@@ -34,8 +35,13 @@ class ProcessingEngine {
 
         val baseUrl = gateway.baseUrl.trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return Result.failure(
-                IllegalStateException("يجب ضبط private Processing Gateway قبل بدء المعالجة.")
+            return Result.success(
+                Plan(
+                    route = Route.LOCAL_ON_DEVICE,
+                    sourceUri = trimmedSource,
+                    gatewayUrl = "",
+                    label = "on-device analysis pipeline"
+                )
             )
         }
         if (gateway.token.trim().isBlank()) {

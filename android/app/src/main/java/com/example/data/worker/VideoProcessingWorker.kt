@@ -11,7 +11,11 @@ import com.example.data.model.GatewayConfig
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.repository.OpusRepository
+import com.example.data.video.LocalMediaAnalyzer
 import com.example.data.video.MediaUriStabilizer
+import com.example.domain.ai.AudioEventDetector
+import com.example.domain.ai.LocalASR
+import com.example.domain.ai.OnDevicePipeline
 import com.example.domain.security.SecureKeyManager
 import kotlinx.coroutines.CancellationException
 import java.io.File
@@ -96,38 +100,73 @@ class VideoProcessingWorker(
             val repository = OpusRepository(applicationContext)
             val gatewayConfig = loadGatewayConfig()
             val enginePlan = processingEngine.plan(sourceUri, gatewayConfig).getOrThrow()
-            val remoteProjectId = runRemoteGateway(
-                repository = repository,
-                config = gatewayConfig,
-                jobId = jobId,
-                title = title,
-                sourceUri = sourceUri,
-                durationMinutes = durationMinutes,
-                targetPlatform = targetPlatform,
-                captionTheme = captionTheme,
-                processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" },
-                existingGatewayJobId = existingJob
-                    ?.takeUnless { it.status == ProcessingJobEntity.STATUS_CANCELLED }
-                    ?.remoteGatewayJobId
-            )
-            check(enginePlan.route == ProcessingEngine.Route.REMOTE_GATEWAY)
+            val source = requireNotNull(parsedSource)
+            val projectId = when (enginePlan.route) {
+                ProcessingEngine.Route.LOCAL_ON_DEVICE -> {
+                    val localPipeline = OnDevicePipeline(
+                        asr = object : LocalASR {
+                            override suspend fun transcribe(uri: Uri, language: String?) =
+                                repository.transcribeLocalMediaDetailed(uri.toString(), language)
+                        },
+                        audioEventDetector = object : AudioEventDetector {
+                            override suspend fun detect(uri: Uri) =
+                                LocalMediaAnalyzer(applicationContext).analyze(uri).map { it.audioSignals }
+                        }
+                    )
+                    val analysis = localPipeline.run(
+                        uri = source,
+                        onStage = { stage, progress ->
+                            jobs.updateState(
+                                jobId = jobId,
+                                status = ProcessingJobEntity.STATUS_RUNNING,
+                                progress = progress,
+                                stage = stage,
+                                errorMessage = ""
+                            )
+                            setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to progress, KEY_STAGE to stage))
+                        }
+                    ).getOrThrow()
+                    repository.importOnDeviceProcessingResult(
+                        title = title,
+                        sourceUri = sourceUri,
+                        durationMinutes = durationMinutes,
+                        targetPlatform = targetPlatform,
+                        captionTheme = captionTheme,
+                        result = analysis
+                    )
+                }
+                ProcessingEngine.Route.REMOTE_GATEWAY -> runRemoteGateway(
+                    repository = repository,
+                    config = gatewayConfig,
+                    jobId = jobId,
+                    title = title,
+                    sourceUri = sourceUri,
+                    durationMinutes = durationMinutes,
+                    targetPlatform = targetPlatform,
+                    captionTheme = captionTheme,
+                    processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" },
+                    existingGatewayJobId = existingJob
+                        ?.takeUnless { it.status == ProcessingJobEntity.STATUS_CANCELLED }
+                        ?.remoteGatewayJobId
+                )
+            }
             jobs.updateState(
                 jobId = jobId,
                 status = ProcessingJobEntity.STATUS_SUCCEEDED,
                 progress = 100,
                 stage = "COMPLETED",
-                outputProjectId = remoteProjectId
+                outputProjectId = projectId
             )
             ProcessingNotification.show(
                 applicationContext,
                 jobId,
-                "اكتملت معالجة Gateway",
-                "تم تنزيل المقاطع وحفظ المشروع رقم $remoteProjectId.",
+                "اكتملت معالجة ISM",
+                "تم تحليل الفيديو وحفظ المشروع رقم $projectId.",
                 success = true
             )
-            setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to remoteProjectId))
+            setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to projectId))
             MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
-            Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to remoteProjectId))
+            Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to projectId))
         } catch (cancelled: CancellationException) {
             jobs.updateState(
                 jobId = jobId,
