@@ -56,6 +56,8 @@ jobs:
           # fetch above — PUBLIKCLIP_FFMPEG is the resolution order's first
           # stop, so the render smoke test runs against the real fetched exe.
           Add-Content $env:GITHUB_ENV "PUBLIKCLIP_FFMPEG=$env:PUBLIKCLIP_HOME\bin\ffmpeg.exe"
+          Add-Content $env:GITHUB_ENV "TEST_FFMPEG=$env:PUBLIKCLIP_HOME\bin\ffmpeg.exe"
+          Add-Content $env:GITHUB_ENV "TEST_FFPROBE=$env:PUBLIKCLIP_HOME\bin\ffprobe.exe"
 
       - name: Pipeline test suite on Windows
         working-directory: pipeline
