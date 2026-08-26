@@ -1,29 +1,29 @@
 # MANUS HANDOFF
 
 **المشروع:** ISM  
-**التغيير:** فصل processing engine عن UI/application shell  
-**الحالة:** مكتمل على مستوى العقد والتنفيذ والاختبارات الانتقائية  
+**الحالة:** مكتمل على مستوى engine contract وmedia transfer/storage reliability  
 **Engine contract:** v1
 
 ## ملخص التنفيذ
 
-أضيفت حزمة عامة في `pipeline/publikclip_pipeline/engine/` تحتوي على عقد ثابت (`contracts.py`) وتنفيذ orchestration (`pipeline.py`). أصبح `PipelineEngine` هو نقطة الاستدعاء العامة لإنشاء job وتشغيله وقراءة حالته وإلغائه واستئنافه وقراءة نتائجه وclip منفرد وإعادة render للمقطع.
+أضيفت حزمة عامة في `pipeline/publikclip_pipeline/engine/` تحتوي على عقد ثابت وتنفيذ orchestration. أصبح `PipelineEngine` نقطة الاستدعاء العامة لإنشاء job وتشغيله وقراءة حالته وإلغائه واستئنافه وقراءة نتائجه وclip منفرد وإعادة render للمقطع.
 
-لم تُعد كتابة خوارزميات ingest أو ASR أو diarization أو events أو candidates أو scoring أو camera أو render. التنفيذ الجديد يركّب classes المراحل الحالية بالترتيب نفسه، ويحوّل مخرجاتها إلى records عامة قابلة للتحويل إلى JSON.
+أضيفت كذلك طبقة **media transfer/storage reliability** في Gateway فقط. تدعم الطبقة large uploads القابلة للاستئناف، progress offsets، checksum validation، temporary storage آمنًا، atomic finalize، duplicate detection، automatic cleanup، وoutput integrity metadata. لم تُغيّر خوارزميات scoring أو مراحل AI أو عقود الـprocessing.
 
 ## الملفات الرئيسية
 
 | الملف | الدور |
 |---|---|
-| `pipeline/publikclip_pipeline/engine/contracts.py` | `ProcessingEngine` protocol، `JobRef`، `JobStatus`، `JobResults`، `ClipResult`، `ProgressEvent`، و`EngineError`. |
+| `pipeline/publikclip_pipeline/engine/contracts.py` | عقود `ProcessingEngine` و`JobRef` و`JobStatus` و`JobResults` و`ClipResult` و`ProgressEvent` و`EngineError`. |
 | `pipeline/publikclip_pipeline/engine/pipeline.py` | `PipelineEngine`، وهو adapter orchestration لا يملك algorithms المراحل. |
-| `pipeline/publikclip_pipeline/engine/__init__.py` | public exports الوحيدة التي ينبغي أن يعتمد عليها المستهلك الخارجي. |
 | `pipeline/publikclip_pipeline/jobs/queue.py` | checkpoint runner الحالي مع migration خفيف لحقول الإلغاء والخطأ والإعدادات. |
 | `pipeline/publikclip_pipeline/cli.py` | compatibility shell؛ أوامر `run` و`resume` و`edit render-clip` تستدعي Engine API. |
-| `pipeline/tests/test_engine.py` | اختبارات العقد العامة للمحرك. |
-| `docs/ENGINE_ARCHITECTURE.md` | التوثيق الكامل للـlifecycle والعقد والأخطاء والتقدم والإلغاء والاستئناف. |
+| `gateway/main.py` | media upload sessions، offset persistence، checksum، cleanup، finalize، وoutput integrity. |
+| `gateway/tests/test_media_lifecycle.py` | الاختبار العملي لدورة حياة media upload والـoutput. |
+| `docs/ENGINE_ARCHITECTURE.md` | توثيق engine lifecycle والعقد والأخطاء والتقدم والإلغاء والاستئناف. |
+| `docs/MEDIA_PIPELINE.md` | توثيق عقد media transfer/storage وسيناريوهات التشغيل والاختبار. |
 
-## العقد العام
+## Engine contract
 
 ```python
 from publikclip_pipeline.engine import PipelineEngine
@@ -38,6 +38,26 @@ updated = engine.render_clip(job.id, 0, on_progress=callback)
 
 الـcallback يستقبل `ProgressEvent` لا تفاصيل `StageContext`. الأخطاء التي تعبر الحد العام هي `EngineError` مع `code` و`safe_message` و`recoverable`؛ ولا تُعاد stack traces أو secrets.
 
+## Media lifecycle contract
+
+يبدأ resumable upload عبر `POST /v1/sources/uploads` مع `filename`, `bytes`, و`sha256`. يقرأ العميل التقدم عبر `GET /v1/sources/uploads/{upload_id}`، ويرسل chunks عبر `PUT` باستخدام `X-Upload-Offset` أو `Content-Range`. عند اكتمال الحجم يستدعي `POST /v1/sources/uploads/{upload_id}/complete`، حيث يتحقق Gateway من الحجم وSHA-256 ثم ينقل الملف ذريًا إلى `source.mp4` وينشئ source job.
+
+تُكتب الأجزاء في `SOURCE_ROOT/.uploads/{upload_id}.part` بصلاحيات `0700` ولا يُكشف المسار المؤقت. يُثبت offset بعد flush و`fsync`. بعد interruption يمكن الاستئناف من offset المعاد؛ offset غير المتطابق يُرفض. جلسة أو artifact مكتمل بنفس `(bytes, sha256)` يُعاد استخدامه بدل إنشاء duplicate.
+
+يُمرَّر source إلى الـpipeline فقط بعد التحقق من بقاء الحجم وSHA-256 مطابقين. outputs الخاصة بالـprocessing تُفحص قبل نشرها وتُعاد معها `bytes` و`sha256` و`integrity`. ينفذ startup cleanup إزالة جلسات `uploading/corrupt/failed` القديمة وملفات `.part` orphan دون المساس بالـoutputs النهائية.
+
+## API media paths
+
+| Method | Path | الاستخدام |
+|---|---|---|
+| `POST` | `/v1/sources/uploads` | إنشاء أو إعادة استخدام upload session |
+| `GET` | `/v1/sources/uploads/{upload_id}` | قراءة الحالة والـoffset والـprogress |
+| `PUT` | `/v1/sources/uploads/{upload_id}` | كتابة chunk قابلة للاستئناف |
+| `POST` | `/v1/sources/uploads/{upload_id}/complete` | checksum validation وatomic finalize |
+| `POST` | `/v1/sources/upload` | legacy one-shot path، ويستخدم نفس safety guarantees |
+
+التوثيق التفصيلي للعقد والإعدادات وحدود الأحجام موجود في [`docs/MEDIA_PIPELINE.md`](docs/MEDIA_PIPELINE.md).
+
 ## Checkpoint وresume
 
 بقيت envelope checkpoints الذرية كما هي، وبقيت قاعدة أن stage لا يُعد مكتملًا إلا مع checkpoint صالح وبقاء artifacts المطلوبة. أضيفت migration تلقائية وآمنة للمنازل المحلية القديمة إلى `jobs` لتوفير `error_code` و`message` و`cancel_requested`.
@@ -46,32 +66,30 @@ updated = engine.render_clip(job.id, 0, on_progress=callback)
 
 ## حدود التطبيق والـGateway
 
-لا ينبغي لـUI أو Android استيراد `publikclip_pipeline` modules أو معرفة أسماء ملفات checkpoint أو classes المراحل. يعتمد shell على Gateway/API أو على JSONL compatibility output من CLI. ويظل Gateway مسؤولًا عن auth وremote durable state والـworker orchestration، بينما يظل Engine مسؤولًا عن processing lifecycle والنتائج المرحلية.
+لا ينبغي لـUI أو Android استيراد `publikclip_pipeline` modules أو معرفة أسماء ملفات checkpoint أو classes المراحل. يعتمد shell على Gateway/API أو على JSONL compatibility output من CLI. ويظل Gateway مسؤولًا عن auth وremote durable state وmedia storage والـworker orchestration، بينما يظل Engine مسؤولًا عن processing lifecycle والنتائج المرحلية.
 
 الـCLI يحتفظ بصيغة `--jsonl` القديمة: أحداث `job` ثم `progress` ثم `result`. لذلك لا يلزم تغيير launcher الحالي عند الانتقال التدريجي إلى Engine contract.
 
 ## التحقق المنفذ
 
-نجح compile check:
+نجح compile check ونجحت suite Gateway عبر:
 
 ```text
-python3 -m compileall -q pipeline/publikclip_pipeline gateway
+python3 -m unittest discover -s gateway/tests -p 'test_*.py' -v
 ```
 
-ونجحت اختبارات العقد وcheckpoint والـGateway ذات الصلة:
+وتغطي suite Gateway الحالية `30` اختبارًا مع اختبار الأحجام الكبيرة اختياريًا في التشغيل العادي. نجح اختبار media lifecycle فعليًا لكل من `100MB` و`500MB` و`1025MB`، مع interruption/resume وSHA-256 validation وduplicate upload وcorrupted upload وautomatic cleanup وoutput integrity.
 
-```text
-24 passed, 4 warnings in 1.00s
-```
+كما شملت اختبارات Engine التشغيل وprogress events وإعادة استخدام checkpoint وfailure handling إلى `EngineError` وresume مع تخطي stage مكتمل والإلغاء الدائم ثم resume وقراءة clip وjob lookup وGateway processing contract.
 
-وشملت الاختبارات التشغيل، progress events، إعادة استخدام checkpoint، failure handling إلى `EngineError`، resume مع تخطي stage مكتمل، الإلغاء الدائم ثم resume، قراءة clip، job lookup، وGateway processing contract.
+## حدود معروفة
 
-كما تم تشغيل CLI فعليًا على مصدر ملف غير موجود للتحقق من failure handling وcompatibility JSONL. أعاد CLI `PIPELINE_STAGE_FAILED`، وحافظ resume على job ID وأعاد تشغيل ingest من دون crash.
+الـmedia resume مدعوم داخل upload session نفسها، وليس عبر إعادة بناء bytes مفقودة من مصدر خارجي. إذا كان temp file أقصر من offset المسجل أو فُقد، تُرفض الجلسة ويجب بدء upload جديد. إذا كان أطول، يُقص إلى offset المثبت قبل المتابعة. لا تُزال outputs النهائية تلقائيًا بهذا التغيير؛ cleanup محصور عمدًا في upload temp sessions.
 
-شغّل أيضًا full pytest command، لكنه توقف أثناء collection لأن البيئة لم تكن تحتوي dependencies الصوتية للمشروع (`librosa` بعد تثبيت `scipy`). هذا عائق بيئي سابق عن اختبارات Engine؛ الاختبارات الانتقائية المذكورة أعلاه تمر. اختبار media حقيقي كامل يحتاج تثبيت dependencies المعرفة في `pipeline/pyproject.toml` وتوفير sample media وmodel/provider readiness.
+الـCLI يحتفظ حاليًا بمسار compatibility لبعض أوامر `edit context` و`edit suggest-visuals` لأنها ليست ضمن public Engine contract المطلوب. اختبار الأحجام الكبيرة يحتاج مساحة تخزين كافية، ويُفعّل عبر `RUN_LARGE_MEDIA_TESTS=1`.
 
-## ملاحظات الدمج
+## حماية النطاق وملاحظات الدمج
 
-تم الحفاظ على أسماء checkpoints والمسارات الحالية لتجنب migration للـartifacts. ما زالت أوامر `edit context` و`edit suggest-visuals` في CLI compatibility path القديم لأنها ليست ضمن public Engine contract المطلوب؛ أما render-clip فأصبح يمر عبر `PipelineEngine.render_clip()`.
+تم الحفاظ على أسماء checkpoints والمسارات الحالية لتجنب migration للـartifacts. لم تُعدّل خوارزميات ingest أو ASR أو diarization أو events أو candidates أو scoring أو camera أو render. كما لم تُعدّل إعدادات AI pipeline بسبب media lifecycle.
 
-الخطوة التالية الاختيارية هي إضافة adapter Gateway يستدعي `ProcessingEngine` مباشرة داخل worker process بدل parsing JSONL، مع إبقاء JSONL fallback خلال migration. لا يلزم ذلك لكي يستهلك backend العقد الحالي؛ لا يجوز أن ينتقل هذا adapter إلى UI.
+الخطوة التالية الاختيارية هي إضافة adapter Gateway يستدعي `ProcessingEngine` مباشرة داخل worker process بدل parsing JSONL، مع إبقاء JSONL fallback خلال migration. لا يلزم ذلك لكي يستهلك backend العقد الحالي، ولا يجوز أن ينتقل هذا adapter إلى UI.
