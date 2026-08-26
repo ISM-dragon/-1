@@ -1,6 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from gateway.main import validate_public_source
+from gateway.main import validate_public_source, validate_uploaded_media
 from fastapi import HTTPException
 
 
@@ -15,6 +17,15 @@ class GatewaySafetyTests(unittest.TestCase):
     def test_private_ip_is_rejected(self):
         with self.assertRaises(HTTPException):
             validate_public_source("https://10.0.0.4/video")
+
+    def test_corrupted_uploaded_media_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "corrupted.mp4"
+            path.write_bytes(b"not a video")
+            with self.assertRaises(HTTPException) as context:
+                validate_uploaded_media(path)
+            self.assertEqual(context.exception.status_code, 422)
+            self.assertIn("MEDIA_INVALID", str(context.exception.detail))
 
     def test_non_http_source_is_rejected(self):
         with self.assertRaises(HTTPException):

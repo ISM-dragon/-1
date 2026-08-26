@@ -1349,6 +1349,39 @@ async def inspect_source(payload: SourcePayload) -> dict[str, Any]:
     return {"source": source, "count": len(items), "items": items}
 
 
+def validate_uploaded_media(path: Path) -> None:
+    """Validate that an uploaded file is a readable video before publishing its URL."""
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type:format=duration",
+                "-of", "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=503, detail="FFPROBE_UNAVAILABLE: Install FFprobe on the processing server.") from error
+    except subprocess.TimeoutExpired as error:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Media validation timed out.") from error
+    if probe.returncode != 0:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Uploaded file is not a readable video.")
+    try:
+        payload = json.loads(probe.stdout or "{}")
+        streams = payload.get("streams") or []
+        duration = float((payload.get("format") or {}).get("duration") or 0)
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Media probe returned invalid metadata.") from error
+    if not streams or duration <= 0:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Uploaded file has no readable video stream.")
+
+
 @app.post("/v1/sources/upload", dependencies=[Depends(auth)])
 async def upload_source(request: Request) -> dict[str, Any]:
     content_length = request.headers.get("content-length")
@@ -1370,6 +1403,7 @@ async def upload_source(request: Request) -> dict[str, Any]:
                 output.write(chunk)
         if size == 0:
             raise HTTPException(status_code=400, detail="Uploaded video is empty.")
+        validate_uploaded_media(target)
         timestamp = now_iso()
         source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/source.mp4"
         items = [{"index": 0, "title": "Uploaded video", "url": source_url, "filename": "source.mp4", "bytes": size}]
@@ -1490,6 +1524,8 @@ async def cancel_processing(job_id: str) -> dict[str, Any]:
     state = canonical_state(row)
     if state == "COMPLETED":
         raise HTTPException(status_code=409, detail="Completed processing jobs cannot be cancelled")
+    if state == "FAILED":
+        raise HTTPException(status_code=409, detail="Failed processing jobs cannot be cancelled; use retry or resume")
     if state == "CANCELLED":
         return processing_dict(row)
     with closing(db()) as connection:

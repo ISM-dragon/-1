@@ -51,14 +51,26 @@ class AsrStage(Stage):
 
         _point_caches_at_home()
         ctx.emit(-1, "Loading speech model (downloads ~1.6 GB on first run)…")
-        import torch  # deferred: heavy import
-        import whisperx
+        try:
+            import torch  # deferred: heavy import
+            import whisperx
+        except (ImportError, OSError) as err:
+            raise StageError(
+                "ASR model/runtime is unavailable. Install the speech-model dependencies and retry.",
+                "ASR_MODEL_UNAVAILABLE",
+            ) from err
 
         device = "cpu"  # ctranslate2 has no MPS backend; int8 CPU is the local path
         t0 = time.monotonic()
-        model = whisperx.load_model(
-            ASR_MODEL, device, compute_type=COMPUTE_TYPE, vad_method="silero"
-        )
+        try:
+            model = whisperx.load_model(
+                ASR_MODEL, device, compute_type=COMPUTE_TYPE, vad_method="silero"
+            )
+        except Exception as err:  # noqa: BLE001 — normalize model download/load failures
+            raise StageError(
+                "ASR model could not be loaded. Check model availability and retry.",
+                "ASR_MODEL_UNAVAILABLE",
+            ) from err
         audio = whisperx.load_audio(str(audio_path))
         duration = float(len(audio)) / 16000.0
 

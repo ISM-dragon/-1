@@ -1,6 +1,9 @@
+import asyncio
 import sqlite3
 import tempfile
 import unittest
+
+from fastapi import HTTPException
 from pathlib import Path
 
 from gateway import main
@@ -19,6 +22,26 @@ class JobStateUnitTests(unittest.TestCase):
             validate_transition("COMPLETED", "RENDERING")
         validate_transition("FAILED", "RETRY_WAIT")
         validate_transition("INTERRUPTED", "QUEUED")
+
+    def test_cancel_failed_job_returns_conflict_instead_of_server_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = main.DB_PATH
+            main.DB_PATH = Path(directory) / "gateway.db"
+            try:
+                main.init_db()
+                now = main.now_iso()
+                with sqlite3.connect(main.DB_PATH) as connection:
+                    connection.execute(
+                        "INSERT INTO processing_jobs (id, source, status, state, created_at, updated_at) VALUES (?, ?, 'failed', 'FAILED', ?, ?)",
+                        ("proc_failed", "https://example.com/video.mp4", now, now),
+                    )
+                    connection.commit()
+                with self.assertRaises(HTTPException) as context:
+                    asyncio.run(main.cancel_processing("proc_failed"))
+                self.assertEqual(context.exception.status_code, 409)
+                self.assertIn("retry or resume", str(context.exception.detail))
+            finally:
+                main.DB_PATH = original
 
     def test_gateway_persists_transition_history(self):
         with tempfile.TemporaryDirectory() as directory:
