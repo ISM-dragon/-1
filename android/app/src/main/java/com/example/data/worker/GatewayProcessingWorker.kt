@@ -106,8 +106,17 @@ open class GatewayProcessingWorker(appContext: Context, workerParams: WorkerPara
         localJobId: String,
         remoteJobId: String
     ): Result {
+        var automaticResumes = 0
         while (true) {
             val resource = client.getJob(config, remoteJobId).getOrThrow()
+            if (resource.state == ApiJobState.INTERRUPTED || resource.state == ApiJobState.RETRY_WAIT) {
+                if (automaticResumes >= MAX_AUTOMATIC_RESUMES) {
+                    throw IOException("Gateway أعاد الوظيفة إلى حالة قابلة للاستئناف عدة مرات")
+                }
+                automaticResumes += 1
+                client.resume(config, remoteJobId).getOrThrow()
+                continue
+            }
             val localStatus = when (resource.state) {
                 ApiJobState.COMPLETED -> ProcessingJobEntity.STATUS_SUCCEEDED
                 ApiJobState.FAILED -> ProcessingJobEntity.STATUS_FAILED
@@ -168,5 +177,6 @@ open class GatewayProcessingWorker(appContext: Context, workerParams: WorkerPara
         const val KEY_ERROR = "error"
         private const val POLL_INTERVAL_MS = 2_000L
         private const val MAX_WORK_RETRIES = 3
+        private const val MAX_AUTOMATIC_RESUMES = 2
     }
 }

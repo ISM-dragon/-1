@@ -37,3 +37,9 @@ app/src-tauri/gen/android/.gradle/
 app/src-tauri/gen/android/app/src/main/assets/resources/
 app/src-tauri/gen/android/app/src/main/jniLibs/
 app/src-tauri/gen/android/buildSrc/.kotlin/
+
+# Native Android generated outputs and local SDK configuration
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
