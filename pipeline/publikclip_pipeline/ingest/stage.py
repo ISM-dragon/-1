@@ -15,6 +15,14 @@ from ..jobs.queue import Stage, StageContext, StageError
 from . import normalize, ytdlp
 
 
+def _artifact_exists(path: Path) -> bool:
+    """Return true only for a regular, non-empty artifact."""
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _sample_hash(path: Path) -> str:
     """Cheap staleness fingerprint for external source files: size + first MiB."""
     h = hashlib.sha256()
@@ -31,7 +39,7 @@ class IngestStage(Stage):
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         media = Path(data.get("media_path", ""))
         audio = ctx.job_dir / "audio16k.wav"
-        if not (media.exists() and audio.exists()):
+        if not (_artifact_exists(media) and _artifact_exists(audio)):
             return False
         if data.get("source_hash"):
             try:
@@ -53,7 +61,8 @@ class IngestStage(Stage):
             heatmap = meta.heatmap
             title = meta.title
             media_path = ctx.job_dir / "media.mp4"
-            if not media_path.exists():
+            if not _artifact_exists(media_path):
+                media_path.unlink(missing_ok=True)
                 ytdlp.download(job.source, media_path, prog)
         else:
             media_path = Path(job.source).expanduser().resolve()
@@ -80,7 +89,8 @@ class IngestStage(Stage):
 
         prog(0.98, "Extracting analysis audio…")
         audio_path = ctx.job_dir / "audio16k.wav"
-        if not audio_path.exists():
+        if not _artifact_exists(audio_path):
+            audio_path.unlink(missing_ok=True)
             normalize.extract_analysis_audio(media_path, audio_path)
 
         from ..jobs import queue as jobs_queue

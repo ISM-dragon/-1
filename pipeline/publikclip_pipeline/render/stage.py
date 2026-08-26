@@ -1,5 +1,4 @@
-"""Render stage: finalist clips + trajectories + captions → finished 9:16
-MP4s, each verified (streams present, duration sane) before being reported."""
+"""Render final vertical MP4s, each verified before being reported."""
 
 from __future__ import annotations
 
@@ -9,6 +8,16 @@ from pathlib import Path
 from ..jobs.queue import Stage, StageContext, StageError
 
 
+def _read_json_object(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as err:
+        raise StageError(f"{label} is missing or invalid.", "ARTIFACT_INVALID") from err
+    if not isinstance(value, dict):
+        raise StageError(f"{label} is invalid.", "ARTIFACT_INVALID")
+    return value
+
+
 class RenderStage(Stage):
     name = "render"
     schema_version = 1
@@ -16,7 +25,19 @@ class RenderStage(Stage):
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         if data.get("caption_preset") != ctx.settings.caption_preset:
             return False  # restyle requested → re-render
-        return all(Path(c["path"]).exists() for c in data.get("outputs", []))
+        outputs = data.get("outputs", [])
+        if not isinstance(outputs, list) or not outputs:
+            return False
+        for clip in outputs:
+            if not isinstance(clip, dict) or not isinstance(clip.get("path"), str) or not clip["path"]:
+                return False
+            path = Path(clip["path"])
+            try:
+                if not path.is_file() or path.stat().st_size == 0:
+                    return False
+            except OSError:
+                return False
+        return True
 
     def run(self, ctx: StageContext) -> dict:
         import numpy as np
@@ -38,14 +59,23 @@ class RenderStage(Stage):
         if not (ingest and diarize and events and score and camera):
             raise StageError("Render needs every prior stage output.")
 
-        media = ingest["media_path"]
-        probe = ingest["probe"]
-        src_w, src_h = int(probe["width"]), int(probe["height"])
-        segments = diarize["segments"]
-        timeline = events["timeline"]
-        curves = json.loads(Path(events["curves_path"]).read_text())
-        rms = curves["rms"]
-        grid = float(curves["grid_sec"])
+        try:
+            media = Path(ingest["media_path"])
+            probe = ingest["probe"]
+            src_w, src_h = int(probe["width"]), int(probe["height"])
+            if not media.is_file() or media.stat().st_size == 0 or src_w <= 0 or src_h <= 0:
+                raise ValueError("media or probe is invalid")
+            segments = diarize["segments"]
+            timeline = events["timeline"]
+            curves = _read_json_object(Path(events["curves_path"]), "curves.json")
+            rms = curves["rms"]
+            grid = float(curves["grid_sec"])
+            clips = score["clips"]
+            trajectory_paths = camera["trajectories"]
+            if not isinstance(trajectory_paths, dict):
+                raise ValueError("camera trajectories are invalid")
+        except (KeyError, TypeError, ValueError) as err:
+            raise StageError(f"Render inputs are invalid: {err}", "INPUT_INVALID") from err
 
         captions_ok = ffmpeg_bin.supports_captions()
         emoji_ok = ass_mod.emoji_probe() if captions_ok else False
@@ -55,16 +85,21 @@ class RenderStage(Stage):
         out_dir.mkdir(exist_ok=True)
         preset = ctx.settings.caption_preset
         outputs = []
-        clips = score["clips"]
         for i, clip in enumerate(clips):
-            traj_path = camera["trajectories"].get(str(i))
-            if not traj_path or not Path(traj_path).exists():
-                continue
-            trajectory = json.loads(Path(traj_path).read_text())
-            start, end = clip["start"], clip["end"]
+            traj_path = trajectory_paths.get(str(i))
+            if not traj_path or not Path(traj_path).is_file():
+                raise StageError(f"Trajectory for clip {i} is missing — re-run camera.", "ARTIFACT_MISSING")
+            trajectory = _read_json_object(Path(traj_path), f"trajectory_{i:02d}.json")
+            if not isinstance(trajectory.get("frames"), list) or not trajectory["frames"]:
+                raise StageError(f"Trajectory for clip {i} is invalid.", "ARTIFACT_INVALID")
+            try:
+                start, end = float(clip["start"]), float(clip["end"])
+                if end <= start:
+                    raise ValueError("clip end must be greater than start")
+            except (KeyError, TypeError, ValueError) as err:
+                raise StageError(f"Clip {i} metadata is invalid: {err}", "INPUT_INVALID") from err
             ctx.emit(i / max(1, len(clips)), f"Rendering clip {i + 1}/{len(clips)}…")
 
-            # Words within the clip, clip-relative times.
             words = []
             for seg in segments:
                 for w in seg.get("words", []):
@@ -94,20 +129,18 @@ class RenderStage(Stage):
             out_path = out_dir / f"clip_{i:02d}.mp4"
             try:
                 renderer.render_clip(
-                    media, out_path, start, end, trajectory,
+                    str(media), out_path, start, end, trajectory,
                     ass_path if captions_ok else None, ass_mod.FONTS_DIR,
                     lufs=ctx.settings.lufs_target,
                     true_peak=ctx.settings.true_peak_db,
                     src_w=src_w, src_h=src_h,
                 )
             except RuntimeError as err:
-                raise StageError(str(err)) from err
+                raise StageError(str(err), "RENDER_FAILED") from err
             check = renderer.verify_output(out_path, end - start)
             if not check["ok"]:
-                raise StageError(
-                    f"Clip {i} failed verification (duration {check['duration']:.1f}s, "
-                    f"{check['width']}x{check['height']})."
-                )
+                detail = check.get("error", "output failed validation")
+                raise StageError(f"Clip {i} failed verification: {detail}", "RENDER_OUTPUT_INVALID")
             outputs.append(
                 {
                     "clip": i,

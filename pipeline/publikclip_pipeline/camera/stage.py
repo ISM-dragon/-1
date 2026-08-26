@@ -18,7 +18,22 @@ class CameraStage(Stage):
     def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
         if data.get("camera_settings") != ctx.settings.camera.__dict__:
             return False  # camera style changed → re-direct
-        return all(Path(p).exists() for p in data.get("trajectories", {}).values())
+        trajectories = data.get("trajectories", {})
+        if not isinstance(trajectories, dict) or not trajectories:
+            return False
+        for raw_path in trajectories.values():
+            if not isinstance(raw_path, str) or not raw_path:
+                return False
+            path = Path(raw_path)
+            if not path.is_file():
+                return False
+            try:
+                payload = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                return False
+            if not isinstance(payload, dict) or not isinstance(payload.get("frames"), list) or not payload["frames"]:
+                return False
+        return True
 
     def run(self, ctx: StageContext) -> dict:
         import numpy as np

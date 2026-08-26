@@ -6,6 +6,7 @@ import importlib.util
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -24,10 +25,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, ValidationError
 
 try:
     from .processing_service import classify_gemini_error, pipeline_available, pipeline_command as build_pipeline_command, pipeline_environment
@@ -105,6 +106,8 @@ GEMINI_KEY_FILE = Path(os.getenv("ISM_GEMINI_KEY_FILE", str(ROOT / "secrets" / "
 AI_SECRET_FILE = Path(os.getenv("ISM_AI_SECRET_FILE", str(ROOT / "secrets" / "ai-vault.json")))
 AI_VAULT = SecretVault(AI_SECRET_FILE)
 MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
+MEDIA_UPLOAD_TTL_SECONDS = max(300, int(os.getenv("ISM_MEDIA_UPLOAD_TTL_SECONDS", str(24 * 60 * 60))))
+MEDIA_UPLOAD_CHUNK_BYTES = max(1, int(os.getenv("ISM_MEDIA_UPLOAD_CHUNK_BYTES", str(16 * 1024 * 1024))))
 
 app = FastAPI(title="ISM Social Gateway", version="0.10.1")
 app.add_middleware(
@@ -131,6 +134,8 @@ _source_workers = PersistentWorkerQueue("sources", SOURCE_ROOT, MAX_ACTIVE_SOURC
 _processing_cancel_events: dict[str, threading.Event] = {}
 _processing_processes: dict[str, subprocess.Popen[str]] = {}
 _processing_runtime_lock = threading.Lock()
+_media_upload_locks: dict[str, asyncio.Lock] = {}
+_media_upload_locks_guard = threading.Lock()
 
 
 class PolicyDeferred(Exception):
@@ -317,6 +322,22 @@ def init_db() -> None:
                 FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_analytics_account_date ON analytics_snapshots(account_id, metric_date);
+            CREATE TABLE IF NOT EXISTS media_uploads (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                expected_bytes INTEGER NOT NULL,
+                expected_sha256 TEXT NOT NULL,
+                received_bytes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'uploading',
+                temp_path TEXT NOT NULL,
+                media_path TEXT,
+                source_job_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_media_upload_completed_hash ON media_uploads(expected_sha256, expected_bytes, status);
+            CREATE INDEX IF NOT EXISTS idx_media_upload_cleanup ON media_uploads(status, updated_at);
             """
         )
         migrations = [
@@ -371,6 +392,12 @@ class ProcessingPayload(BaseModel):
 class SourcePayload(BaseModel):
     source: HttpUrl
     max_items: int = Field(default=0, ge=0, le=1000)
+
+
+class MediaUploadInitPayload(BaseModel):
+    filename: str = Field(default="source.mp4", min_length=1, max_length=180)
+    bytes: int = Field(ge=1, le=MAX_UPLOAD_BYTES)
+    sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-fA-F]{64}$")
 
 
 class AIModelPayload(BaseModel):
@@ -579,6 +606,12 @@ def update_source_job(job_id: str, **values: Any) -> None:
         connection.commit()
 
 
+def update_media_upload_offset(upload_id: str, received_bytes: int) -> None:
+    with closing(db()) as connection:
+        connection.execute("UPDATE media_uploads SET received_bytes=?, updated_at=? WHERE id=? AND status='uploading'", (received_bytes, now_iso(), upload_id))
+        connection.commit()
+
+
 def run_source_download(job_id: str, source: str, max_items: int) -> None:
     target_dir = (SOURCE_ROOT / job_id).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -743,6 +776,7 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
     render = read_pipeline_checkpoint(job_dir, "render") or {}
     events = read_pipeline_checkpoint(job_dir, "events")
     candidates = read_pipeline_checkpoint(job_dir, "candidates")
+    score_clips = (score or {}).get("clips", [])
     outputs = []
     for output in render.get("outputs", []):
         raw_path = Path(str(output.get("path", "")))
@@ -751,7 +785,15 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
         if not filename or not valid:
             continue
         item = dict(output)
+        clip_index = item.get("clip")
+        source_clip = score_clips[clip_index] if isinstance(clip_index, int) and 0 <= clip_index < len(score_clips) else {}
+        for key in ("start", "end", "title", "transcript", "best_platform", "score"):
+            if key not in item and key in source_clip:
+                item[key] = source_clip[key]
         item["path"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{external_id}/media/{filename}"
+        item["bytes"] = raw_path.stat().st_size
+        item["sha256"] = _sha256_file(raw_path)
+        item["integrity"] = {"algorithm": "sha256", "bytes": item["bytes"], "sha256": item["sha256"]}
         outputs.append(item)
     return {
         "job_id": external_id,
@@ -840,7 +882,13 @@ def uploaded_source_path(source: str) -> str | None:
         return None
     candidate = (SOURCE_ROOT / job_id / filename).resolve()
     root = SOURCE_ROOT.resolve()
-    return str(candidate) if root in candidate.parents and candidate.is_file() else None
+    if root not in candidate.parents or not candidate.is_file():
+        return None
+    with closing(db()) as connection:
+        upload = connection.execute("SELECT expected_bytes, expected_sha256, status FROM media_uploads WHERE id=?", (job_id,)).fetchone()
+    if not upload or upload["status"] != "completed" or candidate.stat().st_size != upload["expected_bytes"] or _sha256_file(candidate).lower() != upload["expected_sha256"].lower():
+        return None
+    return str(candidate)
 
 
 def run_processing_job(external_id: str, source: str | None = None, llm: str | None = None, captions: str | None = None, mode: str | None = None) -> None:
@@ -1133,6 +1181,7 @@ async def scheduler_loop() -> None:
 async def startup() -> None:
     global _scheduler_task
     init_db()
+    cleanup_media_uploads()
     with closing(db()) as connection:
         timestamp = now_iso()
         interrupted = connection.execute("SELECT id FROM processing_jobs WHERE state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED') AND cancel_requested=0").fetchall()
@@ -1349,18 +1398,253 @@ async def inspect_source(payload: SourcePayload) -> dict[str, Any]:
     return {"source": source, "count": len(items), "items": items}
 
 
+def _media_uploads_root() -> Path:
+    root = (SOURCE_ROOT / ".uploads").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    return root
+
+
+def _media_upload_temp_path(upload_id: str) -> Path:
+    if not re.fullmatch(r"upl_[A-Za-z0-9_-]{8,80}", upload_id):
+        raise HTTPException(status_code=404, detail="Media upload not found")
+    return _media_uploads_root() / f"{upload_id}.part"
+
+
+def _media_upload_lock(upload_id: str) -> asyncio.Lock:
+    with _media_upload_locks_guard:
+        return _media_upload_locks.setdefault(upload_id, asyncio.Lock())
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(MEDIA_UPLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_media_filename(filename: str) -> str:
+    name = Path(filename).name.strip()
+    if not name or name in {".", ".."} or len(name) > 180:
+        raise HTTPException(status_code=422, detail="A safe media filename is required.")
+    if Path(name).suffix.lower() not in {".mp4", ".mov", ".webm", ".mkv"}:
+        raise HTTPException(status_code=422, detail="Only supported video containers can be uploaded.")
+    return name
+
+
+def _media_upload_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["progress"] = round(min(1.0, result["received_bytes"] / result["expected_bytes"]) if result["expected_bytes"] else 0.0, 6)
+    result["offset"] = result["received_bytes"]
+    result["source"] = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{result['source_job_id']}/media/source.mp4" if result.get("source_job_id") else None
+    result.pop("temp_path", None)
+    result.pop("media_path", None)
+    return result
+
+
+def _find_media_upload(upload_id: str) -> sqlite3.Row:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM media_uploads WHERE id=?", (upload_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Media upload not found")
+    return row
+
+
+def _parse_upload_range(request: Request, current: int, expected: int) -> tuple[int, int | None]:
+    raw = request.headers.get("content-range", "").strip()
+    offset_header = request.headers.get("x-upload-offset")
+    if raw:
+        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", raw)
+        if not match:
+            raise HTTPException(status_code=400, detail="Content-Range must use bytes start-end/total.")
+        start, end, total = (int(value) for value in match.groups())
+        if total != expected or start > end or end >= expected:
+            raise HTTPException(status_code=416, detail="Upload range does not match the declared file size.")
+        if offset_header is not None and int(offset_header) != start:
+            raise HTTPException(status_code=409, detail="Upload offset conflicts with Content-Range.")
+        return start, end
+    if offset_header is None:
+        raise HTTPException(status_code=400, detail="Send X-Upload-Offset or Content-Range for resumable uploads.")
+    try:
+        start = int(offset_header)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="X-Upload-Offset must be an integer.") from error
+    if start < 0 or start > expected:
+        raise HTTPException(status_code=416, detail="Upload offset is outside the declared file size.")
+    return start, None
+
+
+def cleanup_media_uploads() -> int:
+    """Delete abandoned partial uploads without touching finalized source artifacts."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=MEDIA_UPLOAD_TTL_SECONDS)
+    cutoff_iso = cutoff.isoformat()
+    removed = 0
+    with closing(db()) as connection:
+        rows = connection.execute("SELECT id, temp_path FROM media_uploads WHERE status IN ('uploading', 'corrupt', 'failed') AND source_job_id IS NULL AND updated_at < ?", (cutoff_iso,)).fetchall()
+        for row in rows:
+            Path(row["temp_path"]).unlink(missing_ok=True)
+            connection.execute("DELETE FROM media_uploads WHERE id=?", (row["id"],))
+            removed += 1
+        connection.commit()
+    uploads_root = _media_uploads_root()
+    for path in uploads_root.glob("*.part"):
+        try:
+            if path.stat().st_mtime < cutoff.timestamp():
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+    return removed
+
+
+def validate_uploaded_media(path: Path) -> None:
+    """Validate that an uploaded file is a readable video before publishing its URL."""
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=codec_type:format=duration", "-of", "json", str(path),
+            ],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=503, detail="FFPROBE_UNAVAILABLE: Install FFprobe on the processing server.") from error
+    except subprocess.TimeoutExpired as error:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Media validation timed out.") from error
+    if probe.returncode != 0:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Uploaded file is not a readable video.")
+    try:
+        payload = json.loads(probe.stdout or "{}")
+        streams = payload.get("streams") or []
+        duration = float((payload.get("format") or {}).get("duration") or 0)
+    except (ValueError, TypeError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Media probe returned invalid metadata.") from error
+    if not streams or duration <= 0:
+        raise HTTPException(status_code=422, detail="MEDIA_INVALID: Uploaded file has no readable video stream.")
+
+
+def _finalize_media_upload(upload_id: str) -> dict[str, Any]:
+    row = _find_media_upload(upload_id)
+    if row["status"] == "completed":
+        return _media_upload_dict(row)
+    temp_path = Path(row["temp_path"]).resolve()
+    if not temp_path.is_file():
+        with closing(db()) as connection:
+            connection.execute("UPDATE media_uploads SET status='failed', updated_at=? WHERE id=?", (now_iso(), upload_id))
+            connection.commit()
+        raise HTTPException(status_code=409, detail="Temporary upload data is missing; restart the upload.")
+    actual_size = temp_path.stat().st_size
+    if actual_size != row["expected_bytes"] or row["received_bytes"] != row["expected_bytes"]:
+        raise HTTPException(status_code=409, detail=f"Upload is incomplete; resume at byte {min(actual_size, row['expected_bytes'])}.")
+    actual_sha256 = _sha256_file(temp_path)
+    if actual_sha256.lower() != row["expected_sha256"].lower():
+        temp_path.unlink(missing_ok=True)
+        with closing(db()) as connection:
+            connection.execute("UPDATE media_uploads SET status='corrupt', updated_at=? WHERE id=?", (now_iso(), upload_id))
+            connection.commit()
+        raise HTTPException(status_code=422, detail="MEDIA_CHECKSUM_MISMATCH: uploaded bytes failed SHA-256 validation.")
+    validate_uploaded_media(temp_path)
+    target_dir = (SOURCE_ROOT / upload_id).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(target_dir, 0o700)
+    target = target_dir / "source.mp4"
+    os.replace(temp_path, target)
+    timestamp = now_iso()
+    source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/source.mp4"
+    items = [{"index": 0, "title": row["filename"], "url": source_url, "media_url": source_url, "filename": "source.mp4", "bytes": actual_size, "sha256": actual_sha256}]
+    with closing(db()) as connection:
+        connection.execute("UPDATE media_uploads SET status='completed', received_bytes=?, media_path=?, source_job_id=?, completed_at=?, updated_at=? WHERE id=?", (actual_size, str(target), upload_id, timestamp, timestamp, upload_id))
+        connection.execute("INSERT OR REPLACE INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, COALESCE((SELECT created_at FROM source_jobs WHERE id=?), ?), ?)", (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), upload_id, timestamp, timestamp))
+        connection.commit()
+        completed = connection.execute("SELECT * FROM media_uploads WHERE id=?", (upload_id,)).fetchone()
+    return _media_upload_dict(completed)
+
+
+@app.post("/v1/sources/uploads", dependencies=[Depends(auth)])
+async def init_media_upload(payload: MediaUploadInitPayload) -> dict[str, Any]:
+    filename = _safe_media_filename(payload.filename)
+    with closing(db()) as connection:
+        duplicate = connection.execute("SELECT * FROM media_uploads WHERE expected_sha256=? AND expected_bytes=? AND status IN ('uploading', 'completed') ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1", (payload.sha256.lower(), payload.bytes)).fetchone()
+        if duplicate:
+            return {**_media_upload_dict(duplicate), "reused": True}
+        upload_id = f"upl_{secrets.token_urlsafe(12)}"
+        timestamp = now_iso()
+        temp_path = _media_upload_temp_path(upload_id)
+        temp_path.unlink(missing_ok=True)
+        connection.execute("INSERT INTO media_uploads (id, filename, expected_bytes, expected_sha256, temp_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (upload_id, filename, payload.bytes, payload.sha256.lower(), str(temp_path), timestamp, timestamp))
+        connection.commit()
+    return {"id": upload_id, "status": "uploading", "offset": 0, "progress": 0.0, "expected_bytes": payload.bytes, "expected_sha256": payload.sha256.lower(), "chunk_bytes": MEDIA_UPLOAD_CHUNK_BYTES, "expires_in_seconds": MEDIA_UPLOAD_TTL_SECONDS}
+
+
+@app.get("/v1/sources/uploads/{upload_id}", dependencies=[Depends(auth)])
+async def media_upload_status(upload_id: str) -> dict[str, Any]:
+    return _media_upload_dict(_find_media_upload(upload_id))
+
+
+@app.put("/v1/sources/uploads/{upload_id}", dependencies=[Depends(auth)])
+async def write_media_upload(upload_id: str, request: Request) -> dict[str, Any]:
+    async with _media_upload_lock(upload_id):
+        row = _find_media_upload(upload_id)
+        if row["status"] == "completed":
+            return _media_upload_dict(row)
+        if row["status"] != "uploading":
+            raise HTTPException(status_code=409, detail=f"Upload is not writable: {row['status']}.")
+        current = int(row["received_bytes"])
+        start, declared_end = _parse_upload_range(request, current, int(row["expected_bytes"]))
+        if start != current:
+            raise HTTPException(status_code=409, detail=f"Upload offset mismatch; resume at byte {current}.")
+        temp_path = Path(row["temp_path"]).resolve()
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        disk_offset = temp_path.stat().st_size if temp_path.exists() else 0
+        if disk_offset < current:
+            raise HTTPException(status_code=409, detail="Temporary upload is shorter than its persisted offset; restart the upload.")
+        if disk_offset > current:
+            with temp_path.open("r+b") as repair:
+                repair.truncate(current)
+                repair.flush()
+                os.fsync(repair.fileno())
+        with temp_path.open("ab") as output:
+            received = current
+            checkpoint = current
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if received > int(row["expected_bytes"]) or (declared_end is not None and received > declared_end + 1):
+                    raise HTTPException(status_code=413, detail="Uploaded chunk exceeds the declared range.")
+                output.write(chunk)
+                if received - checkpoint >= MEDIA_UPLOAD_CHUNK_BYTES:
+                    output.flush()
+                    os.fsync(output.fileno())
+                    update_media_upload_offset(upload_id, received)
+                    checkpoint = received
+            output.flush()
+            os.fsync(output.fileno())
+        if declared_end is not None and received != declared_end + 1:
+            raise HTTPException(status_code=400, detail="Content-Range end does not match the received body.")
+        update_media_upload_offset(upload_id, received)
+        return _media_upload_dict(_find_media_upload(upload_id))
+
+
+@app.post("/v1/sources/uploads/{upload_id}/complete", dependencies=[Depends(auth)])
+async def complete_media_upload(upload_id: str) -> dict[str, Any]:
+    async with _media_upload_lock(upload_id):
+        result = _finalize_media_upload(upload_id)
+    return {**result, "status": "done", "source": result["source"], "integrity": {"algorithm": "sha256", "sha256": _find_media_upload(upload_id)["expected_sha256"], "bytes": result["expected_bytes"]}}
+
+
 @app.post("/v1/sources/upload", dependencies=[Depends(auth)])
 async def upload_source(request: Request) -> dict[str, Any]:
+    """Legacy one-shot endpoint; resumable clients should use /v1/sources/uploads."""
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
     upload_id = f"upl_{secrets.token_urlsafe(12)}"
-    directory = (SOURCE_ROOT / upload_id).resolve()
-    directory.mkdir(parents=True, exist_ok=False)
-    target = directory / "source.mp4"
+    temp_path = _media_upload_temp_path(upload_id)
     size = 0
+    digest = hashlib.sha256()
     try:
-        with target.open("wb") as output:
+        with temp_path.open("wb") as output:
             async for chunk in request.stream():
                 if not chunk:
                     continue
@@ -1368,25 +1652,27 @@ async def upload_source(request: Request) -> dict[str, Any]:
                 if size > MAX_UPLOAD_BYTES:
                     raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
                 output.write(chunk)
+                digest.update(chunk)
+            output.flush()
+            os.fsync(output.fileno())
         if size == 0:
             raise HTTPException(status_code=400, detail="Uploaded video is empty.")
-        timestamp = now_iso()
-        source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/source.mp4"
-        items = [{"index": 0, "title": "Uploaded video", "url": source_url, "filename": "source.mp4", "bytes": size}]
+        checksum = digest.hexdigest()
         with closing(db()) as connection:
-            connection.execute(
-                "INSERT INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, ?, ?)",
-                (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), timestamp, timestamp),
-            )
+            duplicate = connection.execute("SELECT * FROM media_uploads WHERE expected_sha256=? AND expected_bytes=? AND status='completed' ORDER BY completed_at DESC LIMIT 1", (checksum, size)).fetchone()
+            if duplicate:
+                temp_path.unlink(missing_ok=True)
+                return {"id": duplicate["id"], "status": "done", "source": f"{PUBLIC_BASE_URL}/v1/sources/jobs/{duplicate['source_job_id']}/media/source.mp4", "filename": "source.mp4", "bytes": size, "sha256": checksum, "reused": True}
+            timestamp = now_iso()
+            connection.execute("INSERT INTO media_uploads (id, filename, expected_bytes, expected_sha256, received_bytes, status, temp_path, created_at, updated_at) VALUES (?, 'source.mp4', ?, ?, ?, 'uploading', ?, ?, ?)", (upload_id, size, checksum, size, str(temp_path), timestamp, timestamp))
             connection.commit()
-        return {"id": upload_id, "status": "done", "source": source_url, "filename": "source.mp4", "bytes": size}
+        result = _finalize_media_upload(upload_id)
+        return {"id": upload_id, "status": "done", "source": result["source"], "filename": "source.mp4", "bytes": size, "sha256": checksum}
     except HTTPException:
-        target.unlink(missing_ok=True)
-        shutil.rmtree(directory, ignore_errors=True)
+        temp_path.unlink(missing_ok=True)
         raise
     except Exception as error:
-        target.unlink(missing_ok=True)
-        shutil.rmtree(directory, ignore_errors=True)
+        temp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Video upload failed: {error}") from error
 
 
@@ -1430,9 +1716,10 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Source media is not ready")
     base = (SOURCE_ROOT / job_id).resolve()
     target = (base / filename).resolve()
-    if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
+    if base not in target.parents or not target.is_file() or target.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
         raise HTTPException(status_code=404, detail="Source media not found")
-    return FileResponse(target, media_type="video/mp4", filename=target.name)
+    media_type = {".mp4": "video/mp4", ".mov": "video/quicktime", ".mkv": "video/x-matroska", ".webm": "video/webm"}.get(target.suffix.lower(), "application/octet-stream")
+    return FileResponse(target, media_type=media_type, filename=target.name)
 
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
@@ -1490,6 +1777,8 @@ async def cancel_processing(job_id: str) -> dict[str, Any]:
     state = canonical_state(row)
     if state == "COMPLETED":
         raise HTTPException(status_code=409, detail="Completed processing jobs cannot be cancelled")
+    if state == "FAILED":
+        raise HTTPException(status_code=409, detail="Failed processing jobs cannot be cancelled; use retry or resume")
     if state == "CANCELLED":
         return processing_dict(row)
     with closing(db()) as connection:
@@ -1551,6 +1840,242 @@ async def processing_media(job_id: str, filename: str) -> FileResponse:
     if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
         raise HTTPException(status_code=404, detail="Media not found")
     return FileResponse(target, media_type="video/mp4", filename=target.name)
+
+
+# ---------------------------------------------------------------------------
+# Private Android API
+#
+# These concise routes intentionally reuse the canonical Gateway job store and
+# worker queue. They are not a second backend: the /v1/processing/* routes and
+# the Android-facing /jobs/* routes address the same SQLite rows and pipeline
+# checkpoints.
+
+PRIVATE_UPLOAD_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
+PRIVATE_MAX_CLIP_ID = 10000
+
+
+def _private_job_response(job: dict[str, Any]) -> dict[str, Any]:
+    error = job.get("error")
+    return {
+        "job_id": job.get("id"),
+        "status": job.get("status"),
+        "state": job.get("state"),
+        "current_stage": job.get("stage"),
+        "progress": job.get("progress"),
+        "message": job.get("message"),
+        "errors": ([{"code": job.get("error_code") or "JOB_FAILED", "message": error}] if error else []),
+        "recoverable": bool(job.get("recoverable")),
+        "cancel_requested": bool(job.get("cancel_requested")),
+        "retry_count": int(job.get("retry_count") or 0),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "correlation_id": job.get("correlation_id"),
+        "results_available": bool(job.get("results")),
+    }
+
+
+def _private_clip_index(clip_id: str) -> int:
+    raw = clip_id.strip()
+    if raw.lower().startswith("clip_"):
+        raw = raw[5:]
+    if not raw.isdigit():
+        raise HTTPException(status_code=422, detail={"code": "INVALID_CLIP_ID", "message": "clip_id must be a non-negative integer."})
+    index = int(raw)
+    if index > PRIVATE_MAX_CLIP_ID:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_CLIP_ID", "message": "clip_id is outside the supported range."})
+    return index
+
+
+def _private_processing_row(job_id: str) -> sqlite3.Row:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "Processing job not found."})
+    return row
+
+
+def _private_result_for_job(job_id: str, row: sqlite3.Row) -> dict[str, Any]:
+    if canonical_state(row) != "COMPLETED":
+        raise HTTPException(status_code=409, detail={"code": "RESULTS_NOT_READY", "message": "Results are available only after the job is completed."})
+    job = processing_dict(row)
+    results = job.get("results") or {}
+    artifacts = results.get("artifacts", []) if isinstance(results, dict) else []
+    return {"job_id": job_id, "status": "completed", "clips": artifacts, "artifacts": artifacts, "results": results}
+
+
+def _private_safe_clip_entry(job_id: str, pipeline_job_id: str, entry: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        return None
+    raw_path = Path(str(entry.get("path", ""))).resolve()
+    clip_root = (PROCESSING_ROOT / "jobs" / pipeline_job_id / "clips").resolve()
+    if clip_root not in raw_path.parents or not raw_path.is_file():
+        return None
+    valid, _reason = validate_media_artifact(raw_path)
+    if not valid:
+        return None
+    safe = {key: value for key, value in entry.items() if key not in {"path", "ass"}}
+    safe["url"] = f"{PUBLIC_BASE_URL}/jobs/{job_id}/clips/{safe.get('clip', raw_path.stem)}"
+    safe["download_url"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{job_id}/media/{quote(raw_path.name, safe='')}"
+    return safe
+
+
+async def _private_upload_to_source(upload: UploadFile) -> tuple[str, int]:
+    filename = Path(upload.filename or "").name
+    suffix = Path(filename).suffix.lower()
+    content_type = (upload.content_type or "").lower()
+    if suffix not in PRIVATE_UPLOAD_EXTENSIONS and not content_type.startswith("video/"):
+        raise HTTPException(status_code=415, detail={"code": "UNSUPPORTED_VIDEO", "message": "Upload a supported video file (mp4, mov, mkv, or webm)."})
+    upload_id = f"upl_{secrets.token_urlsafe(12)}"
+    directory = (SOURCE_ROOT / upload_id).resolve()
+    source_root = SOURCE_ROOT.resolve()
+    if source_root not in directory.parents:
+        raise HTTPException(status_code=500, detail={"code": "UPLOAD_PATH_INVALID", "message": "Upload storage path is invalid."})
+    directory.mkdir(parents=True, exist_ok=False)
+    target = directory / ("source" + (suffix if suffix in PRIVATE_UPLOAD_EXTENSIONS else ".mp4"))
+    size = 0
+    try:
+        with target.open("wb") as output:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail={"code": "UPLOAD_TOO_LARGE", "message": "Uploaded video exceeds the configured size limit."})
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail={"code": "EMPTY_UPLOAD", "message": "Uploaded video is empty."})
+        timestamp = now_iso()
+        source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/{quote(target.name, safe='')}"
+        items = [{"index": 0, "title": filename or target.name, "url": source_url, "filename": target.name, "bytes": size}]
+        with closing(db()) as connection:
+            connection.execute(
+                "INSERT INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, ?, ?)",
+                (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), timestamp, timestamp),
+            )
+            connection.commit()
+        return source_url, size
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    except Exception as error:  # noqa: BLE001 — never expose filesystem details to clients
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=500, detail={"code": "UPLOAD_FAILED", "message": "Video upload failed."}) from error
+    finally:
+        await upload.close()
+
+
+@app.post("/jobs", dependencies=[Depends(auth)])
+async def private_create_job(
+    request: Request,
+    file: UploadFile | None = File(default=None),
+    source_url: str | None = Form(default=None),
+    llm: str = Form(default="gemini"),
+    captions: str = Form(default="classic"),
+    mode: str = Form(default="balanced"),
+    idempotency_key: str | None = Form(default=None),
+) -> dict[str, Any]:
+    """Create a personal processing job, normally with one multipart video file."""
+    if file is None and not source_url:
+        raise HTTPException(status_code=400, detail={"code": "VIDEO_REQUIRED", "message": "Provide a video file or source_url."})
+    uploaded_bytes = 0
+    source = source_url
+    if file is not None:
+        source, uploaded_bytes = await _private_upload_to_source(file)
+    assert source is not None
+    try:
+        payload = ProcessingPayload(source=source, llm=llm, captions=captions, mode=mode, idempotency_key=idempotency_key)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_JOB_OPTIONS", "message": "Invalid processing options."}) from error
+    created = await start_processing(payload, request)
+    current = await processing_status(created["id"])
+    response = _private_job_response(current)
+    response["uploaded_bytes"] = uploaded_bytes
+    return response
+
+
+@app.get("/jobs/{job_id}", dependencies=[Depends(auth)])
+async def private_get_job(job_id: str) -> dict[str, Any]:
+    row = _private_processing_row(job_id)
+    return _private_job_response(processing_dict(row))
+
+
+@app.post("/jobs/{job_id}/cancel", dependencies=[Depends(auth)])
+async def private_cancel_job(job_id: str) -> dict[str, Any]:
+    result = await cancel_processing(job_id)
+    return _private_job_response(result)
+
+
+@app.post("/jobs/{job_id}/resume", dependencies=[Depends(auth)])
+async def private_resume_job(job_id: str) -> dict[str, Any]:
+    result = await resume_processing(job_id)
+    return _private_job_response(result)
+
+
+@app.get("/jobs/{job_id}/results", dependencies=[Depends(auth)])
+async def private_job_results(job_id: str) -> dict[str, Any]:
+    row = _private_processing_row(job_id)
+    return _private_result_for_job(job_id, row)
+
+
+@app.get("/jobs/{job_id}/clips/{clip_id}", dependencies=[Depends(auth)])
+async def private_clip_details(job_id: str, clip_id: str) -> dict[str, Any]:
+    index = _private_clip_index(clip_id)
+    row = _private_processing_row(job_id)
+    if canonical_state(row) != "COMPLETED" or not row["pipeline_job_id"]:
+        raise HTTPException(status_code=409, detail={"code": "CLIP_NOT_READY", "message": "Clip details are available after processing completes."})
+    job_dir = (PROCESSING_ROOT / "jobs" / str(row["pipeline_job_id"])).resolve()
+    jobs_root = (PROCESSING_ROOT / "jobs").resolve()
+    if jobs_root not in job_dir.parents:
+        raise HTTPException(status_code=500, detail={"code": "JOB_PATH_INVALID", "message": "Job storage path is invalid."})
+    try:
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        from publikclip_pipeline.edits.render_clip import context_for_clip
+        context = await asyncio.to_thread(context_for_clip, job_dir, index)
+    except (IndexError, KeyError, FileNotFoundError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=404, detail={"code": "CLIP_NOT_FOUND", "message": "Clip was not found."}) from error
+    except Exception as error:  # noqa: BLE001 — stable client-facing error
+        raise HTTPException(status_code=422, detail={"code": "CLIP_DETAILS_FAILED", "message": "Clip details could not be loaded."}) from error
+    context["media_path"] = None
+    edit = context.get("edit")
+    if isinstance(edit, dict):
+        for overlay in edit.get("overlays", []) if isinstance(edit.get("overlays"), list) else []:
+            if isinstance(overlay, dict):
+                overlay["image_path"] = None
+    score = ((read_pipeline_checkpoint(job_dir, "score") or {}).get("clips") or [])
+    if not 0 <= index < len(score):
+        raise HTTPException(status_code=404, detail={"code": "CLIP_NOT_FOUND", "message": "Clip was not found."})
+    render = read_pipeline_checkpoint(job_dir, "render") or {}
+    output = next((item for item in render.get("outputs", []) if int(item.get("clip", -1)) == index), None)
+    return {"job_id": job_id, "clip_id": str(index), "clip": score[index], "details": context, "artifact": _private_safe_clip_entry(job_id, str(row["pipeline_job_id"]), output)}
+
+
+@app.post("/jobs/{job_id}/clips/{clip_id}/render", dependencies=[Depends(auth)])
+async def private_render_clip(job_id: str, clip_id: str) -> dict[str, Any]:
+    index = _private_clip_index(clip_id)
+    row = _private_processing_row(job_id)
+    if canonical_state(row) != "COMPLETED" or not row["pipeline_job_id"]:
+        raise HTTPException(status_code=409, detail={"code": "CLIP_NOT_READY", "message": "A completed job is required before rendering a clip."})
+    job_dir = (PROCESSING_ROOT / "jobs" / str(row["pipeline_job_id"])).resolve()
+    jobs_root = (PROCESSING_ROOT / "jobs").resolve()
+    if jobs_root not in job_dir.parents:
+        raise HTTPException(status_code=500, detail={"code": "JOB_PATH_INVALID", "message": "Job storage path is invalid."})
+    try:
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        from publikclip_pipeline.edits.render_clip import render_clip_edit
+        entry = await asyncio.to_thread(render_clip_edit, job_dir, index, lambda _fraction, _message: None)
+    except (IndexError, KeyError, FileNotFoundError) as error:
+        raise HTTPException(status_code=404, detail={"code": "CLIP_NOT_FOUND", "message": "Clip was not found."}) from error
+    except Exception as error:  # noqa: BLE001 — do not expose ffmpeg paths or traces
+        raise HTTPException(status_code=422, detail={"code": "CLIP_RENDER_FAILED", "message": "Clip render failed."}) from error
+    safe_entry = _private_safe_clip_entry(job_id, str(row["pipeline_job_id"]), entry)
+    if safe_entry is None:
+        raise HTTPException(status_code=500, detail={"code": "ARTIFACT_INVALID", "message": "Rendered clip failed artifact validation."})
+    return {"job_id": job_id, "clip_id": str(index), "status": "rendered", "artifact": safe_entry}
 
 
 @app.post("/v1/analytics/snapshots", dependencies=[Depends(auth)])

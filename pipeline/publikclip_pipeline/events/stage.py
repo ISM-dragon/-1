@@ -29,15 +29,23 @@ from ..render import ffmpeg_bin
 
 
 def _extract_wav(media: Path, dst: Path, sr: int) -> None:
-    proc = subprocess.run(
-        [
-            ffmpeg_bin.ffmpeg(), "-y", "-i", str(media),
-            "-vn", "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", str(dst),
-        ],
-        capture_output=True, text=True, timeout=3600,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg_bin.ffmpeg(), "-y", "-i", str(media),
+                "-vn", "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", str(dst),
+            ],
+            capture_output=True, text=True, timeout=3600,
+        )
+    except subprocess.TimeoutExpired as err:
+        dst.unlink(missing_ok=True)
+        raise StageError("Audio extraction timed out.", "FFMPEG_TIMEOUT") from err
+    except OSError as err:
+        dst.unlink(missing_ok=True)
+        raise StageError(f"Audio extraction could not start: {err}", "FFMPEG_UNAVAILABLE") from err
     if proc.returncode != 0:
-        raise StageError(f"Audio extraction failed: {(proc.stderr or '')[-500:]}")
+        dst.unlink(missing_ok=True)
+        raise StageError(f"Audio extraction failed: {(proc.stderr or '')[-500:]}", "FFMPEG_FAILED")
 
 
 class EventsStage(Stage):
@@ -52,8 +60,15 @@ class EventsStage(Stage):
         ingest, asr = prior.get("ingest"), prior.get("asr")
         if not ingest or not asr:
             raise StageError("Events need ingest + asr outputs.")
-        media = Path(ingest["media_path"])
-        audio16 = Path(ingest["audio_path"])
+        try:
+            media = Path(ingest["media_path"])
+            audio16 = Path(ingest["audio_path"])
+            if not media.is_file() or media.stat().st_size == 0:
+                raise ValueError("media artifact is missing or empty")
+            if not audio16.is_file() or audio16.stat().st_size <= 44:
+                raise ValueError("analysis audio is missing or empty")
+        except (KeyError, OSError, TypeError, ValueError) as err:
+            raise StageError(f"Events inputs are invalid: {err}", "INPUT_INVALID") from err
 
         import json
 
@@ -70,8 +85,13 @@ class EventsStage(Stage):
         bench: dict[str, float] = {}
         events: list[dict] = []
 
-        y16k, _ = librosa.load(str(audio16), sr=16000, mono=True)
+        try:
+            y16k, _ = librosa.load(str(audio16), sr=16000, mono=True)
+        except (OSError, ValueError) as err:
+            raise StageError(f"Analysis audio could not be read: {err}", "AUDIO_INVALID") from err
         duration = len(y16k) / 16000.0
+        if duration <= 0:
+            raise StageError("Analysis audio is empty.", "AUDIO_INVALID")
 
         # --- Channel 1 (optional): jrgillick laughter specialist ----------
         # OFF by default — PANNs' laughter classes cover the bus at a
@@ -108,13 +128,16 @@ class EventsStage(Stage):
         wav32 = ctx.job_dir / "audio32k.wav"
         if not wav32.exists():
             _extract_wav(media, wav32, panns_models.SAMPLE_RATE)
-        y32k, _ = librosa.load(str(wav32), sr=panns_models.SAMPLE_RATE, mono=True)
-        pmodel = panns_models.load_model(str(ckpt), device)
-        probs_by_type, fps = panns_channel.framewise_probs(
-            pmodel, y32k, device,
-            progress=lambda f: ctx.emit(0.45 + f * 0.35, "Detecting audio events…"),
-        )
-        del pmodel
+        try:
+            y32k, _ = librosa.load(str(wav32), sr=panns_models.SAMPLE_RATE, mono=True)
+            pmodel = panns_models.load_model(str(ckpt), device)
+            probs_by_type, fps = panns_channel.framewise_probs(
+                pmodel, y32k, device,
+                progress=lambda f: ctx.emit(0.45 + f * 0.35, "Detecting audio events…"),
+            )
+            del pmodel
+        finally:
+            wav32.unlink(missing_ok=True)
         for etype, probs in probs_by_type.items():
             enter, stay = panns_channel.THRESHOLDS.get(etype, (0.15, 0.08))
             for start, end, peak in post.postprocess(probs, fps, enter=enter, stay=stay):
@@ -128,7 +151,6 @@ class EventsStage(Stage):
                     }
                 )
         bench["panns_sec"] = round(time.monotonic() - t0, 1)
-        wav32.unlink(missing_ok=True)  # 32k wav is only needed here
 
         # --- Channel 3: transcript long pauses ----------------------------
         events.extend(dsp.long_pauses(asr["segments"]))
