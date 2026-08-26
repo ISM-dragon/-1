@@ -1,0 +1,9 @@
+YAMNet TensorFlow Lite model
+
+Source: https://www.kaggle.com/models/google/yamnet/tfLite/classification-tflite/1
+Original model: https://tfhub.dev/google/yamnet/1
+License: Apache License 2.0
+
+The model is distributed as a TensorFlow Lite flatbuffer with the original
+YAMNet label archive appended by the published model package. The application
+uses the accompanying TensorFlow Models class map for deterministic lookup.
