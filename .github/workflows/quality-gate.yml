@@ -41,6 +41,8 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: python -m pip install --upgrade pip -r gateway/requirements.txt pytest scipy librosa httpx
+      - name: Install media tools
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Check product identity
         run: python scripts/check_identity.py
       - name: Run Gateway tests
