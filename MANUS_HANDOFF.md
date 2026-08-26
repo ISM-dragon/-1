@@ -71,3 +71,25 @@ export KEY_PASSWORD='***'
 ## مراجع التسليم
 
 التفاصيل التشغيلية، مصفوفة الصلاحيات، بصمة APK، وقيود اختبار الجهاز موجودة في [`docs/RELEASE.md`](docs/RELEASE.md). يجب أن يكون أي backend مستخدم في الإنتاج خاصاً ومحمياً بـ HTTPS وGateway token، ويجب عدم نقل محرك Python أو أسراره إلى تطبيق Android.
+
+
+## جلسة التدقيق والتجهيز — 2026-08-26
+
+تم فحص `supoclip-main.zip` باعتباره مرجعًا خارجيًا، وفحص بنية المستودع الحالي قبل أي نسخ. المرجع AGPL-3.0 ويحتوي على web stack وBackend متعدد الخدمات؛ لم تُنسخ منه ملفات source أو assets أو secrets أو build outputs. القرار المعتمد هو الاحتفاظ بمسار `android/` + `gateway/` + `pipeline/` كمسار APK canonical، مع استخدام أفكار UX وrubric فقط عبر إعادة تنفيذ مستقلة واختبارات regression.
+
+تمت إضافة الوثائق المطلوبة التالية: `docs/API.md`, `docs/ENGINE.md`, `docs/AI_RUNTIME.md`, `docs/MEDIA_RUNTIME.md`, `docs/ANDROID_UI.md`, `docs/TEST_MATRIX.md`, `docs/PERFORMANCE.md`, `docs/SECURITY.md`, `docs/THIRD_PARTY_LICENSES.md`, `docs/REFERENCE_COMPARISON.md`, `docs/REFERENCE_MIGRATION_PLAN.md`, و`docs/MIGRATION_DECISIONS.md`. كما أضيف `scripts/verify.sh` لتشغيل Python regression وfrontend build، وتشغيل Android checks تلقائيًا عند توفر SDK.
+
+## Evidence هذه الجلسة
+
+| الفحص | النتيجة |
+|---|---:|
+| `python3 -m pytest -q` | 164 passed، 1 skipped، 4 deprecation warnings |
+| `scripts/verify.sh` | نجح؛ Python وfrontend مرّا، Android skipped بسبب غياب SDK في البيئة الحالية |
+| `npm ci && npm run build` | نجح، 0 vulnerabilities في audit الخاص بـnpm |
+| `bash -n scripts/verify.sh` | PASS |
+| reference license inspection | AGPL-3.0؛ لا code copied |
+| Git status | تغييرات محصورة في الوثائق و`scripts/verify.sh` |
+
+## Known blockers غير البرمجية
+
+لا يزال القبول النهائي مشروطًا بتوفير Android SDK/JDK كاملين لبيئة البناء، جهاز Android فعلي أو emulator مستقر لاختبار install/open/picker/process death/export، Gateway خاص عبر HTTPS مع token، مزود ASR/diarization/LLM جاهز، وrelease keystore. لا يُعلن release accepted قبل حفظ job IDs وstage outputs وartifact hashes وscreenshots/logcat لهذه المسارات. هذه القيود موثقة تفصيليًا في `docs/FINAL_ACCEPTANCE.md` و`docs/RELEASE_BLOCKERS.md`.

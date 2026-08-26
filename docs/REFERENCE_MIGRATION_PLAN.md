@@ -1,0 +1,46 @@
+# خطة ترحيل الأفكار المرجعية
+
+**الحالة:** معتمدة للتنفيذ التدريجي، وليست تصريحًا بنسخ المشروع المرجعي.
+
+## المبدأ
+
+المسار المستهدف هو Android APK شخصي يتصل بـPrivate Gateway. ستُرحّل الأفكار التي تخدم هذا المسار فقط، وبحدود عقود واضحة. كل تغيير cross-component يبدأ بتثبيت contract واختبار regression، ثم يُدمج على دفعة صغيرة يمكن التراجع عنها. لا يُسمح بإعادة بناء المشروع من الصفر، ولا بإدخال user accounts أو billing أو Redis أو مزودات جديدة لمجرد مطابقة المرجع.
+
+## الموجات
+
+| الموجة | النطاق | مخرجاتها | بوابة الانتقال |
+|---|---|---|---|
+| Wave 1 — Audit | مقارنة الكود والميزات والتراخيص | هذه المقارنة، قرارات الدمج، وثائق architecture/contracts | لا production replacement قبل اكتمال الوثائق. |
+| Wave 2 — Engine/Runtime | تثبيت Engine facade، lifecycle، media errors، model diagnostics | عقود v1، checkpoints، failure envelope، اختبارات restart/cancel/resume | جميع اختبارات Python الحالية تمر، مع evidence لاختبار failure paths. |
+| Wave 3 — Android Core | upload sessions، Room state، WorkManager، notifications، secure config | APK client لا يعرف Python ولا الأسرار | unit/lint/build، ثم device test على جهاز فعلي. |
+| Wave 4 — Integration | ربط APK بـGateway خاص، تنزيل النتائج، preview/edit/export | E2E من URI إلى artifact | job ID، stage evidence، hashes، وعدم وجود mock في المسار الأساسي. |
+| Wave 5 — Release QA | توقيع، device matrix، network loss، process death، restart/recovery | release APK وrelease evidence | لا تغلق blockers دون دليل تشغيل فعلي. |
+
+## ترتيب التغييرات
+
+أولًا، يجب تثبيت `/v1` وعقد `ProcessingEngine` بحيث تظل مراحل `ingest → asr → diarize → events → candidates → score → camera → render` خلف facade واحدة. ثانيًا، يجب تحسين upload/session وdiagnostics دون تغيير سلوك one-shot compatibility route قبل اكتمال العميل. ثالثًا، يجب استكمال Android UX على شكل Home → Import → Generate → Processing → Results → Review → Edit → Render → Export، مع تخزين حالة job في Room واستخدام WorkManager للاستمرار.
+
+بعد ذلك فقط تُضاف أفكار المرجع ذات القيمة المحدودة: presets للـcaptions، بيانات rubric واضحة للـscoring، وعمليات trim/split/merge في شاشة التحرير. هذه الإضافات يجب أن تعمل فوق artifacts والعقود الحالية؛ لا يجوز أن تجعل Android يعيد transcription أو يشغل FFmpeg محليًا. أما B-roll، النشر الاجتماعي، MCP، الحسابات، billing، والـmulti-user فخارج هذه الخطة.
+
+## ضوابط الترحيل
+
+| الخطر | الضابط |
+|---|---|
+| كسر checkpoints القديمة | قراءة legacy envelopes، وكتابة versioned envelopes، واختبار resume من كل stage. |
+| اختلاف نتائج scoring | إطلاق rubric versioned وتسجيله في job metadata، ثم مقارنة النتائج قبل تغيير default. |
+| تضخم APK | فحص APK archive يمنع Python/uv/Node/Rust/FFmpeg والنماذج والأسرار. |
+| فقد upload عند انقطاع الشبكة | offset + SHA-256 + idempotency key، واختبار interruption/resume. |
+| تسرب الأسرار | provider keys في Gateway فقط، وAndroid لا يستقبل إلا capability/result آمنًا. |
+| التباس بين Android native وTauri Android | artifact واحد وapplication ID واحد للمسار الشخصي؛ Tauri يبقى مسارًا منفصلًا. |
+| نسخ ترخيص غير واضح | إعادة التنفيذ المستقل عند أي غموض، وإضافة سجل إلى `THIRD_PARTY_LICENSES.md` قبل الدمج. |
+
+## معايير التراجع
+
+يُلغى التغيير إذا أدى إلى فشل في build أو regression suite، أو زاد زمن المعالجة/الذاكرة دون evidence، أو غيّر output السابق دون versioning، أو احتاج dependency غير متوافقة مع Android/ترخيص المشروع، أو جعل failure في LLM أو FFmpeg يسبب crash بدل error قابل للفحص.
+
+## References
+
+[1]: REFERENCE_COMPARISON.md "Comparison and decisions"
+[2]: ARCHITECTURE.md "Canonical topology and ownership"
+[3]: CONTRACTS.md "Public API and engine contracts"
+[4]: FINAL_ACCEPTANCE.md "Evidence-based acceptance matrix"
