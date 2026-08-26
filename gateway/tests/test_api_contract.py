@@ -40,6 +40,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(len(routes), len(set(routes)))
 
     def test_http_errors_use_stable_envelope(self):
+        main.init_db()
         client = TestClient(main.app)
         response = client.get("/v1/processing/jobs/not-found")
         self.assertEqual(response.status_code, 404)
