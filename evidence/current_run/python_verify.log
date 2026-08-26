@@ -1,0 +1,308 @@
+== identity ==
+identity_ok product=ISM version=0.11.0 android_application_id=com.aistudio.opuspro.apk api=v1
+== compile ==
+== gateway ==
+
+==================================== ERRORS ====================================
+_____________ ERROR collecting gateway/tests/test_api_contract.py ______________
+gateway/tests/test_api_contract.py:3: in <module>
+    from gateway.main import app
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+____________ ERROR collecting gateway/tests/test_gateway_safety.py _____________
+gateway/tests/test_gateway_safety.py:8: in <module>
+    from gateway.main import validate_public_source, validate_uploaded_media
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+____________ ERROR collecting gateway/tests/test_gemini_gateway.py _____________
+gateway/tests/test_gemini_gateway.py:12: in <module>
+    from gateway import main
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+_______________ ERROR collecting gateway/tests/test_job_state.py _______________
+gateway/tests/test_job_state.py:9: in <module>
+    from gateway import main
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+____________ ERROR collecting gateway/tests/test_media_lifecycle.py ____________
+gateway/tests/test_media_lifecycle.py:12: in <module>
+    from gateway import main
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+____________ ERROR collecting gateway/tests/test_private_backend.py ____________
+gateway/tests/test_private_backend.py:13: in <module>
+    from gateway import main
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+____________ ERROR collecting gateway/tests/test_social_schedule.py ____________
+gateway/tests/test_social_schedule.py:7: in <module>
+    from gateway import main
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+________ ERROR collecting gateway/tests/test_web_processing_contract.py ________
+gateway/tests/test_web_processing_contract.py:11: in <module>
+    from gateway import main
+gateway/main.py:1970: in <module>
+    @app.post("/jobs", dependencies=[Depends(auth)])
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:3004: in decorator
+    self.add_api_route(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:2939: in add_api_route
+    route = route_class(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1193: in __init__
+    _populate_api_route_state(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:1061: in _populate_api_route_state
+    ) = _build_dependant_with_parameterless_dependencies(
+/usr/local/lib/python3.12/dist-packages/fastapi/routing.py:861: in _build_dependant_with_parameterless_dependencies
+    dependant = get_dependant(path=path, call=call, scope="function")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:296: in get_dependant
+    param_details = analyze_param(
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:523: in analyze_param
+    ensure_multipart_is_installed()
+/usr/local/lib/python3.12/dist-packages/fastapi/dependencies/utils.py:129: in ensure_multipart_is_installed
+    raise RuntimeError(multipart_not_installed_error) from None
+E   RuntimeError: Form data requires "python-multipart" to be installed.
+E   You can install "python-multipart" with:
+E
+E   pip install python-multipart
+=============================== warnings summary ===============================
+gateway/main.py:1180
+gateway/main.py:1180
+gateway/main.py:1180
+gateway/main.py:1180
+gateway/main.py:1180
+gateway/main.py:1180
+gateway/main.py:1180
+gateway/main.py:1180
+  /home/ubuntu/work/publikclip-repo/gateway/main.py:1180: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    @app.on_event("startup")
+
+../../../../usr/local/lib/python3.12/dist-packages/fastapi/applications.py:4681: 16 warnings
+  /usr/local/lib/python3.12/dist-packages/fastapi/applications.py:4681: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+gateway/main.py:1204
+gateway/main.py:1204
+gateway/main.py:1204
+gateway/main.py:1204
+gateway/main.py:1204
+gateway/main.py:1204
+gateway/main.py:1204
+gateway/main.py:1204
+  /home/ubuntu/work/publikclip-repo/gateway/main.py:1204: DeprecationWarning:
+          on_event is deprecated, use lifespan event handlers instead.
+
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+    @app.on_event("shutdown")
+
+gateway/tests/test_private_backend.py:10
+  /home/ubuntu/work/publikclip-repo/gateway/tests/test_private_backend.py:10: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR gateway/tests/test_api_contract.py - RuntimeError: Form data requires "...
+ERROR gateway/tests/test_gateway_safety.py - RuntimeError: Form data requires...
+ERROR gateway/tests/test_gemini_gateway.py - RuntimeError: Form data requires...
+ERROR gateway/tests/test_job_state.py - RuntimeError: Form data requires "pyt...
+ERROR gateway/tests/test_media_lifecycle.py - RuntimeError: Form data require...
+ERROR gateway/tests/test_private_backend.py - RuntimeError: Form data require...
+ERROR gateway/tests/test_social_schedule.py - RuntimeError: Form data require...
+ERROR gateway/tests/test_web_processing_contract.py - RuntimeError: Form data...
+!!!!!!!!!!!!!!!!!!! Interrupted: 8 errors during collection !!!!!!!!!!!!!!!!!!!!
+33 warnings, 8 errors in 3.67s
+== backend ==
+......                                                                   [100%]
+=============================== warnings summary ===============================
+../../../../usr/local/lib/python3.12/dist-packages/fastapi/testclient.py:1
+  /usr/local/lib/python3.12/dist-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+6 passed, 1 warning in 1.10s
+== pipeline ==
+
+==================================== ERRORS ====================================
+__________________ ERROR collecting tests/test_events_post.py __________________
+ImportError while importing test module '/home/ubuntu/work/publikclip-repo/pipeline/tests/test_events_post.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pipeline/tests/test_events_post.py:5: in <module>
+    from publikclip_pipeline.events import post
+pipeline/publikclip_pipeline/events/post.py:15: in <module>
+    import scipy.signal
+E   ModuleNotFoundError: No module named 'scipy'
+=========================== short test summary info ============================
+ERROR pipeline/tests/test_events_post.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.93s

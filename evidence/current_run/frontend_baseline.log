@@ -1,0 +1,23 @@
+
+added 76 packages, and audited 77 packages in 3s
+
+11 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+> publikclip-app@0.11.0 build
+> tsc -b && vite build
+
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 46 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                  0.39 kB │ gzip:  0.26 kB
+dist/assets/ArchivoBlack-Regular-VVh6-99s.ttf   90.99 kB
+dist/assets/PublicSans-Var-C_1_ajHm.ttf        103.32 kB
+dist/assets/MartianMono-Var-Diap2Vfn.ttf       148.46 kB
+dist/assets/index-B-37T8Ce.css                  41.78 kB │ gzip:  8.78 kB
+dist/assets/index-DDG2YB1v.js                  288.75 kB │ gzip: 88.58 kB
+✓ built in 1.30s

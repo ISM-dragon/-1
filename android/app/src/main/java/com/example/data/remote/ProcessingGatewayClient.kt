@@ -53,11 +53,14 @@ class ProcessingGatewayClient(
         idempotencyKey: String = UUID.randomUUID().toString(),
         existingRemoteJobId: String? = null,
         onProgress: suspend (Progress) -> Unit,
-        onJobCreated: suspend (String) -> Unit = {}
+        onJobCreated: suspend (String) -> Unit = {},
+        existingGatewayJobId: String? = null
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
-            val existing = existingRemoteJobId?.trim().orEmpty()
+            val existing = existingRemoteJobId?.trim().orEmpty().ifBlank {
+                existingGatewayJobId?.trim().orEmpty()
+            }
             val gatewayJobId = if (existing.isNotBlank()) {
                 onProgress(Progress(12, "RESUMING", "استعادة المهمة المحفوظة من Gateway"))
                 existing
@@ -94,12 +97,12 @@ class ProcessingGatewayClient(
                         completedResult = RemoteResult(gatewayJobId, parseClips(statusPayload))
                     }
                     state == "CANCELLED" || statusPayload.optString("status") == "cancelled" -> error("ألغى Gateway مهمة المعالجة")
-                    state == "FAILED" || statusPayload.optString("status") in setOf("failed", "error") -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
-                    (state == "INTERRUPTED" || state == "RETRY_WAIT") && !resumeAttempted -> {
+                    (state == "INTERRUPTED" || state == "RETRY_WAIT" || state == "FAILED" || state == "ERROR" || statusPayload.optString("status") in setOf("failed", "error")) && !resumeAttempted -> {
                         resume(config, gatewayJobId).getOrThrow()
                         resumeAttempted = true
                         onProgress(Progress(percent, "RESUMING", "استئناف المهمة من checkpoint Gateway"))
                     }
+                    state == "FAILED" || state == "ERROR" || statusPayload.optString("status") in setOf("failed", "error") -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
                 }
                 if (completedResult == null) delay(POLL_INTERVAL_MS)
             }
@@ -337,7 +340,13 @@ class ProcessingGatewayClient(
         val normalized = raw.trim().removeSuffix("/")
         require(normalized.isNotBlank()) { "Gateway URL غير مضبوط" }
         val uri = URI(normalized)
-        require(uri.scheme?.lowercase() == "https") { "يجب استخدام HTTPS مع private Processing Gateway" }
+        val host = uri.host.orEmpty().lowercase()
+        val local = host == "localhost" || host == "127.0.0.1" || host == "[::1]" ||
+            host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("172.16.")
+        require(!uri.host.isNullOrBlank()) { "عنوان Gateway غير صالح" }
+        require(uri.scheme?.lowercase() == "https" || (uri.scheme?.lowercase() == "http" && local)) {
+            "استخدم HTTPS خارج الشبكة المحلية"
+        }
         return normalized
     }
 
