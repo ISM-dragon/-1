@@ -1,45 +1,78 @@
-# Android UI وClient Responsibilities
+# Android UI — ISM Clip Workflow
 
-**الهدف:** APK شخصي خفيف أمام Gateway خاص.
+**الحالة:** مكتمل على فرع `agent/android-ui`
 
-## المسار الرئيسي
+**المنتج:** ISM Native Android
 
-```text
-Home → Import → Generate → Processing → Results
-     → Clip Review → Edit → Render → Export
-```
+**المنصة:** Kotlin + Jetpack Compose + Room + WorkManager + Media3
 
-تختار شاشة Import فيديو من Photo Picker أو URI مدعوم، وتنسخه إلى app-private storage قبل جدولة الرفع. شاشة Generate تجمع خيارات آمنة مثل mode وcaption preset؛ لا تعرض provider secrets. شاشة Processing تعرض state وstage وfraction من Gateway مع حالة offline/reconnecting، وتسمح بالإلغاء عندما يكون job قابلًا لذلك. Results وClip Review تعرضان metadata والـpreview، ثم تحفظ شاشة Edit تغييرات trim/caption/framing كطلب render جديد أو update مقيد. Export ينزل artifact ويتحقق من bytes قبل عرضه عبر Android media/share APIs.
+## النطاق
 
-| مسؤولية Android | ما يجب ألا يفعله |
+هذه الواجهة موجهة للهاتف وتغطي المسار الشخصي الكامل لتحويل فيديو طويل إلى clips: اختيار الفيديو، تثبيت الملف، جدولة المعالجة، متابعة الحالة، مراجعة النتائج، تحرير المقطع، تصييره في الخلفية، ثم تصديره إلى MediaStore أو ورقة المشاركة. لا تنفذ الواجهة عمليات تحليل أو تصيير ثقيلة على خيط UI.
+
+عند عدم وجود Gateway صالح، يستمر مسار الملفات المحلية عبر `ProcessingEngine` و`VideoProcessingWorker` و`ProductionVideoPipeline`. وعند ضبط Gateway، تبقى الواجهة عميلة لعقد المستودع الحالي؛ لا توجد طبقة API ثانية ولا تُنسخ أسرار مزودي الذكاء الاصطناعي إلى الواجهة.
+
+## الشاشات ومسؤولياتها
+
+| الشاشة | مسؤولية الواجهة | عقد المصدر المستخدم |
+|---|---|---|
+| Home | CTA للاستيراد، المشاريع الأخيرة، ومهمة معالجة مستمرة | `OpusRepository.allProjects`, `processingJobs` |
+| Import | اختيار فيديو الهاتف، عرض حالة المصدر، ثم الجدولة | `DeviceGalleryVideoPicker`, `enqueueVideoProcessing()` |
+| Processing | عرض progress وstage الحقيقيين، الإلغاء وإعادة المحاولة | `observeProcessingJob()`, `cancelVideoProcessing()`, `retryVideoProcessing()` |
+| Results | قائمة clips للمشروع مع score والمدة والنص | `allClips`, `getClipsForProject()` |
+| Clip Review | preview، score، confidence، duration، transcript، وتوصية المنصة | `Project`, `Clip`, Media3 preview |
+| Editor | start/end، crop/framing، caption preset، position، style | `ClipEditState`, `ClipEditEngine`, `enqueueClipRender()` |
+| Settings | إعداد Gateway واختبار الاتصال وشرح الخصوصية | `GatewayConfig`, `saveGatewayConfig()`, `testGatewayConnection()` |
+
+ينتقل التطبيق تلقائيًا من `Processing` إلى `Results` فقط عندما تحفظ المهمة حالة نجاح ويكون `outputProjectId` صالحًا. لذلك لا تعرض الواجهة تقدّمًا وهميًا ولا تفترض اكتمالًا من انتهاء animation محلية.
+
+## عقد التحرير والتصيير
+
+يُجمع كل تغيير في المحرر داخل `ClipEditState` immutable. يحتوي العقد على حدود المقطع بالثواني، نسبة الأبعاد، موضع القص الأفقي، تفعيل الكابشن، preset الكابشن، موضعه، وأسلوبه.
+
+> الواجهة ترسل `ClipEditState` إلى حد `ClipEditEngine`، ثم يمرره `OpusRepository` إلى `ClipRenderWorker`. التصيير نفسه يستدعي `Media3VideoProcessor` خارج Compose ويدعم clipping ونسبة الأبعاد والـ crop والكابشن الموجودة في المحرك.
+
+| الحقل | التحقق | أثره في التصيير |
+|---|---|---|
+| `startTimeSec` / `endTimeSec` | البداية غير سالبة والنهاية بعد البداية | `MediaItem.ClippingConfiguration` |
+| `aspectRatio` | `9:16`, `1:1`, `4:5`, أو `16:9` من واجهة المحرر | `ExportAspectRatio` و`Presentation` |
+| `cropCenterX` | النطاق `-1..1` | تأثير `Crop` عند الحاجة |
+| `captionsEnabled` | قيمة Boolean | تمرير cues أو قائمة فارغة |
+| `captionPreset`, `captionPosition`, `captionStyle` | قيم UI موصوفة وممررة للعقد | محفوظة مع edit state للتوسعة؛ اختيار موضع/أسلوب الرسم التفصيلي يبقى ضمن قدرات renderer الحالية |
+
+لا تُحاول الواجهة تنفيذ render متزامن. `enqueueClipRender()` يضع القيم في `WorkRequest`، ويستعيد `EditorWorkflowScreen` حالة `WorkInfo` عند إعادة التركيب أو الدوران. عند النجاح يحدّث المستودع `Clip` بحدود التصيير الجديدة ونسبة الأبعاد ومسار الملف الناتج.
+
+## حالات التجربة
+
+| الحالة | السلوك المتوقع |
 |---|---|
-| اختيار الفيديو والوصول إلى URI | تمرير `content://` إلى الخادم باعتباره filesystem path. |
-| نسخ المصدر والتحقق من الحجم | الاحتفاظ بمصدر أو نتيجة في public storage بلا حاجة. |
-| upload/poll/control عبر Gateway | استيراد Python internal modules أو تشغيل FFmpeg server binary. |
-| Room job state وWorkManager | افتراض أن Activity أو process سيبقى حيًا أثناء المعالجة. |
-| foreground notification وطلب `POST_NOTIFICATIONS` | إنشاء progress وهمي أو إعلان completion قبل server state. |
-| preview/cache/export | عرض path داخلي أو URL غير محمي. |
+| Empty | Home وResults يعرضان رسالة واضحة وCTA للاستيراد بدل مساحة فارغة |
+| Loading | استعادة مهمة غير متاحة لحظيًا تعرض spinner ولا تنشئ نتائج مزيفة |
+| Processing | progress وstage من Room/Worker، مع زر إلغاء، وإعادة محاولة عند الفشل |
+| Error | رسالة آمنة للمستخدم مع إبقاء زر retry عندما تسمح حالة المهمة |
+| Small screen | كل المحتوى داخل `LazyColumn`، والخيارات الأفقية قابلة للتمرير |
+| Large phone | البطاقات تتمدد بعرض الهاتف دون تخطيط desktop ثابت |
+| Rotation | `MainActivity` يعلن `configChanges` للدوران وحجم الشاشة حتى لا يفقد اختيار الفيديو وحالة workflow أثناء الدوران |
+| Export | قبل التصيير يظهر تنبيه للمستخدم؛ بعد وجود `exportPath` تُحفظ النسخة إلى MediaStore وتُفتح ورقة المشاركة |
 
-## الاستمرار والـprocess death
+## الاختبار والتنفيذ
 
-يحتفظ Room بـ`remoteGatewayJobId` وupload offset وstate وlast error. يستخدم WorkManager unique work، وnetwork constraint، وbackoff. عند إغلاق التطبيق يعاد إنشاء observer من Room، ثم يقرأ الحالة من Gateway؛ لا تبدأ مهمة ثانية إذا بقي `idempotency_key` نفسه. عند فشل الشبكة يحتفظ العميل بآخر snapshot ويعرض reconnecting، ثم يستأنف upload أو polling من offset/status.
+تمت إضافة `ClipEditStateTest` للتحقق من الحفاظ على قيم التحرير ورفض نطاق زمني غير صالح وموضع crop خارج الحدود. تم تشغيل ترجمة Kotlin بنجاح عبر `:app:compileDebugKotlin`، كما نجح الاختبار المستهدف عبر `:app:testDebugUnitTest --tests com.example.ClipEditStateTest`.
 
-## الهوية والصلاحيات
+مجموعة `testDebugUnitTest` الكاملة بدأت تنفيذ اختبارات Robolectric الموجودة في المشروع لكنها لم تُكمل ضمن جلسة التحقق؛ لذلك تُعد نتيجة الاختبار المستهدف هي الإثبات الآلي الجديد، بينما تبقى مجموعة Robolectric القديمة بحاجة إلى تشغيل مستقل في CI أو بيئة أطول مهلة. لم يُنفذ اختبار instrumentation بصري على جهاز فعلي داخل بيئة العمل، ويجب التحقق اليدوي من preview وMediaStore وrotation على جهاز Android أو emulator قبل الإصدار.
 
-الـapplication ID الحالي هو `com.aistudio.opuspro.apk`. يُطلب أقل قدر من الصلاحيات، مع foreground service type `dataSync` للمهام الطويلة و`POST_NOTIFICATIONS` على Android 13+. يُخزّن Gateway token في secure storage خارج Room plain text. لا يُستخدم Tauri-generated Android runtime كبديل صامت للمشروع native.
+## الملفات الأساسية
 
-### المراجع
+| الملف | الغرض |
+|---|---|
+| `ui/screens/ClipWorkflowScreen.kt` | غلاف التنقل والشاشات السبع ومكوّنات الحالات |
+| `domain/model/ClipEditState.kt` | عقد state immutable للتحرير |
+| `domain/editor/ClipEditEngine.kt` | حد المحرك بين UI والتنفيذ |
+| `data/worker/ClipRenderWorker.kt` | التصيير الثقيل في الخلفية |
+| `data/repository/OpusRepository.kt` | adapter للمستودع الحالي وجدولة التصيير وتحديث Clip |
+| `MainActivity.kt` | تهيئة Activity والثيم والمستودع |
+| `ClipEditStateTest.kt` | اختبارات حدود عقد التحرير |
 
-[1]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Background work"
-[2]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Gateway client"
-[3]: ../android/app/src/main/java/com/example/data/repository/OpusRepository.kt "Room/repository flow"
-[4]: ../android/app/src/main/AndroidManifest.xml "Permissions and service declaration"
-[5]: ../android/app/src/main/java/com/example/MainActivity.kt "Android entry point"
+## قيود معروفة
 
-## References
-
-[1]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Background work"
-[2]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Gateway client"
-[3]: ../android/app/src/main/java/com/example/data/repository/OpusRepository.kt "Room/repository flow"
-[4]: ../android/app/src/main/AndroidManifest.xml "Permissions and service declaration"
-[5]: ../android/app/src/main/java/com/example/MainActivity.kt "Android entry point"
+حقل `confidence` غير موجود في عقد `Clip` أو `ViralScoreMetricEntity` الحالية، لذلك تعرض شاشة Clip Review القيمة `غير متاحة` مع توضيح يمنع اشتقاق نسبة غير موثقة من score. كما أن Media3 renderer الحالي يستقبل caption cues ولا يملك بعد معاملات رسم مستقلة لموضع ونمط الكابشن؛ يمرر Editor هذه القيم داخل edit state دون اختلاق دعم engine غير موجود.
