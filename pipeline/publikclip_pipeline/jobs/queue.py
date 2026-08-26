@@ -385,8 +385,23 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
             )
             raise
         except Exception as err:  # noqa: BLE001 - record then re-raise
+            # Preserve stable AI/media runtime codes instead of collapsing a
+            # missing model or broken FFmpeg invocation into ENGINE_FAILED.
+            known_codes = {
+                "MODEL_MISSING", "MODEL_CORRUPTED", "MODEL_DOWNLOAD_FAILED",
+                "FFMPEG_MISSING", "FFMPEG_INVALID", "MEDIA_INVALID",
+            }
+            error_code = getattr(err, "code", None)
+            if error_code not in known_codes:
+                error_code = "ENGINE_FAILED"
             mark_stage(job.id, stage.name, "failed", stage.schema_version, repr(err))
-            set_job_status(job.id, "failed", f"{stage.name}: {err!r}", error_code="ENGINE_FAILED", message="Pipeline failed")
+            set_job_status(
+                job.id,
+                "failed",
+                f"{stage.name}: {err!r}",
+                error_code=error_code,
+                message="AI/media runtime failure" if error_code != "ENGINE_FAILED" else "Pipeline failed",
+            )
             raise
         write_checkpoint(job, stage.name, stage.schema_version, data)
         results[stage.name] = data
