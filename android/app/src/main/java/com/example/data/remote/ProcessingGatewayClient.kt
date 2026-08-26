@@ -52,12 +52,8 @@ class ProcessingGatewayClient(
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
-            val localUri = Uri.parse(sourceUri)
-            val upload = upload(baseUrl, config.token, localUri) { percent ->
-                onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
-            }
-            onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
-            val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode, UUID.randomUUID().toString())
+            val source = resolveRemoteSource(baseUrl, config.token, sourceUri, onProgress)
+            val gatewayJobId = start(baseUrl, config.token, source, captionTheme, mode, UUID.randomUUID().toString())
             onJobCreated(gatewayJobId)
             var lastStatus = "queued"
             var completedResult: RemoteResult? = null
@@ -86,6 +82,32 @@ class ProcessingGatewayClient(
             Result.success(requireNotNull(completedResult))
         } catch (error: Exception) {
             Result.failure<RemoteResult>(error)
+        }
+    }
+
+    private suspend fun resolveRemoteSource(
+        baseUrl: String,
+        token: String,
+        rawSource: String,
+        onProgress: suspend (Progress) -> Unit
+    ): String {
+        val source = rawSource.trim()
+        val scheme = Uri.parse(source).scheme?.lowercase()
+        return when (scheme) {
+            "content", "file" -> {
+                val localUri = Uri.parse(source)
+                val uploaded = upload(baseUrl, token, localUri) { percent ->
+                    onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
+                }
+                onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
+                uploaded
+            }
+            "http", "https" -> {
+                require(Uri.parse(source).host?.isNotBlank() == true) { "رابط الفيديو البعيد غير صالح" }
+                onProgress(Progress(5, "SOURCE_READY", "سيقرأ Gateway مصدر الفيديو البعيد"))
+                source
+            }
+            else -> error("مصدر الفيديو يجب أن يكون content:// أو file:// أو HTTP/HTTPS")
         }
     }
 

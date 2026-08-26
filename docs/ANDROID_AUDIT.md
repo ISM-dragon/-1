@@ -2,12 +2,12 @@
 
 **تاريخ التدقيق:** 26 أغسطس 2026  
 **المستودع:** `ISM-dragon/-1`  
-**النقطة المدققة:** `e21f891` (`feat(android): refresh personal mobile studio and engine routing`)  
-**النطاق:** تدقيق فقط؛ لم تُنفذ إعادة بناء كبيرة أو تغييرات تشغيلية في الكود.
+**نقطة التدقيق الأساسية:** `e21f891` (`feat(android): refresh personal mobile studio and engine routing`)
+**حالة ما بعد التدقيق:** أُضيف patch محدود في هذه الجلسة لإصلاح remote URL routing ونتائج metadata؛ لم تُنفذ إعادة بناء كبيرة.
 
 ## الخلاصة التنفيذية
 
-المستودع يحتوي على **مسارين مختلفين لـ Android** يجب عدم معاملتهما كتطبيق واحد. المسار الأول هو Tauri-generated Android shell تحت `app/src-tauri/gen/android`: يستخدم React كواجهة، ويُنشئ APK، لكنه لا يشغّل Python أو `uv` أو FFmpeg المحلي على Android؛ عند التشغيل على Android يرفض Tauri المسار المحلي صراحة، بينما ترسل React المهمة إلى Gateway عبر HTTP. المسار الثاني هو تطبيق Kotlin/Jetpack Compose مستقل تحت `android/`: يملك `WorkManager` وRoom وMedia3 وطبقة معالجة محلية مبسطة، لكنه يقبل حاليًا `content://` و`file://` فقط، ولذلك يرفض YouTube وHTTPS قبل أن يصل إلى Gateway. هذا التعارض بين الوثائق، React/Tauri، وNative Android هو أهم مشكلة معمارية في الوضع الحالي. [1] [2] [3] [13] [14]
+المستودع يحتوي على **مسارين مختلفين لـ Android** يجب عدم معاملتهما كتطبيق واحد. المسار الأول هو Tauri-generated Android shell تحت `app/src-tauri/gen/android`: يستخدم React كواجهة، ويُنشئ APK، لكنه لا يشغّل Python أو `uv` أو FFmpeg المحلي على Android؛ عند التشغيل على Android يرفض Tauri المسار المحلي صراحة، بينما ترسل React المهمة إلى Gateway عبر HTTP. المسار الثاني هو تطبيق Kotlin/Jetpack Compose مستقل تحت `android/`: يملك `WorkManager` وRoom وMedia3 وطبقة معالجة محلية مبسطة. كان يقبل `content://` و`file://` فقط ويرفض YouTube وHTTPS قبل Gateway؛ وقد عولج هذا الحاجز الآن في patch محدود يسمح بتمرير HTTP/HTTPS إلى Gateway مع إبقاء المعالجة المحلية للملفات فقط. يبقى إثبات E2E وبناء APK release متطلبات منفصلة. [1] [2] [3] [13] [14]
 
 المسار الأقصر للحصول على **APK Android يعمل end-to-end لمعالجة YouTube** هو اعتماد Tauri Android shell كعميل Gateway، وليس محاولة تشغيل pipeline Python داخل الهاتف. معظم الـ backend المطلوب موجود بالفعل: Gateway بـ FastAPI، SQLite للحالة، queue durable، رفع مصادر، تشغيل pipeline، progress، cancel/retry/resume، checkpoints، وخدمة MP4. المطلوب قبل وصفه بأنه production-ready هو بناء APK في بيئة Android صحيحة، نشر Gateway مع Python dependencies والنماذج وFFmpeg وGemini، ثم إضافة اختبار E2E حقيقي. أما النشر المباشر إلى Instagram فما زال development/mock-only في Gateway، في حين أن تكامل Instagram المحلي في Python يركز على OAuth/sync/link/analytics للـ Reels المنشورة يدويًا وليس على auto-publish. [4] [12] [18]
 
@@ -57,7 +57,7 @@ Python pipeline
 | React | typecheck وVite production build نجحا؛ الواجهة تميز Android وترسل remote jobs عبر HTTP | مرتفع | [3] [18] |
 | Tauri Desktop | مسار debug يستدعي `uv` وpipeline؛ المسار packaged يستدعي `uv` مضمّنًا وpipeline staged | مرتفع للكود، packaging macOS/Windows لم يُنفذ محليًا | [2] [19] |
 | Tauri Android | shell وGradle project مولدان وموجودان؛ المعالجة تكون remote فقط | مرتفع للكود، APK لم يُبنَ في هذه البيئة | [2] [21] |
-| Native Android | Worker وRoom وWorkManager ومسار remote/local وMedia3 export موجودة | مرتفع للكود، build محلي متوقف بسبب غياب Android SDK | [13] [15] [16] |
+| Native Android | Worker وRoom وWorkManager ومسار remote/local وMedia3 export موجودة؛ remote URL routing صُحح في patch الحالي | مرتفع للكود، build محلي متوقف بسبب غياب Android SDK | [13] [15] [16] |
 | Checkpoints Python/Gateway | JSON atomic لكل stage، والتحقق من وجود artifacts، مع SQLite bookkeeping وrestart recovery في Gateway | مرتفع | [4] [9] |
 | Rendering Python | FFmpeg يطبق crop trajectory، scale إلى 1080×1920، ASS subtitles، loudnorm، H.264/AAC، ويفحص الناتج | مرتفع | [6] [10] |
 | Scoring Python | rubric explainable، T1 text، T2 vision عند Gemini، music brief، provenance وlocal-estimate عند Ollama | مرتفع للكود | [11] |
@@ -163,7 +163,7 @@ Native Android لا يعيد تنفيذ هذا graph. عند توفر word-timed
 
 | الأولوية | blocker | الأثر |
 |---:|---|---|
-| P0 | Native Android يرفض YouTube/HTTPS بينما وثائق Android وReact تصف remote URL flow | يمنع المسار المتوقع على Native APK من البدء أصلًا |
+| P0 | Native Android كان يرفض YouTube/HTTPS بينما وثائق Android وReact تصف remote URL flow | **أُصلح في patch الحالي**؛ يلزم E2E للتحقق من المسار الكامل |
 | P0 | لا يوجد E2E proof من Android APK إلى Gateway إلى MP4 حقيقي | لا يمكن إعلان Android production-ready |
 | P0 | Python/WhisperX/نماذج/FFmpeg ليست داخل Android؛ Tauri يمنع spawn المحلي | يجعل local parity مستحيلًا دون إعادة تصميم كبيرة |
 | P1 | وجود تطبيقَي Android بعقود وهوية وruntime مختلفين | يضاعف سطح الاختبار ويخلق تضاربًا في المنتج المستهدف |
@@ -171,7 +171,7 @@ Native Android لا يعيد تنفيذ هذا graph. عند توفر word-timed
 | P1 | CI يبني debug APK فقط ولا يبني release موقّعًا أو يجري device tests | لا توجد حزمة توزيع موثوقة |
 | P1 | Gateway health لا يثبت وجود كل ML runtime dependencies | احتمال false-ready ثم فشل worker عند أول job |
 | P2 | Native Android captions/rendering ليست equivalent لـ ASS/libass/camera pipeline | اختلاف النتائج بين Android وdesktop/backend |
-| P2 | Native remote result mapping لا يستفيد دائمًا من start/end/title/transcript الموجودة في pipeline | metadata غير دقيق في library رغم نجاح الملف |
+| P2 | Native remote result mapping لم يكن يستفيد من start/end/title/transcript الموجودة في pipeline | **أُصلح في Gateway patch الحالي**؛ يلزم E2E للتحقق من التوافق |
 | P2 | لا يوجد macOS CI مماثل لـ Windows | ادعاء macOS يعتمد على build يدوي لا تحقق مستمر |
 
 ## 14. أقل تغيير ممكن للحصول على Android APK يعمل end-to-end
@@ -189,7 +189,7 @@ Native Android لا يعيد تنفيذ هذا graph. عند توفر word-timed
 
 ### إذا كان الهدف Native Compose APK بدل Tauri
 
-يلزم تعديل صغير لكنه ضروري: السماح لـ `ProcessingEngine` بقبول `https://`/`http://` العام عند وجود Gateway، وإضافة فرع في `VideoProcessingWorker` و`ProcessingGatewayClient` يرسل URL مباشرة إلى `/v1/processing/jobs` بدل محاولة فتحه كـ local URI. يبقى `content://`/`file://` في upload branch. بعد ذلك يجب إصلاح mapping للنتائج وإضافة E2E test. هذا ليس إعادة بناء pipeline، لكنه أكبر من خيار Tauri لأن Native app يملك حاليًا عقد source محليًا فقط.
+تم تنفيذ التعديل الأدنى لعقد Native Compose في هذه الجلسة: `ProcessingEngine` و`VideoProcessingWorker` يقبلان HTTP/HTTPS عند وجود Gateway، و`ProcessingGatewayClient` يرسل URL مباشرة بدل محاولة فتحه كـ local URI، مع إبقاء `content://`/`file://` في upload branch. كما أُصلح Gateway ليعيد start/end/title/transcript من score إلى Android. المتبقي هو بناء Android وتشغيل E2E حقيقي؛ وهذا ليس إعادة بناء للـ pipeline.
 
 ### ما لا يدخل في أقل تغيير
 
@@ -242,7 +242,7 @@ Python processing plane
 
 | الأمر | النتيجة |
 |---|---|
-| `python3 -m pytest gateway -q` | **35 passed**, مع 4 deprecation warnings من FastAPI `on_event` |
+| `python3 -m pytest gateway -q` | **36 passed**, مع 4 deprecation warnings من FastAPI `on_event` |
 | `cd pipeline && python3 -m pytest tests -q` | **91 passed** |
 | `cd app && npm run typecheck` | **نجح** |
 | `cd app && npm run build` | **نجح**؛ Vite أنتج bundle production |
@@ -250,7 +250,7 @@ Python processing plane
 | Tauri desktop build كامل | لم يُنفذ؛ لم يتوفر سبب كافٍ لتجاوز build المعماري، كما أن التدقيق لا يهدف إلى إعادة البناء |
 | Android APK build | لم يُنفذ بنجاح؛ بيئة التدقيق لا تحتوي SDK، وCI repository الحالي يثبت فقط debug path |
 
-أثناء الفحص أزيلت مخرجات build/cache غير المتعقبة. الملفات المتعقبة التي أُنشئت أو حُدّثت لهذا التدقيق هي هذا التقرير و`MANUS_HANDOFF.md` فقط.
+أثناء الفحص أزيلت مخرجات build/cache غير المتعقبة. ملفات الإصلاح المتعقبة في هذه الجلسة هي كود Android، عقد نتائج Gateway، واختبارات regression، إضافة إلى تحديث هذا التقرير و`MANUS_HANDOFF.md`.
 
 ## References
 

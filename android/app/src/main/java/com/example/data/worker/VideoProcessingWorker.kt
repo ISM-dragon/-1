@@ -61,8 +61,8 @@ class VideoProcessingWorker(
             return Result.failure(workDataOf(KEY_ERROR to "بيانات مهمة المعالجة غير مكتملة."))
         }
         val parsedSource = runCatching { Uri.parse(sourceUri) }.getOrNull()
-        if (parsedSource?.scheme !in setOf("content", "file")) {
-            val message = "مصدر الفيديو غير صالح أو غير محلي."
+        if (parsedSource?.scheme?.lowercase() !in setOf("content", "file", "http", "https")) {
+            val message = "مصدر الفيديو غير صالح. استخدم ملفًا محليًا أو رابط HTTP/HTTPS."
             jobs.updateState(
                 jobId = jobId,
                 status = ProcessingJobEntity.STATUS_FAILED,

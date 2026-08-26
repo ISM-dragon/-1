@@ -743,6 +743,7 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
     render = read_pipeline_checkpoint(job_dir, "render") or {}
     events = read_pipeline_checkpoint(job_dir, "events")
     candidates = read_pipeline_checkpoint(job_dir, "candidates")
+    score_clips = (score or {}).get("clips", [])
     outputs = []
     for output in render.get("outputs", []):
         raw_path = Path(str(output.get("path", "")))
@@ -751,6 +752,11 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
         if not filename or not valid:
             continue
         item = dict(output)
+        clip_index = item.get("clip")
+        source_clip = score_clips[clip_index] if isinstance(clip_index, int) and 0 <= clip_index < len(score_clips) else {}
+        for key in ("start", "end", "title", "transcript", "best_platform", "score"):
+            if key not in item and key in source_clip:
+                item[key] = source_clip[key]
         item["path"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{external_id}/media/{filename}"
         outputs.append(item)
     return {

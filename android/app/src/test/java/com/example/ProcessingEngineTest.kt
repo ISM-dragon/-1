@@ -30,7 +30,18 @@ class ProcessingEngineTest {
     }
 
     @Test
-    fun `invalid source is rejected before work is scheduled`() {
+    fun `remote https source routes to gateway`() {
+        val result = engine.plan(
+            "https://www.youtube.com/watch?v=example",
+            GatewayConfig(baseUrl = "https://gateway.example.com", token = "secret")
+        )
+
+        assertTrue(result.isSuccess)
+        assertEquals(ProcessingEngine.Route.REMOTE_GATEWAY, result.getOrThrow().route)
+    }
+
+    @Test
+    fun `remote source is rejected without a gateway`() {
         val result = engine.plan("https://example.com/video.mp4", GatewayConfig())
 
         assertTrue(result.isFailure)

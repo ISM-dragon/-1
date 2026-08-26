@@ -30,14 +30,21 @@ class ProcessingEngine {
         }
 
         val scheme = runCatching { Uri.parse(trimmedSource).scheme?.lowercase() }.getOrNull()
-        if (scheme == null || scheme !in setOf("content", "file")) {
+        val isLocalSource = scheme in setOf("content", "file")
+        val isRemoteSource = scheme in setOf("http", "https")
+        if (!isLocalSource && !isRemoteSource) {
             return Result.failure(
-                IllegalArgumentException("مصدر الفيديو يجب أن يكون ملفًا محليًا قابلًا للقراءة.")
+                IllegalArgumentException("مصدر الفيديو يجب أن يكون content:// أو file:// محليًا، أو HTTP/HTTPS عند استخدام Gateway.")
             )
         }
 
         val baseUrl = gateway.baseUrl.trim().trimEnd('/')
         if (baseUrl.isBlank()) {
+            if (!isLocalSource) {
+                return Result.failure(
+                    IllegalArgumentException("مصدر HTTP/HTTPS يحتاج إلى Processing Gateway صالح؛ المعالجة المحلية تقبل الملفات فقط.")
+                )
+            }
             return Result.success(
                 Plan(
                     route = Route.LOCAL_PIPELINE,
