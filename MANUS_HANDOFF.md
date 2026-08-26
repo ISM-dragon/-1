@@ -137,7 +137,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | اختبار Android المستهدف بعد rebase | نجح: `:app:testDebugUnitTest --tests com.example.ProcessingEngineTest`؛ ترجمة Kotlin وKSP وJava و6 حالات ProcessingEngine مرّت.
 | `./gradlew :app:testDebugUnitTest` الكامل | بقي عالقًا محليًا في Test Executor ولم يُعتمد كنجاح؛ يلزم تأكيده عبر CI.
 | `git diff --check` | نجح بعد كل التعديلات الحالية.
-| حالة Git النهائية | `main` نظيف ومتطابق مع `origin/main` عند `fe71b18`.
+| حالة Git النهائية | `main` نظيف ومتطابق مع `origin/main` بعد آخر commit مرفوع.
 | Quality Gate على GitHub قبل الإصلاح | فشل بسبب FastAPI ثم `httpx` ثم اعتماد اختبار safety على FFprobe ثم غياب FFmpeg لاختبار render؛ تم إصلاح Workflow والاختبارات، ونجح التشغيل `32951488814` للcommit `fe71b18`.
 | Windows CI على `57aca4c` | فشل اختبار ASR لأن runtime الحقيقي صنّف فشل تحميل/تشغيل النموذج كـ`ASR_FAILED`؛ تم عزل الاختبار بحقن runtime فاشل عند `load_model`.
 | Windows CI على `fe71b18` | نجح التشغيل `32951488733`: اختبارات pipeline، بناء NSIS، التثبيت الصامت، ورفع artifact مرّت.
