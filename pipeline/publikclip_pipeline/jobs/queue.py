@@ -239,7 +239,9 @@ def read_checkpoint(job: Job, stage: str, schema_version: int) -> dict | None:
         envelope = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    if envelope.get("schema_version") != schema_version:
+    if not isinstance(envelope, dict):
+        return None
+    if envelope.get("stage") != stage or envelope.get("schema_version") != schema_version:
         return None
     data = envelope.get("data")
     return data if isinstance(data, dict) else None
