@@ -26,15 +26,26 @@ class ProcessingEngine {
             return Result.failure(IllegalArgumentException("مصدر الفيديو مطلوب."))
         }
 
-        val sourceScheme = runCatching { URI(trimmedSource).scheme?.lowercase() }.getOrNull()
-        if (sourceScheme !in setOf("content", "file")) {
+        val parsedSource = runCatching { URI(trimmedSource) }.getOrNull()
+        val sourceScheme = parsedSource?.scheme?.lowercase()
+        if (sourceScheme !in setOf("content", "file", "http", "https")) {
             return Result.failure(
-                IllegalArgumentException("مصدر الفيديو يجب أن يكون ملفًا محليًا قابلًا للقراءة.")
+                IllegalArgumentException("مصدر الفيديو غير صالح.")
+            )
+        }
+        if (sourceScheme in setOf("http", "https") && parsedSource?.host.isNullOrBlank()) {
+            return Result.failure(
+                IllegalArgumentException("عنوان الفيديو البعيد غير صالح.")
             )
         }
 
         val baseUrl = gateway.baseUrl.trim().trimEnd('/')
         if (baseUrl.isBlank()) {
+            if (sourceScheme in setOf("http", "https")) {
+                return Result.failure(
+                    IllegalStateException("يجب ضبط private Processing Gateway للمصادر البعيدة.")
+                )
+            }
             return Result.success(
                 Plan(
                     route = Route.LOCAL_ON_DEVICE,

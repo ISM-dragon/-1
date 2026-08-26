@@ -10,13 +10,14 @@ class ProcessingEngineTest {
     private val engine = ProcessingEngine()
 
     @Test
-    fun `gateway is required for every processing job`() {
+    fun `local media uses the on-device pipeline without a gateway`() {
         val result = engine.plan(
             "content://media/video/42",
             GatewayConfig()
         )
 
-        assertTrue(result.isFailure)
+        assertTrue(result.isSuccess)
+        assertEquals(ProcessingEngine.Route.LOCAL_ON_DEVICE, result.getOrThrow().route)
     }
 
     @Test
@@ -34,7 +35,7 @@ class ProcessingEngineTest {
     @Test
     fun `invalid source is rejected before work is scheduled`() {
         val result = engine.plan(
-            "https://example.com/video.mp4",
+            "https:///broken-video.mp4",
             GatewayConfig(baseUrl = "https://gateway.example.com", token = "secret")
         )
 
