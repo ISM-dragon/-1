@@ -41,15 +41,34 @@ def model_path(spec: ModelSpec) -> Path:
     return config.models_dir() / spec.name / spec.filename
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _existing_is_valid(spec: ModelSpec, path: Path) -> bool:
+    try:
+        if not path.is_file() or path.stat().st_size == 0:
+            return False
+        return spec.sha256 is None or _sha256(path) == spec.sha256
+    except OSError:
+        return False
+
+
 def is_present(spec: ModelSpec) -> bool:
-    return model_path(spec).exists()
+    return _existing_is_valid(spec, model_path(spec))
 
 
 def ensure(spec: ModelSpec, progress: ProgressFn) -> Path:
     """Download with resume; verify sha256 when pinned."""
     dest = model_path(spec)
     if dest.exists():
-        return dest
+        if _existing_is_valid(spec, dest):
+            return dest
+        dest.unlink(missing_ok=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     offset = tmp.stat().st_size if tmp.exists() else 0
@@ -72,11 +91,7 @@ def ensure(spec: ModelSpec, progress: ProgressFn) -> Path:
                 if total:
                     progress(seen / total, label)
     if spec.sha256:
-        digest = hashlib.sha256()
-        with open(tmp, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 20), b""):
-                digest.update(block)
-        if digest.hexdigest() != spec.sha256:
+        if _sha256(tmp) != spec.sha256:
             tmp.unlink(missing_ok=True)
             raise RuntimeError(
                 f"Checksum mismatch for {spec.name} — download corrupted, please retry."

@@ -71,17 +71,20 @@ def extract_frames(media_path: str, times: list[float], tmp_dir: Path) -> list[b
         )
     select = "+".join(expressions)
     duration = max(0.1, ordered[-1] - seek + _FRAME_WINDOW_SEC + 0.1)
-    proc = subprocess.run(
-        [
-            ffmpeg_bin.ffmpeg(), "-v", "error", "-ss", f"{seek:.3f}",
-            "-t", f"{duration:.3f}", "-i", media_path,
-            "-vf", f"select='{select}',scale={FRAME_WIDTH}:-2",
-            "-fps_mode", "vfr", "-frames:v", str(len(ordered)),
-            "-q:v", "6", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
-        ],
-        capture_output=True,
-        timeout=120,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg_bin.ffmpeg(), "-v", "error", "-ss", f"{seek:.3f}",
+                "-t", f"{duration:.3f}", "-i", media_path,
+                "-vf", f"select='{select}',scale={FRAME_WIDTH}:-2",
+                "-fps_mode", "vfr", "-frames:v", str(len(ordered)),
+                "-q:v", "6", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
     if proc.returncode != 0:
         return []
     return _split_jpegs(proc.stdout)

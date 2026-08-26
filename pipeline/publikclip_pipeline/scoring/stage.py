@@ -84,12 +84,29 @@ class ScoreStage(Stage):
 
         segments = diarize["segments"]
         timeline = events["timeline"]
-        curves = json.loads(Path(events["curves_path"]).read_text())
+        curves_path = Path(events.get("curves_path", ""))
+        if not curves_path.is_file():
+            raise StageError("curves.json missing — re-run events.", "ARTIFACT_MISSING")
+        try:
+            curves = json.loads(curves_path.read_text())
+        except (OSError, json.JSONDecodeError) as err:
+            raise StageError("curves.json is invalid — re-run events.", "ARTIFACT_INVALID") from err
+        if not isinstance(curves, dict):
+            raise StageError("curves.json is invalid — re-run events.", "ARTIFACT_INVALID")
         arousal = np.asarray(curves.get("arousal", []), dtype=float)
         arousal_grid = float(curves.get("arousal_grid_sec", 0.5))
         arousal_source = curves.get("arousal_source", "dsp-proxy")
         heatmap = ingest.get("heatmap")
-        scene_times = json.loads((ctx.job_dir / "scenes.json").read_text()) if (ctx.job_dir / "scenes.json").exists() else []
+        scene_path = ctx.job_dir / "scenes.json"
+        if scene_path.exists():
+            try:
+                scene_times = json.loads(scene_path.read_text())
+                if not isinstance(scene_times, list):
+                    raise ValueError("scene sidecar is not a list")
+            except (OSError, json.JSONDecodeError, ValueError) as err:
+                raise StageError("scenes.json is invalid — re-run candidates.", "ARTIFACT_INVALID") from err
+        else:
+            scene_times = []
 
         heat_values = None
         if heatmap:
@@ -120,8 +137,8 @@ class ScoreStage(Stage):
             }
             try:
                 t1 = client.generate_json(rubric.t1_prompt(labeled, context), rubric.T1_SCHEMA)
-            except llm_mod.LlmError:
-                raise
+            except llm_mod.LlmError as err:
+                raise StageError(err.safe_message, err.code) from err
             except Exception as err:  # noqa: BLE001
                 ctx.emit(-1, f"moment {i + 1} scoring failed, skipping: {err}")
                 continue

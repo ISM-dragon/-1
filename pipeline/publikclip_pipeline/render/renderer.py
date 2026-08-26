@@ -38,14 +38,17 @@ def videotoolbox_available() -> bool:
     """Probe once: encode 0.2 s of black through h264_videotoolbox."""
     global _vt_checked
     if _vt_checked is None:
-        proc = subprocess.run(
-            [
-                ffmpeg_bin.ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
-                "-c:v", "h264_videotoolbox", "-f", "null", "-",
-            ],
-            capture_output=True, timeout=60,
-        )
-        _vt_checked = proc.returncode == 0
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg_bin.ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
+                    "-c:v", "h264_videotoolbox", "-f", "null", "-",
+                ],
+                capture_output=True, timeout=60,
+            )
+            _vt_checked = proc.returncode == 0
+        except (subprocess.TimeoutExpired, OSError):
+            _vt_checked = False
     return _vt_checked
 
 
@@ -155,6 +158,10 @@ def render_clip(
     ]
     try:
         proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as err:
+        raise RuntimeError(f"Render timed out after {timeout:.0f}s.") from err
+    except OSError as err:
+        raise RuntimeError(f"Render could not start: {err}") from err
     finally:
         # sendcmd is an implementation detail; never leave it behind after
         # an error, timeout, or successful render.
@@ -165,16 +172,26 @@ def render_clip(
 
 def verify_output(out_path: Path, expected_duration: float) -> dict:
     """Post-render sanity: exists, has both streams, duration within 1.5 s."""
-    proc = subprocess.run(
-        [
-            ffmpeg_bin.ffprobe(), "-v", "error", "-print_format", "json",
-            "-show_format", "-show_streams", str(out_path),
-        ],
-        capture_output=True, text=True, timeout=120,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg_bin.ffprobe(), "-v", "error", "-print_format", "json",
+                "-show_format", "-show_streams", str(out_path),
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "duration": 0.0, "width": None, "height": None, "error": "ffprobe timed out"}
+    except OSError as err:
+        return {"ok": False, "duration": 0.0, "width": None, "height": None, "error": f"ffprobe unavailable: {err}"}
     import json
 
-    info = json.loads(proc.stdout or "{}")
+    if proc.returncode != 0:
+        return {"ok": False, "duration": 0.0, "width": None, "height": None, "error": (proc.stderr or "ffprobe failed")[-500:]}
+    try:
+        info = json.loads(proc.stdout or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {"ok": False, "duration": 0.0, "width": None, "height": None, "error": "ffprobe returned invalid JSON"}
     streams = info.get("streams", [])
     has_v = any(s.get("codec_type") == "video" for s in streams)
     has_a = any(s.get("codec_type") == "audio" for s in streams)
