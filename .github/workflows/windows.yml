@@ -8,6 +8,14 @@ name: windows
 on:
   push:
     branches: [main, win-port]
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "pipeline/**"
+      - "scripts/**"
+      - "VERSION"
+      - ".github/workflows/windows.yml"
   workflow_dispatch:
 
 jobs:

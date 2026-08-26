@@ -34,6 +34,15 @@ class ProcessingGatewayClientResumeTest {
     fun tearDown() = server.shutdown()
 
     @Test
+    fun externalArtifactOriginIsRejectedBeforeNetworkRequest() {
+        val target = java.io.File.createTempFile("ism-external", ".mp4")
+        val result = runBlocking { client.download(config, "https://evil.example/clip.mp4", target) }
+        assertTrue(result.isFailure)
+        assertEquals(0, server.requestCount)
+        target.delete()
+    }
+
+    @Test
     fun existingInterruptedJobIsResumedWithoutDuplicateUpload() {
         val mediaUrl = server.url("/v1/processing/jobs/remote-1/media/clip-1.mp4").toString()
         server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"remote-1\",\"state\":\"INTERRUPTED\",\"status\":\"failed\"}"))

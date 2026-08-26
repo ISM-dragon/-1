@@ -31,13 +31,10 @@ _KEG_CANDIDATES = [
 # PUBLIKCLIP_HOME/bin so end users never touch Homebrew.
 _STATIC_BASE = "https://ffmpeg.martin-riedl.de/redirect/latest/macos/{arch}/release/{tool}.zip"
 
-# Static Windows build with libass: BtbN's GPL build ships ffmpeg.exe and
-# ffprobe.exe (with the subtitles filter) in one zip under a stable
-# latest-release URL. ~80 MB once, into PUBLIKCLIP_HOME/bin.
-_STATIC_WINDOWS = (
-    "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/"
-    "ffmpeg-master-latest-win64-gpl.zip"
-)
+# BtbN's GPL build ships ffmpeg.exe and ffprobe.exe with libass. The
+# current asset name is resolved from Releases because the project rotates
+# versioned filenames instead of keeping a stable latest-download alias.
+_WINDOWS_RELEASES_API = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
 
 _EXE = ".exe" if platform.system() == "Windows" else ""
 
@@ -136,6 +133,28 @@ def _ensure_capable_macos(progress) -> bool:
     return True
 
 
+def _latest_windows_url() -> str | None:
+    """Resolve the current non-shared GPL Windows asset from Releases."""
+    import httpx
+
+    try:
+        response = httpx.get(
+            _WINDOWS_RELEASES_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "ISM-Pipeline"},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        assets = response.json().get("assets", [])
+        for asset in assets:
+            name = str(asset.get("name", "")).lower()
+            url = asset.get("browser_download_url")
+            if url and name.endswith("win64-gpl.zip") and "shared" not in name:
+                return str(url)
+    except (httpx.HTTPError, ValueError, TypeError):
+        return None
+    return None
+
+
 def _ensure_capable_windows(progress) -> bool:
     """One zip carries both tools (BtbN GPL build, libass included)."""
     wanted = {
@@ -150,7 +169,8 @@ def _ensure_capable_windows(progress) -> bool:
         progress(-1, "Downloading ffmpeg (one-time, caption support)…")
     zpath = config.bin_dir() / "ffmpeg-static.zip"
     try:
-        if not _download(_STATIC_WINDOWS, zpath):
+        download_url = _latest_windows_url()
+        if not download_url or not _download(download_url, zpath):
             return False
         with zipfile.ZipFile(zpath) as zf:
             for name in zf.namelist():

@@ -36,6 +36,16 @@ class FailingStage(queue.Stage):
         raise queue.StageError("controlled failure", "CONTROLLED_FAILURE")
 
 
+class CancellingStage(queue.Stage):
+    name = "cancelling"
+    schema_version = 1
+
+    def run(self, ctx):
+        queue.request_cancel(ctx.job.id)
+        ctx.emit(0.1, "cancellation requested")
+        return {"should_not": "complete"}
+
+
 def test_public_engine_runs_and_emits_contract_events():
     stage = CountingStage()
     engine = PipelineEngine(lambda: [stage])
@@ -51,6 +61,17 @@ def test_public_engine_runs_and_emits_contract_events():
     status = engine.get_job_status(job.id)
     assert status.status == "done"
     assert status.stages == {"counting": "done"}
+
+
+def test_emit_stops_a_stage_after_cancellation_is_requested():
+    engine = PipelineEngine(lambda: [CancellingStage()])
+    job = engine.create_job("/tmp/input.mp4")
+
+    with pytest.raises(EngineError) as error:
+        engine.start_job(job.id)
+
+    assert error.value.code == "JOB_CANCELLED"
+    assert engine.get_job_status(job.id).status == "cancelled"
 
 
 def test_checkpoint_is_reused_by_resume():

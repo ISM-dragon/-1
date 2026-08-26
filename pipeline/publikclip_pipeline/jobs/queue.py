@@ -350,6 +350,8 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
     def emit(stage: str, fraction: float, message: str) -> None:
         record_progress(job.id, stage, fraction, message)
         progress(stage, fraction, message)
+        if is_cancel_requested(job.id):
+            raise StageError("Job cancellation was requested.", "JOB_CANCELLED")
 
     if is_cancel_requested(job.id):
         set_job_status(job.id, "cancelled", "Job cancellation was requested.", error_code="JOB_CANCELLED", message="Cancellation requested")

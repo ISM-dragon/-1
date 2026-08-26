@@ -309,7 +309,8 @@ class ProcessingGatewayClient(
 
     suspend fun download(config: GatewayConfig, mediaUrl: String, destination: File): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
-            val connection = openConnection(mediaUrl, config.token, "GET")
+            val validatedUrl = validateMediaUrl(config.baseUrl, mediaUrl)
+            val connection = openConnection(validatedUrl, config.token, "GET")
             try {
                 connection.inputStream.use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
                 require(destination.isFile && destination.length() > 0) { "Gateway أعاد ملفاً فارغاً" }
@@ -334,6 +335,17 @@ class ProcessingGatewayClient(
         val body = (if (code in 200..299) connection.inputStream else connection.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (code !in 200..299) throw IOException("Gateway HTTP $code: ${body.take(300)}")
         return JSONObject(body)
+    }
+
+    private fun validateMediaUrl(baseUrl: String, mediaUrl: String): String {
+        val base = URI(validateBaseUrl(baseUrl))
+        val media = URI(mediaUrl)
+        val basePort = if (base.port == -1) base.toURL().defaultPort else base.port
+        val mediaPort = if (media.port == -1) media.toURL().defaultPort else media.port
+        require(media.scheme?.lowercase() == base.scheme?.lowercase() && media.host.equals(base.host, ignoreCase = true) && mediaPort == basePort) {
+            "رابط النتيجة يجب أن ينتمي إلى Gateway المضبوط"
+        }
+        return mediaUrl
     }
 
     private fun validateBaseUrl(raw: String): String {

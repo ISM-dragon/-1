@@ -112,8 +112,8 @@ class ApiContractClient(private val contentResolver: ContentResolver) {
     suspend fun download(config: GatewayConfig, artifact: ClipArtifact, destination: File): Result<File> =
         withContext(Dispatchers.IO) {
             runCatching {
-                require(artifact.mediaUrl.startsWith("http")) { "رابط النتيجة غير صالح" }
-                val connection = openConnection(artifact.mediaUrl, config.token, "GET")
+                val mediaUrl = validateMediaUrl(config.baseUrl, artifact.mediaUrl)
+                val connection = openConnection(mediaUrl, config.token, "GET")
                 try {
                     destination.parentFile?.mkdirs()
                     val digest = MessageDigest.getInstance("SHA-256")
@@ -323,6 +323,17 @@ class ApiContractClient(private val contentResolver: ContentResolver) {
     private fun codeFor(status: Int, message: String): String = when {
         message.contains(":") -> message.substringBefore(":").takeIf { it.matches(Regex("[A-Z0-9_]+")) } ?: "HTTP_$status"
         else -> "HTTP_$status"
+    }
+
+    private fun validateMediaUrl(baseUrl: String, mediaUrl: String): String {
+        val base = URI(validateBaseUrl(baseUrl))
+        val media = URI(mediaUrl)
+        val basePort = if (base.port == -1) base.toURL().defaultPort else base.port
+        val mediaPort = if (media.port == -1) media.toURL().defaultPort else media.port
+        require(media.scheme?.lowercase() == base.scheme?.lowercase() && media.host.equals(base.host, ignoreCase = true) && mediaPort == basePort) {
+            "رابط النتيجة يجب أن ينتمي إلى Gateway المضبوط"
+        }
+        return mediaUrl
     }
 
     private fun validateBaseUrl(raw: String): String {

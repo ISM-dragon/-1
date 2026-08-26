@@ -144,6 +144,15 @@ class ApiContractClientTest {
     }
 
     @Test
+    fun `artifact download rejects a different origin`() = runBlocking<Unit> {
+        val config = GatewayConfig("http://127.0.0.1:${server.address.port}", "token")
+        val target = Files.createTempFile("ism-external", ".mp4").toFile()
+        val artifact = ClipArtifact("clip_external", "External", "https://evil.example/clip.mp4", 0, 5, 5, 80, "", "clip.mp4")
+        assertTrue(client.download(config, artifact, target).isFailure)
+        target.delete()
+    }
+
+    @Test
     fun `json mapper keeps fractional progress and artifact manifest`() {
         val payload = JSONObject("""
             {"id":"p1","state":"COMPLETED","fraction":1,"artifacts":[{"id":"c1","title":"Hook","url":"https://cdn/clip.mp4","start":2,"end":12,"duration":10,"score":91,"sha256":"04b8ccc5f19b8f3bed371fec98c184d98aaa78c33fa08b2015cfe3c453bd706f"}]}

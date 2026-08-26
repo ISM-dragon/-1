@@ -93,8 +93,11 @@ class ContractJobRepository(private val context: Context) {
 
     suspend fun retry(jobId: String) = withContext(Dispatchers.IO) {
         val existing = jobs.get(jobId) ?: error("المهمة غير موجودة")
-        require(existing.status == ProcessingJobEntity.STATUS_FAILED) {
-            "لا يمكن إعادة محاولة مهمة ملغاة؛ أنشئ مهمة جديدة أو استخدم الاستئناف للمهمة القابلة للاستعادة."
+        val retryableStage = existing.currentStage == "WAITING_FOR_NETWORK" ||
+            existing.currentStage == ApiJobState.INTERRUPTED.name ||
+            existing.currentStage == ApiJobState.RETRY_WAIT.name
+        require(existing.status == ProcessingJobEntity.STATUS_FAILED || retryableStage) {
+            "لا يمكن إعادة محاولة هذه المهمة في حالتها الحالية."
         }
         val remoteId = existing.remoteGatewayJobId
         val config = loadGatewayConfig()
@@ -102,6 +105,7 @@ class ContractJobRepository(private val context: Context) {
             require(config.baseUrl.isNotBlank()) { "لم يتم ضبط عنوان Gateway" }
             com.example.data.contract.ApiContractClient(context.contentResolver).retry(config, remoteId).getOrThrow()
         }
+        WorkManager.getInstance(context).cancelUniqueWork(workName(jobId))
         jobs.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, ApiJobState.RETRY_WAIT.name, "إعادة المحاولة مجدولة.")
         enqueue(jobId, existing.sourceUri, existing.title, existing.captionTheme, "balanced")
     }
