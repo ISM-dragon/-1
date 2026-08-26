@@ -69,7 +69,7 @@ fun JSONObject.toUploadResource(): UploadResource = UploadResource(
     id = optString("id"),
     source = optString("source"),
     filename = optString("filename", "source.mp4"),
-    bytes = optLong("bytes", 0L)
+    bytes = optLong("bytes", optLong("expected_bytes", 0L))
 )
 
 fun JSONObject.toJobResource(fallbackId: String? = null): JobResource {

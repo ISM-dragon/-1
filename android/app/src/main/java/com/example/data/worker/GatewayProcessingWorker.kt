@@ -55,7 +55,15 @@ open class GatewayProcessingWorker(appContext: Context, workerParams: WorkerPara
             val current = jobs.get(localJobId)
             val message = errorMessage(error)
             if (retryable && runAttemptCount < MAX_WORK_RETRIES) {
-                jobs.updateState(localJobId, ProcessingJobEntity.STATUS_RUNNING, current?.progress ?: 0, "WAITING_FOR_NETWORK", "الاتصال غير متاح؛ ستُستأنف المهمة تلقائيًا.")
+                val remoteId = current?.remoteGatewayJobId
+                if (error is ApiContractException && error.apiError.retryable && !remoteId.isNullOrBlank()) {
+                    runCatching {
+                        repository.loadGatewayConfig().let { config ->
+                            client.resume(config, remoteId).getOrThrow()
+                        }
+                    }
+                }
+                jobs.updateState(localJobId, ProcessingJobEntity.STATUS_RUNNING, current?.progress ?: 0, "WAITING_FOR_NETWORK", "ستُستأنف المهمة تلقائيًا بعد الخطأ المؤقت.")
                 setProgress(workDataOf(KEY_LOCAL_JOB_ID to localJobId, KEY_STAGE to "WAITING_FOR_NETWORK", KEY_MESSAGE to message))
                 Result.retry()
             } else {
@@ -121,6 +129,9 @@ open class GatewayProcessingWorker(appContext: Context, workerParams: WorkerPara
                     return Result.success(workDataOf(KEY_LOCAL_JOB_ID to localJobId, KEY_REMOTE_JOB_ID to remoteJobId))
                 }
                 ApiJobState.CANCELLED -> return Result.success()
+                ApiJobState.INTERRUPTED, ApiJobState.RETRY_WAIT -> {
+                    client.resume(config, remoteJobId).getOrThrow()
+                }
                 ApiJobState.FAILED -> throw ApiContractException(
                     com.example.data.contract.ApiError(
                         code = resource.errorCode ?: "PROCESSING_FAILED",

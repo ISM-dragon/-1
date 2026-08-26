@@ -48,7 +48,7 @@
 
 | المكوّن | الموجود فعليًا | الملكية في العمارة canonical | ما يجب ألا يفعله |
 |---|---|---|---|
-| Android native (`android/`) | Jetpack Compose، Room، WorkManager، Media3، عميل Gateway، ومسار Kotlin محلي | التطبيق الشخصي: اختيار الملف/الكاميرا، تثبيت URI، الرفع، polling، offline/retry، cache، preview/export | تشغيل Python/uv/WhisperX/PyTorch أو حمل Gemini server key |
+| Android native (`android/`) | Jetpack Compose، Room، WorkManager، Media3، `ApiContractClient`، `GatewayProcessingWorker`، ومسارات legacy معزولة | التطبيق الشخصي: اختيار الملف/الكاميرا، تثبيت URI، الرفع resumable، polling، offline/retry، cache، preview/export | تشغيل Python/uv/WhisperX/PyTorch أو حمل Gemini server key |
 | Tauri/React (`app/`) | UI desktop، Tauri shell، استدعاء CLI محلي، ومكالمات Gateway/legacy social | مسار desktop مستقل للتطوير/المراجعة والتصدير؛ مصدر مرجعي لواجهات UX | أن يصبح اعتماد APK على Tauri-generated Android دون قرار صريح |
 | Tauri generated Android (`app/src-tauri/gen/android`) | مشروع Android مولد، identifier `com.publikhq.publikclip`، وموارد Tauri | مسار منفصل يجب اعتباره غير canonical للـAPK الشخصي حتى توحيد القرار | مشاركة هوية أو lifecycle مع `android/` بلا migration موثق |
 | Private Gateway (`gateway/`) | FastAPI، SQLite، worker queues، uploads، diagnostics، secret vault، processing bridge | **الـcontrol plane الوحيد** لمسار Android | نشر Mock كأنه provider حقيقي أو تشغيل endpoint عام بلا auth |
@@ -82,8 +82,8 @@ local URI
 |---|---|---|
 | إعادة استخدام | `engine/contracts.py`, `engine/pipeline.py`, `jobs/queue.py` | نواة صحيحة لفصل المحرك؛ تثبيت contract v1 وإضافة adapters فقط |
 | إعادة استخدام | stages وvendor models و`render/ffmpeg_bin.py` | تبقى على private runtime؛ لا تنقل إلى APK |
-| إعادة استخدام مع adapter | `gateway/main.py`, `processing_service.py`, `worker_queue.py` | اجعل Gateway هو API الوحيد، ثم استبدل parsing JSONL تدريجيًا بـEngine adapter مباشر دون كسر fallback |
-| إعادة استخدام | Android `WorkManager`, Room, `ProcessingGatewayClient` | أساس جيد لمسار remote؛ يجب مواءمته مع resumable upload وcontract error envelope |
+| إعادة استخدام مع adapter | `gateway/main.py`, `processing_service.py`, `worker_queue.py` | Gateway هو API الوحيد؛ يبقى parsing JSONL خلف Engine boundary ولا يتسرب إلى Android |
+| إعادة استخدام | Android `WorkManager`, Room, `ApiContractClient`, `GatewayProcessingWorker` | المسار canonical؛ يعتمد resumable upload وcontract error envelope ويحفظ remote job id |
 | إعادة تصميم تدريجي | Android `ProductionVideoPipeline` | لا يُحذف الآن، لكن لا يُعلن parity مع Python؛ يفضل جعله fallback تجريبيًا أو إيقاف routing المحلي في production APK |
 | إعادة تصميم | وجود `backend/` بجانب `gateway/` | لا تُضاف features جديدة إلى stackين؛ يحدد القرار التالي Gateway canonical ثم يُجمّد backend أو يُدمج لاحقًا |
 | إعادة تصميم صغيرة | legacy social routes وmock publisher | تبقى للتوافق، لكن تُوسم development-only وتُفصل عن مسار processing الشخصي |
@@ -110,6 +110,6 @@ local URI
 [3]: ../app/src-tauri/tauri.conf.json "Tauri product and resource configuration"
 [4]: ../pipeline/publikclip_pipeline/engine/contracts.py "Engine public contract v1"
 [5]: ../pipeline/publikclip_pipeline/engine/pipeline.py "PipelineEngine orchestration"
-[6]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Android local/remote routing and background execution"
+[6]: ../android/app/src/main/java/com/example/data/worker/GatewayProcessingWorker.kt "Canonical Android remote background execution"
 [7]: ../gateway/main.py "Gateway runtime, auth, jobs, storage, and workers"
 [8]: ../docker-compose.gateway.yml "Private Gateway compose deployment"
