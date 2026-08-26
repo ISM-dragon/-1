@@ -1,6 +1,6 @@
 package com.example.data.engine
 
-import android.net.Uri
+import java.net.URI
 import com.example.data.model.GatewayConfig
 
 /**
@@ -29,7 +29,8 @@ class ProcessingEngine {
             return Result.failure(IllegalArgumentException("مصدر الفيديو مطلوب."))
         }
 
-        val scheme = runCatching { Uri.parse(trimmedSource).scheme?.lowercase() }.getOrNull()
+        val parsedSource = runCatching { URI(trimmedSource) }.getOrNull()
+        val scheme = parsedSource?.scheme?.lowercase()
         if (scheme == null || scheme !in setOf("content", "file")) {
             return Result.failure(
                 IllegalArgumentException("مصدر الفيديو يجب أن يكون ملفًا محليًا قابلًا للقراءة.")
@@ -47,7 +48,7 @@ class ProcessingEngine {
             )
         }
 
-        val parsedGateway = runCatching { Uri.parse(baseUrl) }.getOrNull()
+        val parsedGateway = runCatching { URI(baseUrl) }.getOrNull()
         val gatewayScheme = parsedGateway?.scheme?.lowercase()
         if (gatewayScheme == null || gatewayScheme !in setOf("http", "https") || parsedGateway?.host.isNullOrBlank()) {
             return Result.failure(
