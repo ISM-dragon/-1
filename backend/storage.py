@@ -30,7 +30,10 @@ class Storage:
         return f"job_{secrets.token_urlsafe(12)}"
 
     def upload_path(self, upload_id: str, filename: str) -> Path:
-        safe_name = Path(unquote(filename)).name
+        decoded_name = unquote(filename)
+        if "\x00" in decoded_name:
+            raise StorageError("Invalid upload filename")
+        safe_name = Path(decoded_name).name
         if not safe_name or safe_name in {".", ".."}:
             safe_name = "video.mp4"
         suffix = Path(safe_name).suffix.lower()

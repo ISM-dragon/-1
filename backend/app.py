@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import hmac
 import ipaddress
+import logging
 import os
 import secrets
 import shutil
@@ -20,9 +21,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .db import Store
-from .engine import Engine, SubprocessPublikclipEngine, UnavailableEngine
+from .engine import Engine, FacadePublikclipEngine, SubprocessPublikclipEngine, UnavailableEngine, safe_engine_message
 from .service import JobManager
 from .storage import Storage, StorageError
+
+
+logger = logging.getLogger("private_backend")
 
 
 class Settings:
@@ -51,9 +55,13 @@ class RenderRequest(BaseModel):
 
 
 def public_source(value: str) -> str:
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise HTTPException(status_code=422, detail="source must be an HTTP or HTTPS URL", headers={"X-Error-Code": "INVALID_SOURCE"})
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="source URL is invalid", headers={"X-Error-Code": "INVALID_SOURCE"}) from error
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(status_code=422, detail="source must be a public HTTP or HTTPS URL", headers={"X-Error-Code": "INVALID_SOURCE"})
     host = parsed.hostname.lower().rstrip(".")
     if host in {"localhost", "localhost.localdomain", "0.0.0.0", "::1"}:
         raise HTTPException(status_code=422, detail="private network sources are not allowed", headers={"X-Error-Code": "INVALID_SOURCE"})
@@ -62,7 +70,7 @@ def public_source(value: str) -> str:
         ipaddress.ip_address(host)
     except ValueError:
         try:
-            addresses = {entry[4][0] for entry in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)}
+            addresses = {entry[4][0] for entry in socket.getaddrinfo(host, port or 443, type=socket.SOCK_STREAM)}
         except socket.gaierror as error:
             raise HTTPException(status_code=422, detail="source hostname could not be resolved", headers={"X-Error-Code": "INVALID_SOURCE"}) from error
     for address in addresses:
@@ -83,7 +91,14 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     config = settings or Settings()
     store = Store(config.db_path)
     storage = Storage(config.storage_root, config.max_upload_bytes)
-    selected_engine = engine or (SubprocessPublikclipEngine(config.pipeline_dir, config.engine_bin) if config.pipeline_dir.exists() else UnavailableEngine())
+    if engine is not None:
+        selected_engine = engine
+    elif config.engine_bin:
+        selected_engine = SubprocessPublikclipEngine(config.pipeline_dir, config.engine_bin)
+    elif config.pipeline_dir.exists():
+        selected_engine = FacadePublikclipEngine(config.pipeline_dir, config.storage_root)
+    else:
+        selected_engine = UnavailableEngine()
     manager = JobManager(store, storage, selected_engine)
 
     @asynccontextmanager
@@ -103,7 +118,12 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     async def request_context(request: Request, call_next):
         request_id = request.headers.get("X-Request-ID", "").strip()[:120] or f"req_{secrets.token_urlsafe(10)}"
         request.state.request_id = request_id
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception("request failed method=%s path=%s request_id=%s", request.method, request.url.path, request_id)
+            raise
+        logger.info("request method=%s path=%s status=%s request_id=%s", request.method, request.url.path, response.status_code, request_id)
         response.headers["X-Request-ID"] = request_id
         return response
 
@@ -111,11 +131,20 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     async def http_error(request: Request, exc: HTTPException):
         code = (exc.headers or {}).get("X-Error-Code", "HTTP_ERROR")
         retryable = exc.status_code in {429, 502, 503, 504}
-        return JSONResponse(status_code=exc.status_code, content=error_payload(request, code, str(exc.detail), retryable))
+        return JSONResponse(status_code=exc.status_code, content=error_payload(request, code, safe_engine_message(exc.detail, "Request failed"), retryable))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         return JSONResponse(status_code=422, content=error_payload(request, "VALIDATION_ERROR", "Request validation failed", False))
+
+    @app.exception_handler(StorageError)
+    async def storage_error(request: Request, exc: StorageError):
+        return JSONResponse(status_code=400, content=error_payload(request, "INVALID_FILE", "The supplied file reference is invalid", False))
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception):
+        logger.exception("unhandled request error request_id=%s type=%s", getattr(request.state, "request_id", "unknown"), type(exc).__name__)
+        return JSONResponse(status_code=500, content=error_payload(request, "INTERNAL_ERROR", "The backend could not complete the request", True))
 
     async def authenticate(request: Request) -> None:
         if config.allow_insecure_local and request.client and request.client.host in {"127.0.0.1", "::1", "testclient"}:
@@ -238,6 +267,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         row = store.get_job(job_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Job not found", headers={"X-Error-Code": "JOB_NOT_FOUND"})
+        if manager.is_active(job_id):
+            raise HTTPException(status_code=409, detail="Job is still stopping; retry resume shortly", headers={"X-Error-Code": "JOB_BUSY"})
         if row["status"] not in {"failed", "interrupted", "cancelled"} or not row["resume_available"]:
             raise HTTPException(status_code=409, detail="Job has no resumable checkpoint", headers={"X-Error-Code": "JOB_NOT_RESUMABLE"})
         if not row["engine_job_id"]:

@@ -1,53 +1,77 @@
-# BACKEND_HANDOFF
+# Backend Handoff
 
-## نطاق التسليم
+## ملخص التسليم
 
-تم تنفيذ **Private Backend** مستقل داخل `backend/`. الخدمة مخصصة لجهاز Android شخصي واحد، ولا تحتوي على user accounts أو billing أو subscriptions أو multi-tenancy. لم يتم تعديل `android/` أو `app/` أو `pipeline/` أو منطق scoring. كما لم يوجد ملف `ENGINE_HANDOFF.md` في المستودع عند الفحص؛ لذلك تم اعتماد واجهة adapter صريحة بدل إعادة بناء engine.
+تم تنفيذ **Private Backend** مستقل داخل `backend/` لخدمة شخصية على جهاز Android واحد. لا يحتوي النطاق على `users` أو billing أو subscriptions أو multi-tenancy، ولا ينشئ حسابات أو tenants أو سجلات اشتراك. مصدر الحقيقة المحلي هو SQLite للـjobs والـuploads وربط الجهاز، والملفات محصورة تحت storage root مضبوط.
 
-الملفات المضافة كلها ضمن نطاق backend، باستثناء هذا الملف المطلوب للتسليم:
+تمت مراجعة `ENGINE_HANDOFF.md` الموجود في المستودع. التكامل الافتراضي الآن يمر عبر الواجهة العامة `publikclip_pipeline.engine.PipelineEngine` ويدعم عقد `ProcessingEngine` فقط. لا يستورد backend وحدات مراحل pipeline أو queue أو renderer مباشرة، ولا يحتاج Android إلى Python runtime. يبقى CLI adapter متاحًا فقط عندما يُضبط `PRIVATE_BACKEND_ENGINE_BIN` صراحةً كخيار legacy.
+
+## الملفات والمسؤوليات
 
 | الملف | المسؤولية |
 |---|---|
-| `backend/app.py` | FastAPI app، auth، request IDs، error envelope، وكل المسارات المطلوبة. |
-| `backend/db.py` | SQLite durable store لجداول الجهاز والرفع والjobs. |
-| `backend/storage.py` | تخزين الفيديو والـartifacts والتحقق من المسارات ومنع path traversal. |
-| `backend/engine.py` | Protocol وSubprocess adapter وUnavailable adapter لـpublikclip. |
-| `backend/service.py` | worker lifecycle، progress، cancel، resume، وتجميع النتائج. |
-| `backend/tests/test_api.py` | API وintegration tests باستخدام Fake Engine. |
-| `backend/README.md` | التشغيل والتهيئة المختصرة. |
+| `backend/app.py` | FastAPI application، المصادقة، request IDs، validation، error envelope، routes، streaming upload، وتنزيل artifacts. |
+| `backend/db.py` | SQLite durable store لجداول `device_binding`, `uploads`, و`jobs` فقط، مع transitions للإلغاء والاستئناف. |
+| `backend/storage.py` | توليد IDs opaque، basename sanitization، حدود upload، وpath containment عند قراءة artifacts. |
+| `backend/engine.py` | `Engine` boundary، `FacadePublikclipEngine` للواجهة العامة، وlegacy subprocess/unavailable adapters. |
+| `backend/service.py` | worker lifecycle، استعادة الوظائف بعد restart، progress، cancel، resume، وتجميع نتائج وclips. |
+| `backend/tests/test_api.py` | اختبارات integration لتدفق upload → job → polling → results → render → download والمصادقة. |
+| `backend/tests/test_backend_contract.py` | اختبار تحويل public Engine Facade للأحداث والنتائج ومنع تسريب رسائل الاستثناء. |
+| `backend/tests/test_persistence.py` | اختبارات SQLite للإلغاء، checkpoint availability، restart interruption، ورفض الحقول غير المعروفة. |
+| `docs/API.md` | العقد التنفيذي الكامل الموجه إلى Android agent. |
 
-## API contract
+## API المسلم
 
-كل المسارات أدناه، باستثناء `GET /health`، تتطلب في وضع الإنتاج:
+المسارات هي root paths كما هي أدناه؛ لا يضيف هذا التطبيق `/v1`:
+
+| Method | Path | Success | الغرض |
+|---|---|---:|---|
+| `GET` | `/health` | `200` | readiness مختصر، لا يتطلب auth. |
+| `POST` | `/uploads` | `201` | raw video upload، وليس multipart. |
+| `POST` | `/jobs` | `202` أو `200` عند idempotency reuse | إنشاء أو إعادة استخدام job. |
+| `GET` | `/jobs` | `200` | قائمة jobs وcursor. |
+| `GET` | `/jobs/{id}` | `200` | الحالة الحالية والتقدم والأخطاء. |
+| `POST` | `/jobs/{id}/cancel` | `200` | إلغاء durable وإشارة للworker. |
+| `POST` | `/jobs/{id}/resume` | `200` | إعادة استخدام checkpoint مع نفس job identity. |
+| `GET` | `/jobs/{id}/results` | `200` | النتائج بعد `COMPLETED`. |
+| `GET` | `/jobs/{id}/clips` | `200` | clips وdownload URLs بعد الاكتمال. |
+| `POST` | `/jobs/{id}/clips/{clip}/render` | `200` | إعادة render لمقطع موجود. |
+| `GET` | `/jobs/{id}/clips/{clip}/download` | `200` | تنزيل MP4 محليًا بعد containment check. |
+
+العقد التفصيلي، أمثلة JSON، جميع الحالات والأكواد موجود في [`docs/API.md`](docs/API.md). كل endpoint خاص يتطلب:
 
 ```http
 Authorization: Bearer <PRIVATE_BACKEND_TOKEN>
-X-Device-ID: <stable-android-device-id>
+X-Device-ID: <stable-device-id>
 ```
 
-يحاول backend ربط أول `X-Device-ID` ناجح ببصمة SHA-256 محفوظة محليًا. أي جهاز ثانٍ يواجه `DEVICE_MISMATCH`. لا يتم تخزين device ID الخام.
+يرسل Android `X-Request-ID` اختياريًا، ويستلم `X-Request-ID` في كل response. لا تُرسل الأسرار في URL ولا تظهر في response أو logs.
 
-| Method | Path | Success | Contract |
-|---|---|---:|---|
-| `GET` | `/health` | `200` | `{ok, service, api_version, engine, auth_required}`. لا يتطلب auth ولا يكشف secrets. |
-| `POST` | `/uploads` | `201` | Raw video body، مع `Content-Type` و`X-Filename` اختياري. يعيد `{id, filename, content_type, bytes, source}`. لا يعيد المسار الداخلي. |
-| `POST` | `/jobs` | `202` | JSON يحتوي واحدًا فقط من `source` URL عام أو `upload_id`، و`options` اختياري، و`idempotency_key` اختياري أو `Idempotency-Key` header. |
-| `GET` | `/jobs` | `200` | `{items, next_cursor}` مع `limit=1..100` و`status` و`before`. |
-| `GET` | `/jobs/{id}` | `200` | job durable يتضمن `status`, `state`, `stage`, `progress`, `message`, `error_code`, `error_message`, `engine_job_id`, `resume_available`, `cancel_requested`, `options`, `results`, والتواريخ. |
-| `POST` | `/jobs/{id}/cancel` | `200` | يجعل job `CANCELLED` durable ويرسل event إلغاء إلى worker الجاري. لا يمكن إلغاء job مكتمل. |
-| `POST` | `/jobs/{id}/resume` | `200` | يعيد job إلى `QUEUED` فقط إذا كان `FAILED` أو `INTERRUPTED` أو `CANCELLED` وله engine checkpoint. |
-| `GET` | `/jobs/{id}/results` | `200` | يعيد النتائج بعد `COMPLETED`. قبل ذلك يعيد `409 RESULTS_NOT_READY` مع `retryable=true`. |
-| `GET` | `/jobs/{id}/clips` | `200` | `{job_id, items}`؛ كل item يحتوي رقم clip ورابط تنزيل backend. |
-| `GET` | `/jobs/{id}/clips/{clip}/download` | `200` | MP4 فقط، بعد التحقق من job والاسم والمسار. |
-| `POST` | `/jobs/{id}/clips/{clip}/render` | `200` | يشغّل `edit render-clip` عبر adapter ويعيد artifact الناتج ورابط تنزيله. يمكن إرسال `{options:{...}}` مستقبلًا؛ الخيارات الحالية محفوظة للتوافق ولا تغيّر scoring. |
+## Job lifecycle
 
-### الحالات
+يُنشئ backend row durable في SQLite قبل إرسال الوظيفة إلى worker. الحالة الخارجية المبسطة هي `queued`, `running`, `completed`, `failed`, `cancelled`, أو `interrupted`، بينما `state` يعرض المرحلة canonical مثل `TRANSCRIBING` أو `RENDERING`. قيمة `progress` بين `0.0` و`1.0` وتأتي من Engine Facade أو من الحالة المحفوظة، ولا يصنع Android progress بديلًا.
 
-القيم الأساسية هي `QUEUED`, `PREPARING`, `DOWNLOADING`, `INGESTING`, `TRANSCRIBING`, `DIARIZING`, `ANALYZING`, `CANDIDATES_READY`, `SCORING`, `EDITING`, `RENDERING`, `FINALIZING`, `COMPLETED`, `FAILED`, `CANCELLED`, و`INTERRUPTED`. حقل `status` يستخدم القيم الصغيرة `queued`, `running`, `completed`, `failed`, `cancelled`, و`interrupted` لتسهيل Android.
+عند restart تتحول الوظائف التي كانت `queued` أو `running` إلى `INTERRUPTED`. لا يُعلن `resume_available` إلا إذا كانت هوية المحرك `engine_job_id` موجودة. عند الإلغاء تُثبت الحالة `CANCELLED` قبل إشارة worker؛ وإذا كان worker ما يزال يتوقف، يعيد resume مؤقتًا `409 JOB_BUSY` بدل خلق سباق بين محاولتين. بعد التوقف يمكن لـAndroid طلب resume، مع بقاء `job_id` ثابتًا.
 
-### الأخطاء
+## Engine Facade boundary
 
-كل خطأ HTTP يعيد الشكل التالي ويضيف `X-Request-ID` إلى response:
+الحد الوحيد بين application shell والمحرك هو `backend.engine.Engine`. المحول الافتراضي يستدعي:
+
+```python
+from publikclip_pipeline.engine import PipelineEngine
+```
+
+ثم يستخدم فقط `create_job`, `start_job`, `get_job_status`, `progress`, `cancel_job`, `resume_job`, `results`, و`render_clip` من العقد العام. يحول `ProgressEvent` إلى `EngineEvent` ويحّول `JobResults` و`ClipResult` إلى JSON-shaped payloads. الاستثناءات تتحول إلى `EngineError` بأكواد ثابتة مثل `JOB_NOT_FOUND`, `JOB_BUSY`, `JOB_CANCELLED`, `CLIP_NOT_FOUND`, `CLIP_RENDER_FAILED`, و`ENGINE_FAILED`.
+
+يستخدم backend `PRIVATE_BACKEND_STORAGE` كـ`PUBLIKCLIP_HOME`، لذلك توجد checkpoints المحرك تحت storage root نفسه ولكن في مجلدات job opaque. لا تُعرض absolute paths في API. لا ينبغي تعديل `pipeline/` لتلبية احتياج HTTP؛ أي تغيير في عقد المحرك يجب أن يمر من واجهة `pipeline/publikclip_pipeline/engine/__init__.py` ثم adapter.
+
+## Safe file handling
+
+رفع الفيديو يتم streaming مع حد `PRIVATE_BACKEND_MAX_UPLOAD_BYTES`. اسم العميل يختزل إلى basename ويُحفظ الملف داخليًا باسم `source.<safe-extension>`. مراجع clip لا تُستخدم مباشرة كمسارات؛ الخادم يحلها ثم يتأكد أن الملف موجود، MP4، وداخل مجلد job المصرح به. URL المصدر العام يخضع للتحقق من scheme وuserinfo وDNS addresses، وتُرفض loopback وprivate وlink-local وreserved وmulticast.
+
+## Error and logging contract
+
+كل خطأ منظم له الشكل:
 
 ```json
 {
@@ -60,88 +84,42 @@ X-Device-ID: <stable-android-device-id>
 }
 ```
 
-أكواد مهمة للعميل هي `UNAUTHORIZED`, `DEVICE_REQUIRED`, `DEVICE_MISMATCH`, `UPLOAD_TOO_LARGE`, `EMPTY_UPLOAD`, `INVALID_SOURCE`, `UPLOAD_NOT_FOUND`, `JOB_NOT_FOUND`, `RESULTS_NOT_READY`, `CLIPS_NOT_READY`, `JOB_NOT_RESUMABLE`, `CHECKPOINT_NOT_FOUND`, `JOB_NOT_CANCELLABLE`, `ENGINE_UNAVAILABLE`, `ENGINE_START_FAILED`, `ENGINE_FAILED`, و`RENDER_FAILED`.
+لا يعرض الخادم tracebacks أو مسارات filesystem أو authorization headers. رسائل engine تُقص وتُنظف من path وtoken-like values قبل التخزين أو الإرسال. logging يسجل method/path/status/request ID، ويستخدم `job_id` وerror code في سجلات دورة الوظيفة من دون source URLs أو tokens.
 
-## Expected engine interface
+## تشغيل محلي
 
-الحد الفاصل الوحيد مع engine موجود في `backend/engine.py`:
+من جذر المستودع:
 
-```python
-class Engine(Protocol):
-    def available(self) -> tuple[bool, str]: ...
-
-    def run(
-        self,
-        source: str,
-        job_dir: Path,
-        options: dict[str, Any],
-        resume_engine_job_id: str | None,
-        on_event: EventCallback,
-        cancel_event: threading.Event,
-    ) -> dict[str, Any]: ...
-
-    def render_clip(
-        self,
-        engine_job_id: str,
-        clip: int,
-        job_dir: Path,
-        on_event: EventCallback,
-        cancel_event: threading.Event,
-    ) -> dict[str, Any]: ...
+```bash
+export PRIVATE_BACKEND_TOKEN='random-long-private-token'
+export PRIVATE_BACKEND_DEVICE_ID='android-device-identifier'
+uvicorn backend.app:app --host 0.0.0.0 --port 8788
 ```
 
-الـSubprocess adapter الحالي يستدعي CLI الموجود في `pipeline/publikclip_pipeline/cli.py` بهذه الأوامر المنطقية:
-
-```text
-publikclip --jsonl run <source> [--llm ...] [--captions ...] [--mode ...]
-publikclip --jsonl resume <engine_job_id> [options]
-publikclip --jsonl edit render-clip <engine_job_id> <clip>
-```
-
-يجب أن يرسل CLI أسطر JSONL من النوع `job` و`progress` و`result`. الحد الأدنى للنتيجة النهائية هو `{ok: true, job_id: "..."}`؛ ويمكن أن تحتوي على `clips` أو نتائج إضافية. الـadapter لا يعيد تنفيذ ingest أو ASR أو diarization أو candidates أو scoring أو editing؛ يمرر الأحداث ويخزن manifest فقط. عند غياب pipeline يُستخدم `UnavailableEngine` ويظهر `ENGINE_UNAVAILABLE` بدل ادعاء أن engine جاهز.
-
-## Android requirements
-
-يُفضّل أن ينفذ Android flow الآتي:
-
-| الخطوة | طلب |
-|---|---|
-| 1 | احفظ base URL وtoken وdevice ID في إعدادات private محلية آمنة، ولا تضع token في logs أو query parameters. |
-| 2 | ارفع الفيديو raw إلى `/uploads`، واحتفظ بـ`id` فقط. أرسل `Content-Length` عندما يمكن ذلك لإظهار upload progress. |
-| 3 | أنشئ job عبر `/jobs` مع `upload_id` و`Idempotency-Key` ثابت لكل محاولة منطقية. لا تنشئ job جديدًا عند إعادة إرسال response timeout. |
-| 4 | استعلم عن `/jobs/{id}` كل 1–3 ثوانٍ مع backoff عند `429/503`. اعرض `progress` كنسبة بين 0 و1 و`stage` كنص غير قابل للترجمة المباشرة. |
-| 5 | عند `COMPLETED` اطلب `/results` أو `/clips`، ثم نزّل MP4 من `download_url` مع نفس auth headers. |
-| 6 | عند `FAILED` أو `INTERRUPTED` افحص `resume_available`، ثم اطلب `/resume` فقط عند توفر checkpoint. لا تعتبر أي job `FAILED` قابلًا للاستئناف تلقائيًا. |
-| 7 | عند إلغاء المستخدم اطلب `/cancel`، ثم أوقف polling بعد تأكيد `CANCELLED` أو `COMPLETED`. |
-
-كل request يجب أن يرسل `X-Request-ID` اختياريًا لربط logs، وكل response قد يعيد request ID جديدًا. يجب على Android التعامل مع `401` بإعادة التهيئة المحلية، ومع `403 DEVICE_MISMATCH` كحالة backend مقيد بجهاز آخر، ومع `409` كحالة منطقية لا كفشل شبكة.
-
-## Security and operational boundary
-
-الـbackend لا يقبل URL محليًا أو عنوانًا خاصًا عند إنشاء job من `source`، ويمنع traversal عند قراءة upload أو clip. الملفات تحفظ محليًا تحت `PRIVATE_BACKEND_STORAGE`، والـDB تحت `PRIVATE_BACKEND_DB`. لا يتم عرض absolute paths في API. يجب تشغيل الوصول البعيد عبر HTTPS وtoken طويل عشوائي؛ `PRIVATE_BACKEND_ALLOW_INSECURE_LOCAL=true` للاختبارات المحلية فقط.
-
-worker واحد متسلسل افتراضيًا، لكن ThreadPoolExecutor يسمح بتجميع jobs في الذاكرة مع durable rows. عند restart تتحول jobs الجارية إلى `INTERRUPTED` ويصبح resume متاحًا عندما يكون engine قد أصدر checkpoint ID. لا يستخدم backend أي Manus connector أو user account.
-
-## Known issues and dependencies
-
-أولًا، `ENGINE_HANDOFF.md` غير موجود في checkout الذي تم فحصه، لذلك يعتمد adapter على عقد JSONL المستنتجة من CLI الحالي. إذا تغير CLI، يجب تعديل `backend/engine.py` فقط وتحديث هذا الملف.
-
-ثانيًا، لا يوجد اختبار end-to-end حقيقي مع فيديو وFFmpeg ومزود AI؛ الاختبارات الحالية تستخدم Fake Engine عمدًا حتى تكون deterministic ولا ترسل ملفات أو مفاتيح خارجية. يلزم اختبار نشر منفصل عند توفر runtime الخاص بـpipeline وFFmpeg ومفتاح مزود AI.
-
-ثالثًا، رفع الفيديو مصمم كـraw body وليس multipart، لتجنب اعتماد parser إضافي ولتسهيل streaming وقياس الحجم. إذا تطلب Android multipart مستقبلًا، أضف endpoint متوافقًا داخل `backend/app.py` أو adapter رفع منفصل، ولا تغيّر contract الحالي.
-
-رابعًا، `/jobs/{id}/clips/{clip}/render` يعتمد على engine لإعادة render. لا يخترع backend ملفًا عند غياب engine، ويرجع `RENDER_FAILED` أو `ENGINE_UNAVAILABLE`.
-
-خامسًا، توجد خدمة `gateway/` قديمة/موازية بمسارات `/v1/...` في المستودع. لم يتم تعديلها احترامًا لقاعدة الملكية والتزامن. جلسة الدمج يجب أن تختار بوضوح هل Android سيستخدم API الجذر الجديد `/jobs` أم سيضيف proxy مقصودًا؛ لم تتم إضافة proxy لتجنب لمس نطاق جلسة أخرى.
+يمكن ضبط `PRIVATE_BACKEND_ROOT`, `PRIVATE_BACKEND_DB`, `PRIVATE_BACKEND_STORAGE`, `PRIVATE_BACKEND_MAX_UPLOAD_BYTES`, و`PRIVATE_BACKEND_PIPELINE_DIR`. يضبط `PRIVATE_BACKEND_ENGINE_BIN` فقط عند الحاجة إلى CLI legacy. الوصول من Android خارج localhost يجب أن يكون عبر HTTPS أو reverse proxy موثوق. `PRIVATE_BACKEND_ALLOW_INSECURE_LOCAL=true` للاختبارات المحلية فقط.
 
 ## Verification
 
-تم تشغيل:
+تم التحقق بالأوامر التالية:
 
-```text
+```bash
 python3 -m compileall -q backend
-pytest -q backend/tests
-4 passed
+git diff --check
+PYTHONPATH=. pytest -q backend/tests
+PYTHONPATH=pipeline pytest -q pipeline/tests/test_engine.py pipeline/tests/test_queue.py
 ```
 
-التغيير المقصود في هذه الجلسة هو مجلد `backend/` وملف `BACKEND_HANDOFF.md` فقط. يجب مراجعة `git diff --check` قبل الدمج.
+نتيجة الاختبارات الحالية قبل commit: **12 backend tests passed** و**15 pipeline engine/queue tests passed**. ظهرت warning توافق من `starlette.testclient` حول httpx، لكنها لا تفشل الاختبارات ولا تخص عقد التطبيق.
+
+## حدود التكامل مع Android
+
+الـAndroid agent مسؤول عن حفظ `job_id` قبل polling، استخدام نفس idempotency key عند timeout، إرسال token وdevice ID في كل طلب خاص، والتعامل مع `409` كحالة منطقية. يجب إيقاف polling بعد تأكيد `CANCELLED` أو `COMPLETED`. عند `FAILED` أو `INTERRUPTED` لا يظهر زر resume إلا إذا كان `resume_available == true`.
+
+يوجد في المستودع Gateway أقدم بعقد `/v1/...` وعميل Android حالي مرتبط به. هذا التسليم لا يضيف proxy ولا يغير `android/` أو `gateway/`. قبل ربط Android بهذا backend يجب أن يختار الدمج صراحةً أحد المسارين: اعتماد root API الموثق هنا وتحديث عميل Android، أو إضافة proxy مستقل متوافق؛ لا تخلط الصيغتين في العميل نفسه.
+
+## مراجع داخلية
+
+[1]: docs/MASTER-ARCHITECTURE.md "ISM Master Architecture"
+[2]: ENGINE_HANDOFF.md "PUBLIKCLIP ENGINE Handoff"
+[3]: docs/API-CONTRACT.md "Existing ISM API Contract"
+[4]: docs/API.md "Private Backend API"

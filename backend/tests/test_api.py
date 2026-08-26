@@ -33,7 +33,11 @@ class FakeEngine:
         return {"ok": True, "job_id": engine_job_id, "clips": [{"clip": 0, "filename": "clip0.mp4", "title": "Test clip"}]}
 
     def render_clip(self, engine_job_id, clip, job_dir, on_event, cancel_event):
-        return {"ok": True, "output": {"clip": clip, "filename": f"clip{clip}-rendered.mp4"}}
+        clips = job_dir / "clips"
+        clips.mkdir(parents=True, exist_ok=True)
+        filename = f"clip{clip}-rendered.mp4"
+        (clips / filename).write_bytes(b"valid rendered fake mp4 artifact")
+        return {"ok": True, "output": {"clip": clip, "filename": filename}}
 
 
 class NoCheckpointEngine(FakeEngine):
@@ -99,14 +103,35 @@ def test_private_job_lifecycle_upload_results_and_download(tmp_path):
         assert download.status_code == 200
         assert download.content.startswith(b"valid fake")
 
+        rendered = client.post(f"/jobs/{job_id}/clips/0/render", json={"options": {"preset": "vertical"}})
+        assert rendered.status_code == 200
+        assert rendered.json()["render"]["filename"] == "clip0-rendered.mp4"
+        rendered_download = client.get(f"/jobs/{job_id}/clips/0/download")
+        assert rendered_download.status_code == 200
+        assert rendered_download.content.startswith(b"valid rendered")
+
+
+def test_upload_validation_and_filename_containment(tmp_path):
+    with make_client(tmp_path) as client:
+        empty = client.post("/uploads", content=b"", headers={"X-Filename": "../../outside.mp4"})
+        assert empty.status_code == 400
+        assert empty.json()["error"]["code"] == "EMPTY_UPLOAD"
+
+        upload = client.post("/uploads", content=b"safe", headers={"X-Filename": "../../outside.mp4"})
+        assert upload.status_code == 201
+        assert upload.json()["filename"] == "outside.mp4"
+        assert list((tmp_path / "files" / "uploads").rglob("source.mp4"))
+        assert not list((tmp_path / "files").parent.glob("outside.mp4"))
+
 
 def test_source_validation_and_stable_error_envelope(tmp_path):
     with make_client(tmp_path) as client:
-        response = client.post("/jobs", json={"source": "http://127.0.0.1/private.mp4"})
-        assert response.status_code == 422
-        body = response.json()
-        assert body["error"]["code"] == "INVALID_SOURCE"
-        assert body["error"]["request_id"].startswith("req_")
+        for source in ("http://127.0.0.1/private.mp4", "https://user:password@example.com/video.mp4", "https://example.com:bad/video.mp4"):
+            response = client.post("/jobs", json={"source": source})
+            assert response.status_code == 422
+            body = response.json()
+            assert body["error"]["code"] == "INVALID_SOURCE"
+            assert body["error"]["request_id"].startswith("req_")
 
         missing = client.get("/jobs/not-found")
         assert missing.status_code == 404

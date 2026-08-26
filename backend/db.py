@@ -148,7 +148,9 @@ class Store:
         with closing(self.connect()) as conn:
             conn.execute(
                 """UPDATE jobs SET status='interrupted', state='INTERRUPTED', stage='interrupted',
-                   message='Backend restarted; resume is available', resume_available=1, updated_at=?
+                   message='Backend restarted; resume is available',
+                   resume_available=CASE WHEN engine_job_id IS NOT NULL THEN 1 ELSE 0 END,
+                   updated_at=?
                    WHERE status IN ('queued', 'running') AND cancel_requested=0""",
                 (now,),
             )
@@ -157,6 +159,14 @@ class Store:
     def transition(self, job_id: str, **values: Any) -> None:
         if not values:
             return
+        allowed = {
+            "status", "state", "stage", "progress", "message", "error_code",
+            "error_message", "engine_job_id", "results_json", "cancel_requested",
+            "resume_available",
+        }
+        unknown = set(values) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported job fields: {', '.join(sorted(unknown))}")
         values["updated_at"] = self.now()
         assignments = ", ".join(f"{key}=?" for key in values)
         with closing(self.connect()) as conn:
@@ -172,7 +182,10 @@ class Store:
             if row["status"] in {"completed", "failed", "cancelled"}:
                 return row
             conn.execute(
-                "UPDATE jobs SET cancel_requested=1, status='cancelled', state='CANCELLED', stage='cancelled', message=?, error_code='JOB_CANCELLED', error_message=?, updated_at=? WHERE id=?",
+                """UPDATE jobs SET cancel_requested=1, status='cancelled', state='CANCELLED',
+                   stage='cancelled', message=?, error_code='JOB_CANCELLED',
+                   error_message=?, resume_available=CASE WHEN engine_job_id IS NOT NULL THEN 1 ELSE resume_available END,
+                   updated_at=? WHERE id=?""",
                 ("Cancellation requested", "Job cancellation was requested by the device", now, job_id),
             )
             conn.commit()

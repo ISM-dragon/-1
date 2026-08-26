@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from .db import Store
-from .engine import Engine, EngineError, EngineEvent
+from .engine import Engine, EngineError, EngineEvent, safe_engine_message
 from .storage import Storage
+
+
+logger = logging.getLogger("private_backend.jobs")
 
 
 STAGE_TO_STATE = {
@@ -60,6 +64,11 @@ class JobManager:
             self.futures[job_id] = future
             return True
 
+    def is_active(self, job_id: str) -> bool:
+        with self.lock:
+            future = self.futures.get(job_id)
+            return future is not None and not future.done()
+
     def cancel(self, job_id: str) -> dict[str, Any] | None:
         row = self.store.request_cancel(job_id)
         if row is None:
@@ -86,7 +95,7 @@ class JobManager:
                 message=event.message or "Processing",
             )
         elif event.kind == "log" and event.message:
-            self.store.transition(job_id, message=event.message[-500:])
+            self.store.transition(job_id, message=safe_engine_message(event.message[-500:], "Processing"))
 
     def _collect_result(self, job_id: str, engine_job_id: str | None, final: dict[str, Any]) -> dict[str, Any]:
         result = final.get("results") if isinstance(final.get("results"), dict) else dict(final)
@@ -123,7 +132,8 @@ class JobManager:
             if row["cancel_requested"]:
                 self.store.transition(job_id, status="cancelled", state="CANCELLED", stage="cancelled", error_code="JOB_CANCELLED", error_message="Job cancellation was requested", resume_available=bool(row["engine_job_id"]))
                 return
-            self.store.transition(job_id, status="running", state="PREPARING", stage="preparing", message="Starting publikclip", progress=0)
+            logger.info("job started job_id=%s", job_id)
+            self.store.transition(job_id, status="running", state="PREPARING", stage="preparing", message="Starting processing", progress=0)
             options = json.loads(row["options_json"])
             source = str(row["source"])
             if row["source_upload_id"]:
@@ -135,6 +145,7 @@ class JobManager:
             final = self.engine.run(source, job_dir, options, row["engine_job_id"], lambda event: self._event_handler(job_id, event), cancel_event)
             engine_job_id = str(final.get("job_id") or self.store.get_job(job_id)["engine_job_id"] or "") or None
             result = self._collect_result(job_id, engine_job_id, final)
+            logger.info("job completed job_id=%s", job_id)
             self.store.transition(
                 job_id,
                 status="completed",
@@ -152,13 +163,16 @@ class JobManager:
             if error.code == "JOB_CANCELLED" or cancel_event.is_set():
                 self.store.transition(job_id, status="cancelled", state="CANCELLED", stage="cancelled", message="Job cancelled", error_code="JOB_CANCELLED", error_message=str(error), resume_available=bool(self.store.get_job(job_id)["engine_job_id"]))
             else:
-                self.store.transition(job_id, status="failed", state="FAILED", stage="failed", message="Engine failed", error_code=error.code, error_message=str(error), resume_available=int(error.recoverable),)
+                safe_message = safe_engine_message(error.safe_message)
+                logger.warning("job failed job_id=%s code=%s recoverable=%s", job_id, error.code, error.recoverable)
+                self.store.transition(job_id, status="failed", state="FAILED", stage="failed", message="Engine failed", error_code=error.code, error_message=safe_message, resume_available=int(error.recoverable),)
         except Exception as error:  # noqa: BLE001 - persist safe worker failure
             current = self.store.get_job(job_id)
             if cancel_event.is_set() or (current is not None and current["cancel_requested"]):
                 self.store.transition(job_id, status="cancelled", state="CANCELLED", stage="cancelled", message="Job cancelled", error_code="JOB_CANCELLED", error_message="Job cancellation was requested", resume_available=bool(current and current["engine_job_id"]))
             else:
-                self.store.transition(job_id, status="failed", state="FAILED", stage="failed", message="Backend worker failed", error_code="BACKEND_WORKER_FAILED", error_message=str(error), resume_available=1)
+                logger.exception("backend worker failed job_id=%s", job_id)
+                self.store.transition(job_id, status="failed", state="FAILED", stage="failed", message="Backend worker failed", error_code="BACKEND_WORKER_FAILED", error_message="The backend worker failed", resume_available=1)
         finally:
             with self.lock:
                 self.cancel_events.pop(job_id, None)
@@ -174,10 +188,20 @@ class JobManager:
         result = self.engine.render_clip(engine_job_id, clip, self.storage.jobs / engine_job_id, lambda event: self._event_handler(job_id, event), cancel_event)
         current = self.store.job_dict(self.store.get_job(job_id))
         outputs = current.get("results", {}).get("clips", []) if isinstance(current.get("results"), dict) else []
-        rendered = result.get("output") or result.get("result") or result
+        outputs = [item for item in outputs if isinstance(item, dict) and item.get("clip") != clip]
+        rendered = result.get("output") or result.get("result") or result.get("artifact") or result
         if isinstance(rendered, dict):
             rendered = {"clip": clip, **rendered}
-        outputs = [item for item in outputs if item.get("clip") != clip] + [rendered]
+            raw_path = rendered.get("path")
+            if raw_path:
+                try:
+                    safe_path = self.storage.resolve_engine_clip(engine_job_id, Path(str(raw_path)).name)
+                    rendered["filename"] = safe_path.name
+                    rendered["bytes"] = safe_path.stat().st_size
+                    rendered["download_ready"] = True
+                except (OSError, ValueError):
+                    rendered.pop("path", None)
+        outputs.append(rendered)
         results = current.get("results") or {"job_id": job_id}
         results["clips"] = outputs
         self.store.transition(job_id, results_json=json.dumps(results, ensure_ascii=False))
