@@ -13,7 +13,7 @@
 | الوظيفة | المسار | ملاحظات |
 |---|---|---|
 | فحص الصحة | `GET /health` | لا يعيد أسرارًا |
-| رفع مصدر خاص | `POST /v1/sources/upload` | يستقبل ملف فيديو ويعيد رابط مصدر داخلي |
+| رفع مصدر خاص | `POST /v1/sources/uploads` ثم `PUT` chunks ثم `/complete` | Android يحسب SHA-256 ويستأنف من offset؛ `/v1/sources/upload` legacy للتوافق فقط |
 | بدء المعالجة | `POST /v1/processing/jobs` | يدعم `llm` و`captions` و`mode` |
 | متابعة المعالجة | `GET /v1/processing/jobs/{id}` | يعيد الحالة والتقدم والنتيجة |
 | تنزيل الناتج | `GET /v1/processing/jobs/{id}/media/{filename}` | ملفات MP4 الموثقة فقط |

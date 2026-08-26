@@ -117,3 +117,29 @@ export KEY_PASSWORD='***'
 تم تحديث عميل Android ليقرأ `runtime_ready` ويعرضه في إعدادات Gateway، مع اختبار عقدي لذلك. أضيف CI assembly لـ`app-release-unsigned.apk` دون أسرار أو keystore. لم تُنسخ أي ملفات أو assets أو secrets من `supoclip-main.zip`؛ المرجع AGPL-3.0 كما يثبت ملف `LICENSE` المرفق، وهو موثق في `docs/THIRD_PARTY_LICENSES.md`.
 
 نتيجة التحقق في هذه الجلسة: `123 passed` لاختبارات pipeline، و`48 passed, 1 skipped` لاختبارات Gateway، و`python3 -m compileall -q pipeline gateway` نجح، و`npm run typecheck` و`npm run build` نجحا بعد `npm ci`. تحقق runtime الفعلي من FFmpeg/ffprobe، واكتشف 6 نماذج معلنة مفقودة وأعاد `runtime_ready=false` كما هو متوقع. محاولة Android Gradle الحالية توقفت لأن Android SDK/`local.properties` غير موجودين في sandbox؛ لذلك لا أضيف ادعاء نجاح بناء Android جديد إلى هذه الجلسة.
+
+## جلسة تدقيق whisper.cpp — 2026-08-26
+
+تم فحص الأرشيف المرفق `whisper.cpp-master.zip` دون نسخ source أو binary أو model إلى المستودع. العينة `examples/whisper.android.java` هي Android Java/JNI ضيقة للـASR المحلي، تعتمد على ملفات المستودع الكامل وCMake/NDK، وتضع نموذج GGML وWAV داخل `assets`. لا تغطي video picker، upload، job lifecycle، checkpoints، diarization، events، candidates، scoring، camera، rendering، أو recovery بعد process death.
+
+القرار هو **IGNORE_REFERENCE** لدمج JNI/CMake/GGML في APK في Wave الحالية، مع **ADD_REFERENCE** لفكرة benchmark/system-info و**IMPROVE_CURRENT** لحفظ timestamps ضمن العقود الحالية. يبقى المسار canonical: Android → Private Gateway → PublikClip Engine → AI/Media Runtime. أي ASR محلي مستقبلي يحتاج provider contract مستقلًا وقياس accuracy/latency/RAM/APK-size/battery على أجهزة حقيقية، ولا يغير remote path الافتراضي.
+
+## Evidence هذه المراجعة
+
+| الفحص | النتيجة |
+|---|---|
+| `python3 -m pytest -q` بعد تثبيت `gateway/requirements.txt` و`pipeline` | 164 passed، 1 skipped، 4 warnings |
+| مراجعة `whisper.cpp/LICENSE` وnotices الفرعية | MIT root؛ notices إضافية داخل اختبارات مقتبسة من OpenAI Whisper |
+| مراجعة Android sample README/JNI | local ASR demo فقط، وليس pipeline أو backend |
+| Git status قبل التعديل | clean على `main`، متتبعًا `origin/main` |
+| نطاق التغييرات في هذه الدفعة | وثائق المقارنة/التراخيص/التدقيق/الخطة والـhandoff، وresumable upload في عميل Android؛ لا production source من whisper.cpp |
+
+## تنفيذ Wave 2/3 المحدود
+
+تم تحديث `android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt` ليستخدم `POST /v1/sources/uploads`، يحسب SHA-256 للملف المحلي، يعيد استخدام جلسة بنفس `(bytes, sha256)` عند retry، يقرأ offset، ويرسل chunks بحجم 4 MiB مع `X-Upload-Offset` و`Content-Range`، ثم ينفذ `complete`. هذا يحافظ على Gateway كمسار المعالجة ولا يضيف whisper.cpp أو runtime native إلى APK.
+
+## Pending work
+
+لم يُثبت في هذه الجلسة Android Gradle build/device smoke أو Gateway production E2E بسبب غياب Android SDK/JDK release وبيئة Gateway خارجية. توحيد error envelope واختبار process death تبقيان ضمن موجات التنفيذ التالية؛ أما Android resumable upload فأُضيف في هذه الدفعة إلى `ProcessingGatewayClient` مع SHA-256 وsession dedupe وoffset/Content-Range، ويظل اختبار interruption على جهاز/Gateway فعلي مطلوبًا. لا يجوز إعلان release نهائي قبل توفير evidence لهذه المسارات.
+
+راجع `docs/REFERENCE_COMPARISON.md` و`docs/REFERENCE_MIGRATION_PLAN.md` و`docs/THIRD_PARTY_LICENSES.md` و`docs/AUDIT.md` قبل بدء أي integration لاحق.
