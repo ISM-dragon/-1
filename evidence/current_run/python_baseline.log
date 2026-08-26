@@ -1,9 +1,0 @@
-== identity ==
-identity_ok product=ISM version=0.11.0 android_application_id=com.aistudio.opuspro.apk api=v1
-== python compile ==
-== gateway tests ==
-/usr/bin/python3: No module named pytest
-== backend tests ==
-/usr/bin/python3: No module named pytest
-== pipeline tests ==
-/usr/bin/python3: No module named pytest
