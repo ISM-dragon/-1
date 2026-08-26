@@ -29,6 +29,7 @@ OUT_W = 1080
 OUT_H = 1920
 X264_CRF = 19
 VT_BITRATE = "10M"
+RENDERER_CACHE_VERSION = 2
 
 _vt_checked: bool | None = None
 
@@ -162,6 +163,8 @@ def render_clip(
     except OSError as err:
         raise RuntimeError(f"Render could not start: {err}") from err
     finally:
+        # sendcmd is an implementation detail; never leave it behind after
+        # an error, timeout, or successful render.
         cmd_path.unlink(missing_ok=True)
     if proc.returncode != 0:
         raise RuntimeError(f"Render failed: {(proc.stderr or '')[-800:]}")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -127,17 +128,45 @@ class RenderStage(Stage):
             )
 
             out_path = out_dir / f"clip_{i:02d}.mp4"
-            try:
-                renderer.render_clip(
-                    str(media), out_path, start, end, trajectory,
-                    ass_path if captions_ok else None, ass_mod.FONTS_DIR,
-                    lufs=ctx.settings.lufs_target,
-                    true_peak=ctx.settings.true_peak_db,
-                    src_w=src_w, src_h=src_h,
-                )
-            except RuntimeError as err:
-                raise StageError(str(err), "RENDER_FAILED") from err
-            check = renderer.verify_output(out_path, end - start)
+            media_stat = Path(media).stat()
+            signature_payload = {
+                "version": renderer.RENDERER_CACHE_VERSION,
+                "media": [media_stat.st_size, media_stat.st_mtime_ns],
+                "start": start,
+                "end": end,
+                "trajectory": trajectory,
+                "ass": ass_path.read_text(),
+                "captions_ok": captions_ok,
+                "lufs": ctx.settings.lufs_target,
+                "true_peak": ctx.settings.true_peak_db,
+                "src": [src_w, src_h],
+            }
+            signature = hashlib.sha256(
+                json.dumps(signature_payload, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            manifest_path = out_dir / f"clip_{i:02d}.render.json"
+            check = None
+            if out_path.exists() and manifest_path.exists():
+                try:
+                    manifest = json.loads(manifest_path.read_text())
+                    if manifest.get("signature") == signature:
+                        check = renderer.verify_output(out_path, end - start)
+                except (OSError, json.JSONDecodeError, ValueError):
+                    check = None
+            if check is None or not check["ok"]:
+                try:
+                    renderer.render_clip(
+                        str(media), out_path, start, end, trajectory,
+                        ass_path if captions_ok else None, ass_mod.FONTS_DIR,
+                        lufs=ctx.settings.lufs_target,
+                        true_peak=ctx.settings.true_peak_db,
+                        src_w=src_w, src_h=src_h,
+                    )
+                except RuntimeError as err:
+                    raise StageError(str(err), "RENDER_FAILED") from err
+                check = renderer.verify_output(out_path, end - start)
+                if check["ok"]:
+                    manifest_path.write_text(json.dumps({"signature": signature}) + "\n")
             if not check["ok"]:
                 detail = check.get("error", "output failed validation")
                 raise StageError(f"Clip {i} failed verification: {detail}", "RENDER_OUTPUT_INVALID")

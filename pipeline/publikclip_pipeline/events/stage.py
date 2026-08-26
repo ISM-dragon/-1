@@ -22,13 +22,42 @@ import subprocess
 import time
 from pathlib import Path
 
+import numpy as np
+
 from .. import config
 from ..jobs.queue import Stage, StageContext, StageError
 from ..models import registry, specs
 from ..render import ffmpeg_bin
 
 
+def _extract_audio_pcm(media: Path, sr: int) -> np.ndarray:
+    """Decode mono PCM directly to memory, avoiding a transient WAV artifact."""
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg_bin.ffmpeg(), "-v", "error", "-i", str(media),
+                "-vn", "-ac", "1", "-ar", str(sr), "-f", "s16le", "pipe:1",
+            ],
+            capture_output=True, timeout=3600,
+        )
+    except subprocess.TimeoutExpired as err:
+        raise StageError("Audio extraction timed out.", "FFMPEG_TIMEOUT") from err
+    except OSError as err:
+        raise StageError(f"Audio extraction could not start: {err}", "FFMPEG_UNAVAILABLE") from err
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace")[-500:]
+        raise StageError(f"Audio extraction failed: {detail}", "FFMPEG_FAILED")
+    if len(proc.stdout) < 2:
+        raise StageError("Audio extraction returned no samples.", "AUDIO_INVALID")
+    return np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def _extract_wav(media: Path, dst: Path, sr: int) -> None:
+    """Compatibility helper for callers that still request a WAV artifact.
+
+    The live PANNs path intentionally uses ``_extract_audio_pcm`` instead;
+    this helper remains only for the legacy internal contract and tests.
+    """
     try:
         proc = subprocess.run(
             [
@@ -73,8 +102,8 @@ class EventsStage(Stage):
         import json
 
         import librosa
-        import numpy as np
         import torch
+
 
         from ..vendor.laughter import model as laugh_model
         from ..vendor.laughter import segmenter as laugh_seg
@@ -125,19 +154,19 @@ class EventsStage(Stage):
         ctx.emit(0.35, "Detecting audio events (PANNs)…")
         t0 = time.monotonic()
         ckpt = registry.ensure(specs.PANNS_CNN14_MAX, lambda f, m: ctx.emit(0.35 + f * 0.1, m))
-        wav32 = ctx.job_dir / "audio32k.wav"
-        if not wav32.exists():
-            _extract_wav(media, wav32, panns_models.SAMPLE_RATE)
+        y32k = _extract_audio_pcm(media, panns_models.SAMPLE_RATE)
         try:
-            y32k, _ = librosa.load(str(wav32), sr=panns_models.SAMPLE_RATE, mono=True)
             pmodel = panns_models.load_model(str(ckpt), device)
             probs_by_type, fps = panns_channel.framewise_probs(
                 pmodel, y32k, device,
                 progress=lambda f: ctx.emit(0.45 + f * 0.35, "Detecting audio events…"),
             )
-            del pmodel
         finally:
-            wav32.unlink(missing_ok=True)
+            # Release both model and waveform before curves/SER; no transient
+            # WAV is created, so there is no temp artifact to clean.
+            if "pmodel" in locals():
+                del pmodel
+            del y32k
         for etype, probs in probs_by_type.items():
             enter, stay = panns_channel.THRESHOLDS.get(etype, (0.15, 0.08))
             for start, end, peak in post.postprocess(probs, fps, enter=enter, stay=stay):
