@@ -48,17 +48,28 @@ class ProcessingGatewayClient(
         captionTheme: String,
         mode: String,
         onProgress: suspend (Progress) -> Unit,
-        onJobCreated: suspend (String) -> Unit = {}
+        onJobCreated: suspend (String) -> Unit = {},
+        existingGatewayJobId: String? = null
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
-            val localUri = Uri.parse(sourceUri)
-            val upload = upload(baseUrl, config.token, localUri) { percent ->
-                onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
+            val gatewayJobId = existingGatewayJobId?.trim().orEmpty().ifBlank {
+                val localUri = Uri.parse(sourceUri)
+                val upload = upload(baseUrl, config.token, localUri) { percent ->
+                    onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
+                }
+                onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
+                start(baseUrl, config.token, upload, captionTheme, mode, UUID.randomUUID().toString())
             }
-            onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
-            val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode, UUID.randomUUID().toString())
             onJobCreated(gatewayJobId)
+            if (existingGatewayJobId?.isNotBlank() == true) {
+                val initial = status(baseUrl, config.token, gatewayJobId)
+                val initialState = initial.optString("state").uppercase()
+                val initialStatus = initial.optString("status").lowercase()
+                if (initialState in setOf("INTERRUPTED", "FAILED") || initialStatus in setOf("failed", "error")) {
+                    resume(config, gatewayJobId).getOrThrow()
+                }
+            }
             var lastStatus = "queued"
             var completedResult: RemoteResult? = null
             while (completedResult == null) {
@@ -242,7 +253,11 @@ class ProcessingGatewayClient(
         val normalized = raw.trim().removeSuffix("/")
         require(normalized.isNotBlank()) { "Gateway URL غير مضبوط" }
         val uri = URI(normalized)
-        require(uri.scheme?.lowercase() == "https") { "يجب استخدام HTTPS مع private Processing Gateway" }
+        val host = uri.host.orEmpty().lowercase()
+        val localHost = host == "localhost" || host == "127.0.0.1" || host == "::1"
+        require(uri.scheme?.lowercase() == "https" || (uri.scheme?.lowercase() == "http" && localHost)) {
+            "يجب استخدام HTTPS مع private Processing Gateway خارج loopback المحلي"
+        }
         return normalized
     }
 
