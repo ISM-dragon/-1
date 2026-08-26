@@ -21,6 +21,10 @@ jobs:
     defaults:
       run:
         working-directory: android
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx1536m -Dfile.encoding=UTF-8
 
     steps:
       - name: Checkout repository
@@ -31,36 +35,64 @@ jobs:
         with:
           java-version: "17"
           distribution: temurin
+          cache: gradle
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Generate CI debug keystore
-        working-directory: android
+      - name: Install pinned Android SDK packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+          yes | sdkmanager --licenses >/dev/null || true
+          test -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
+          test -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2"
+
+      - name: Generate CI-only release keystore
         run: |
           keytool -genkeypair -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -keypass android \
-            -alias androiddebugkey \
+            -keystore "$GITHUB_WORKSPACE/android/ci-release.keystore" \
+            -storepass android-ci-release \
+            -keypass android-ci-release \
+            -alias upload \
             -keyalg RSA \
             -keysize 2048 \
             -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+            -dname "CN=ISM CI Release,O=ISM,C=US"
+          echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/android/ci-release.keystore" >> "$GITHUB_ENV"
+          echo "STORE_PASSWORD=android-ci-release" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=android-ci-release" >> "$GITHUB_ENV"
+          echo "REQUIRE_RELEASE_SIGNING=true" >> "$GITHUB_ENV"
 
       - name: Run unit tests
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --max-workers=1 --stacktrace
 
       - name: Run Android Lint
-        run: ./gradlew :app:lint --no-daemon --stacktrace
+        run: ./gradlew :app:lint --no-daemon --max-workers=1 --stacktrace
 
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew :app:assembleDebug --no-daemon --max-workers=1 --stacktrace
 
-      - name: Upload Android APK artifact
+      - name: Build signed release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --max-workers=1 --stacktrace
+
+      - name: Verify release APK package and signature
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging "$APK" | grep -F "package: name='com.aistudio.opuspro.apk'"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging "$APK" | grep -F "sdkVersion:'24'"
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/aapt2" dump badging "$APK" | grep -F "targetSdkVersion:'36'"
+
+      - name: Upload Android APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ISM-Android-embedded-${{ github.sha }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: ISM-Android-${{ github.sha }}
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30

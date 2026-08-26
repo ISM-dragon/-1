@@ -28,6 +28,12 @@ android {
   val releaseKeyPassword = System.getenv("KEY_PASSWORD")
   val hasReleaseSigning = file(releaseKeystorePath).isFile &&
     !releaseStorePassword.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
+  val requireReleaseSigning = System.getenv("REQUIRE_RELEASE_SIGNING") == "true"
+  if (requireReleaseSigning && !hasReleaseSigning) {
+    throw GradleException(
+      "Release signing is required, but KEYSTORE_PATH/STORE_PASSWORD/KEY_PASSWORD are not configured"
+    )
+  }
 
   signingConfigs {
     if (hasReleaseSigning) {

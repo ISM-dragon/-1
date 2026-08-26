@@ -12,13 +12,23 @@
 
 ## البناء المحلي
 
-من داخل هذا المجلد:
+يتطلب البناء JDK 17 وAndroid SDK 36 وBuild Tools 36.0.0. من داخل هذا المجلد:
 
 ```bash
-./gradlew :app:testDebugUnitTest
-./gradlew :app:lint
-./gradlew :app:assembleDebug
+./gradlew clean
+./gradlew :app:testDebugUnitTest --no-daemon --max-workers=1
+./gradlew :app:lint --no-daemon --max-workers=1
+./gradlew :app:assembleDebug --no-daemon --max-workers=1
 ```
+
+لبناء release قابل للتثبيت، يجب توفير keystore عبر `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD`، ثم تشغيل:
+
+```bash
+export REQUIRE_RELEASE_SIGNING=true
+./gradlew :app:assembleRelease --no-daemon --max-workers=1
+```
+
+يوجد المسار الكامل، بما في ذلك تثبيت SDK والتحقق من APK وABI وnetwork والتوزيع، في [`docs/ANDROID_BUILD.md`](../docs/ANDROID_BUILD.md) و[`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md).
 
 ## العلاقة مع المستودع
 
