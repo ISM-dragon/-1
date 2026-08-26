@@ -68,7 +68,7 @@ class ApiContractClientTest {
     fun `artifact download is persisted as a non-empty file`() = runBlocking<Unit> {
         val config = GatewayConfig("http://127.0.0.1:${server.address.port}", "token")
         val target = Files.createTempFile("ism-clip", ".mp4").toFile()
-        val artifact = ClipArtifact("clip_1", "Demo", "http://127.0.0.1:${server.address.port}/clip.mp4", 0, 5, 5, 80, "", "clip.mp4")
+        val artifact = ClipArtifact("clip_1", "Demo", "http://127.0.0.1:${server.address.port}/clip.mp4", 0, 5, 5, 80, "", "clip.mp4", "04b8ccc5f19b8f3bed371fec98c184d98aaa78c33fa08b2015cfe3c453bd706f")
         assertTrue(client.download(config, artifact, target).isSuccess)
         assertTrue(target.length() > 0)
         target.delete()
@@ -86,9 +86,19 @@ class ApiContractClientTest {
     }
 
     @Test
+    fun `artifact download rejects a checksum mismatch`() = runBlocking<Unit> {
+        val config = GatewayConfig("http://127.0.0.1:${server.address.port}", "token")
+        val target = Files.createTempFile("ism-clip-bad", ".mp4").toFile()
+        val artifact = ClipArtifact("clip_bad", "Bad", "http://127.0.0.1:${server.address.port}/clip.mp4", 0, 5, 5, 80, "", "clip.mp4", "0".repeat(64))
+        assertTrue(client.download(config, artifact, target).isFailure)
+        assertTrue(!target.exists() || target.length() == 0L)
+        target.delete()
+    }
+
+    @Test
     fun `json mapper keeps fractional progress and artifact manifest`() {
         val payload = JSONObject("""
-            {"id":"p1","state":"COMPLETED","fraction":1,"artifacts":[{"id":"c1","title":"Hook","url":"https://cdn/clip.mp4","start":2,"end":12,"duration":10,"score":91}]}
+            {"id":"p1","state":"COMPLETED","fraction":1,"artifacts":[{"id":"c1","title":"Hook","url":"https://cdn/clip.mp4","start":2,"end":12,"duration":10,"score":91,"sha256":"04b8ccc5f19b8f3bed371fec98c184d98aaa78c33fa08b2015cfe3c453bd706f"]}
         """.trimIndent()).toJobResource()
         assertEquals(100, payload.progress)
         assertEquals(1, payload.artifacts.size)

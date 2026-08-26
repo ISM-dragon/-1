@@ -154,3 +154,17 @@ def test_status_and_progress_use_public_stage_names():
     assert status.stage == "diarization"
     assert progress["stage"] == "diarization"
     assert progress["fraction"] == 0.0625
+
+
+def test_results_ignore_stale_checkpoint_schema_versions():
+    engine = PipelineEngine(lambda: [])
+    job = engine.create_job("/tmp/input.mp4")
+    stored = queue.get_job(job.id)
+    assert stored is not None
+
+    queue.write_checkpoint(stored, "events", 1, {"events": ["stale"]})
+    queue.write_checkpoint(stored, "render", 1, {"outputs": []})
+
+    results = engine.results(job.id)
+    assert results.events is None
+    assert results.render == {"outputs": []}
