@@ -98,7 +98,7 @@ class ApiContractClientTest {
     @Test
     fun `json mapper keeps fractional progress and artifact manifest`() {
         val payload = JSONObject("""
-            {"id":"p1","state":"COMPLETED","fraction":1,"artifacts":[{"id":"c1","title":"Hook","url":"https://cdn/clip.mp4","start":2,"end":12,"duration":10,"score":91,"sha256":"04b8ccc5f19b8f3bed371fec98c184d98aaa78c33fa08b2015cfe3c453bd706f"]}
+            {"id":"p1","state":"COMPLETED","fraction":1,"artifacts":[{"id":"c1","title":"Hook","url":"https://cdn/clip.mp4","start":2,"end":12,"duration":10,"score":91,"sha256":"04b8ccc5f19b8f3bed371fec98c184d98aaa78c33fa08b2015cfe3c453bd706f"}]}
         """.trimIndent()).toJobResource()
         assertEquals(100, payload.progress)
         assertEquals(1, payload.artifacts.size)
