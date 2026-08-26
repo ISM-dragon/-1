@@ -26,7 +26,7 @@ import com.example.data.model.ViralScoreMetricEntity
         RepurposingHistoryEntity::class,
         ProcessingJobEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class OpusDatabase : RoomDatabase() {
@@ -49,6 +49,16 @@ abstract class OpusDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE processing_jobs ADD COLUMN idempotencyKey TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE processing_jobs ADD COLUMN remoteSource TEXT")
+                database.execSQL("ALTER TABLE processing_jobs ADD COLUMN errorCode TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE processing_jobs ADD COLUMN errorRetryable INTEGER NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE processing_jobs ADD COLUMN lastRequestId TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): OpusDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -56,7 +66,7 @@ abstract class OpusDatabase : RoomDatabase() {
                     OpusDatabase::class.java,
                     "opus_pro_database"
                 )
-                .addMigrations(MIGRATION_4_5)
+                .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
                 .build()
                 INSTANCE = instance
                 instance

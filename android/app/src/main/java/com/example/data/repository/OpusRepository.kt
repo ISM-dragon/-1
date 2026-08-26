@@ -17,6 +17,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
+import com.example.core.security.PrivateBackendConfigStore
 import com.example.data.model.AiProviderConfig
 import com.example.data.model.AiUsageAggregate
 import com.example.data.model.AiUsageEntity
@@ -372,14 +373,9 @@ class OpusRepository(context: Context) {
     )
     val directApiCredentials = _directApiCredentials.asStateFlow()
 
-    private val gatewayPrefs = context.getSharedPreferences("ism_gateway_settings", Context.MODE_PRIVATE)
+    private val gatewayConfigStore = PrivateBackendConfigStore(appContext)
     private val gatewayClient = SocialGatewayClient()
-    private val _gatewayConfig = MutableStateFlow(
-        GatewayConfig(
-            baseUrl = gatewayPrefs.getString("base_url", "") ?: "",
-            token = readSecret(gatewayPrefs, "gateway_token")
-        )
-    )
+    private val _gatewayConfig = MutableStateFlow(gatewayConfigStore.load().asGatewayConfig())
     val gatewayConfig = _gatewayConfig.asStateFlow()
     private val _gatewaySnapshot = MutableStateFlow<GatewaySnapshot?>(null)
     val gatewaySnapshot = _gatewaySnapshot.asStateFlow()
@@ -387,10 +383,8 @@ class OpusRepository(context: Context) {
     val gatewayError = _gatewayError.asStateFlow()
 
     suspend fun saveGatewayConfig(config: GatewayConfig) = withContext(Dispatchers.IO) {
-        val editor = gatewayPrefs.edit().putString("base_url", config.baseUrl.trim())
-        putSecret(editor, "gateway_token", config.token.trim())
-        editor.apply()
-        _gatewayConfig.value = config.copy(baseUrl = config.baseUrl.trim(), token = config.token.trim())
+        gatewayConfigStore.save(com.example.core.security.PrivateBackendConfig(config.baseUrl, config.token))
+        _gatewayConfig.value = gatewayConfigStore.load().asGatewayConfig()
         _gatewayError.value = ""
     }
 

@@ -20,7 +20,12 @@ data class ProcessingJobEntity(
     val remoteGatewayJobId: String? = null,
     val outputProjectId: Long = 0L,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val idempotencyKey: String = "",
+    val remoteSource: String? = null,
+    val errorCode: String = "",
+    val errorRetryable: Boolean = false,
+    val lastRequestId: String? = null
 ) {
     companion object {
         const val STATUS_QUEUED = "QUEUED"

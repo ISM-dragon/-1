@@ -10,6 +10,11 @@ import com.example.data.engine.ProcessingEngine
 import com.example.data.model.GatewayConfig
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.Project
+import com.example.core.model.ApiException
+import com.example.core.model.ErrorState
+import com.example.core.model.JobState
+import com.example.core.network.ApiClient
+import com.example.core.security.PrivateBackendConfigStore
 import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.repository.OpusRepository
 import com.example.data.video.MediaUriStabilizer
@@ -102,7 +107,9 @@ class VideoProcessingWorker(
                     durationMinutes = durationMinutes,
                     targetPlatform = targetPlatform,
                     captionTheme = captionTheme,
-                    processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" }
+                    processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" },
+                    existingRemoteJobId = existingJob?.remoteGatewayJobId,
+                    existingIdempotencyKey = existingJob?.idempotencyKey.orEmpty()
                 )
                 jobs.updateState(
                     jobId = jobId,
@@ -217,14 +224,7 @@ class VideoProcessingWorker(
     }
 
     private fun loadGatewayConfig(): GatewayConfig {
-        val prefs = applicationContext.getSharedPreferences("ism_gateway_settings", Context.MODE_PRIVATE)
-        val secure = SecureKeyManager(applicationContext)
-        val encrypted = prefs.getString("gateway_token_encrypted", "").orEmpty()
-        val token = if (encrypted.isNotBlank()) secure.decrypt(encrypted) else prefs.getString("gateway_token", "").orEmpty()
-        return GatewayConfig(
-            baseUrl = prefs.getString("base_url", "").orEmpty().trim(),
-            token = token.trim()
-        )
+        return PrivateBackendConfigStore(applicationContext).load().asGatewayConfig()
     }
 
     private suspend fun runRemoteGateway(
@@ -236,35 +236,86 @@ class VideoProcessingWorker(
         durationMinutes: Int,
         targetPlatform: String,
         captionTheme: String,
-        processingMode: String
+        processingMode: String,
+        existingRemoteJobId: String?,
+        existingIdempotencyKey: String
     ): Long {
-        val client = ProcessingGatewayClient(applicationContext.contentResolver)
-        val remote = client.process(
-            config = config,
-            sourceUri = sourceUri,
-            captionTheme = captionTheme,
-            mode = processingMode,
-            onJobCreated = { remoteJobId ->
-                jobs.setRemoteGatewayJobId(jobId, remoteJobId)
-            },
-            onProgress = { progress ->
+        val client = ApiClient(applicationContext.contentResolver)
+        val remoteJobId = existingRemoteJobId?.takeIf { it.isNotBlank() }
+        val idempotencyKey = existingIdempotencyKey.ifBlank { "android-$jobId" }
+        var remote = if (remoteJobId == null) {
+            val remoteSource = when (Uri.parse(sourceUri).scheme?.lowercase()) {
+                "content", "file" -> {
+                    val upload = client.upload(config, Uri.parse(sourceUri)) { percent ->
+                        jobs.updateState(jobId, ProcessingJobEntity.STATUS_RUNNING, percent, "UPLOADING")
+                        setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to percent, KEY_STAGE to "UPLOADING"))
+                    }.getOrThrow()
+                    jobs.setRemoteSource(jobId, upload.source)
+                    upload.source
+                }
+                "http", "https" -> sourceUri
+                else -> error("مصدر الفيديو البعيد غير صالح")
+            }
+            val created = client.createJob(
+                config,
+                ApiClient.RenderRequest(
+                    source = remoteSource,
+                    captions = captionTheme.ifBlank { "classic" },
+                    mode = processingMode,
+                    idempotencyKey = idempotencyKey
+                )
+            ).getOrThrow()
+            jobs.setRemoteGatewayJobId(jobId, created.id)
+            created
+        } else {
+            val current = client.getJob(config, remoteJobId).getOrThrow()
+            when {
+                current.state == JobState.INTERRUPTED || (current.state == JobState.FAILED && current.recoverable) || current.state == JobState.RETRY_WAIT ->
+                    client.resume(config, remoteJobId).getOrThrow()
+                current.state == JobState.CANCELLED -> throw ApiException(ErrorState.terminalJob("JOB_CANCELLED", "أُلغيت المهمة على الـGateway.", false, current.requestId))
+                else -> current
+            }
+        }
+        if (remote.state != JobState.COMPLETED) {
+            remote = client.poll(config, remote.id) { update ->
                 jobs.updateState(
                     jobId = jobId,
-                    status = ProcessingJobEntity.STATUS_RUNNING,
-                    progress = progress.percent,
-                    stage = progress.stage,
-                    errorMessage = ""
+                    status = when (update.state) {
+                        JobState.FAILED -> ProcessingJobEntity.STATUS_FAILED
+                        JobState.CANCELLED -> ProcessingJobEntity.STATUS_CANCELLED
+                        JobState.QUEUED, JobState.RETRY_WAIT -> ProcessingJobEntity.STATUS_QUEUED
+                        else -> ProcessingJobEntity.STATUS_RUNNING
+                    },
+                    progress = update.progress,
+                    stage = update.state.name,
+                    errorMessage = update.error?.message.orEmpty().ifBlank { update.message },
+                    errorCode = update.error?.code.orEmpty(),
+                    errorRetryable = update.error?.retryable ?: update.recoverable,
+                    requestId = update.requestId
                 )
-                setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to progress.percent, KEY_STAGE to progress.stage, KEY_MESSAGE to progress.message))
-            }
-        ).getOrThrow()
-        require(remote.clips.isNotEmpty()) { "Gateway اكتمل دون مقاطع قابلة للتنزيل." }
+                setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to update.progress, KEY_STAGE to update.state.name, KEY_MESSAGE to update.message))
+            }.getOrThrow()
+        }
+        if (remote.state == JobState.FAILED) throw ApiException(remote.error ?: ErrorState.terminalJob("PROCESSING_FAILED", "فشلت معالجة الـGateway.", remote.recoverable, remote.requestId))
+        if (remote.state == JobState.CANCELLED) throw ApiException(ErrorState.terminalJob("JOB_CANCELLED", "أُلغيت المهمة على الـGateway.", false, remote.requestId))
+        require(remote.outputs.isNotEmpty()) { "Gateway اكتمل دون مقاطع قابلة للتنزيل." }
         val outputDirectory = File(applicationContext.filesDir, "gateway_exports/$jobId").apply { mkdirs() }
         val exportedPaths = linkedMapOf<String, String>()
-        remote.clips.forEachIndexed { index, clip ->
-            val output = File(outputDirectory, "clip_${index + 1}.mp4")
-            client.download(config, clip.mediaUrl, output).getOrThrow()
-            exportedPaths[clip.mediaUrl] = output.absolutePath
+        remote.outputs.forEachIndexed { index, output ->
+            val destination = File(outputDirectory, "clip_${index + 1}.mp4")
+            client.download(config, output.mediaUrl, destination).getOrThrow()
+            exportedPaths[output.mediaUrl] = destination.absolutePath
+        }
+        val clips = remote.outputs.map { output ->
+            ProcessingGatewayClient.RemoteClip(
+                title = output.title,
+                startTimeSec = output.startTimeSec,
+                endTimeSec = output.endTimeSec,
+                durationSec = output.durationSec,
+                score = output.score,
+                transcript = output.transcript,
+                mediaUrl = output.mediaUrl
+            )
         }
         return repository.importRemoteProcessingResult(
             title = title,
@@ -272,7 +323,7 @@ class VideoProcessingWorker(
             durationMinutes = durationMinutes,
             targetPlatform = targetPlatform,
             captionTheme = captionTheme,
-            clips = remote.clips,
+            clips = clips,
             exportedPaths = exportedPaths
         )
     }
