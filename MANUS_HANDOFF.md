@@ -1,102 +1,110 @@
 # MANUS HANDOFF — ISM Android application
 
-## نطاق التسليم
+**المشروع:** ISM / PublikClip  
+**المستودع:** `ISM-dragon/-1`  
+**الدور المنفذ:** Agent 01 — ARCHITECT + AUDIT  
+**النطاق:** توثيق وتدقيق ودمج آمن فقط؛ لا إعادة كتابة للمشروع ولا حذف functionality.  
+**Engine contract:** v1  
+**القرار المعماري:** `Android APK → Private Gateway → PublikClip Engine → AI/Media Runtime`.
 
-تم تنفيذ تطبيق Android أصلي مخصص لـ ISM يعمل كعميل Gateway بعيد. Android مسؤول عن **UI، file picker، اختيار الفيديو، الرفع، إنشاء الوظيفة، عرض الحالة والتقدم، معاينة النتائج، تصفح المقاطع، تنزيل النتائج، والتحرير الأساسي لبداية ونهاية المقطع**. لا يحتوي التدفق الجديد على Python أو FFmpeg أو خط معالجة وسائط محلي.
+## القرار التنفيذي
 
-> القاعدة المعمارية: Android هو stateful client فوق Gateway؛ Gateway هو المصدر authoritative لحالة الوظيفة والتقدم والنتائج، ولا تُنقل تفاصيل Python أو Pipeline الداخلية إلى الواجهة.
+المحرك الموجود في `pipeline/` هو نواة المعالجة المعتمدة. لا يجب تشغيل Python أو `uv` أو WhisperX أو PyTorch على Android. تطبيق Android الشخصي هو stateful client فوق Gateway: يختار الفيديو، يرفع المصدر، ينشئ الوظيفة، يعرض الحالة والتقدم، ينزّل النتائج، ويقدم المعاينة والتحرير الأساسي. Gateway هو المصدر authoritative لحالة الوظيفة والتقدم والنتائج، ولا تُنقل تفاصيل Python أو Pipeline الداخلية إلى الواجهة.
 
-## ملاحظة عن مصادر التسليم
+اختير `gateway/` ليكون الـprivate backend canonical لمسار Android لأن العميل الحالي يستهدفه ولأنه يضم upload lifecycle وprocessing state وworker supervision وdiagnostics وserver-side secret boundary. مجلد `backend/` ليس محذوفًا، لكنه stack بديل/legacy؛ لا ينبغي إضافة features جديدة إليه بالتوازي قبل قرار دمج صريح.
 
-لم توجد في النسخة المستنسخة ملفات باسم `MANUS_HANDOFF.md` أو `BACKEND.md`. لذلك استُخدمت وثائق العقد ومسؤوليات العميل الموجودة فعليًا: `docs/API-CONTRACT.md`، و`docs/CLIENT-RESPONSIBILITIES.md`، و`docs/android/ANDROID_PROCESSING_FLOW.md`، إضافة إلى تعريفات endpoints في `gateway/main.py`. هذا الملف هو وثيقة التسليم المحدثة المطلوبة للنسخة الحالية.
+## البنية الحالية ذات الصلة
 
-## البنية المنفذة
-
-| الطبقة | الملف/المكوّن | المسؤولية |
+| الطبقة | الملف/المكوّن | المسؤولية الحالية |
 |---|---|---|
-| نماذج العقد | `android/app/src/main/java/com/example/remote/model/RemoteProcessingModels.kt` | حالات Gateway canonical، أخطاء العقد، الوظائف، المقاطع، النتائج، وحالة UI |
-| API client | `remote/data/GatewayApiClient.kt` | `/health`، session، capabilities، upload، create job، polling، cancel/retry/resume، media download |
-| التخزين | `remote/data/RemoteProcessingStore.kt` | حفظ الوظيفة النشطة، remote job ID، idempotency key، النتائج، وإعدادات Gateway |
-| orchestration | `remote/data/RemoteProcessingCoordinator.kt` | unique WorkManager، منع الوظائف المكررة، cancel/retry/resume، إعادة الجدولة |
-| background execution | `remote/data/RemoteProcessingWorker.kt` | upload مرة واحدة، إنشاء idempotent job، polling، resume، download والتحقق من النتائج |
-| presentation | `remote/ui/RemoteStudioViewModel.kt` | تنقل الشاشة وحالة UI وربط الإجراءات بالتخزين والمنسق |
-| screens | `remote/ui/RemoteStudioScreens.kt` | Home، Import Video، Processing، Processing Error، Results، Clip Review، Settings |
+| Engine | `pipeline/publikclip_pipeline/engine/` | `ProcessingEngine` و`PipelineEngine` وlifecycle وcheckpoint-backed results |
+| Pipeline | `pipeline/publikclip_pipeline/` | ingest، ASR، diarization، events، candidates، scoring، camera، captions، render |
+| Gateway | `gateway/` | auth، SQLite، upload/storage، workers، diagnostics، provider registry، secret boundary |
+| Android contract | `android/app/src/main/java/com/example/data/contract/` و`remote/` | نماذج الحالة والعقد وGateway client للعميل الشخصي |
+| Android orchestration | `RemoteProcessingCoordinator.kt`, `RemoteProcessingWorker.kt`, `GatewayProcessingWorker.kt` | unique WorkManager، upload، create/poll/cancel/retry/resume، download والتحقق |
+| Android UI | `RemoteStudioScreens.kt`, `RemoteStudioViewModel.kt` وCompose screens | Home، import، processing، error، results، clip review، settings |
+| Desktop | `app/src/` و`app/src-tauri/` | React/Tauri local CLI path وGateway adapter وreview/social UX |
+| Backend البديل | `backend/` | FastAPI/DB/storage/JobManager مستقل؛ لا يستعمله Android canonical |
 
-## الشاشات ومسارات الاستخدام
+## Android flow
 
-| الشاشة | السلوك |
+يستخدم التطبيق native Android ومسار Gateway بعيدًا. يدعم اختيار `video/*` مع persistable URI permission، حفظ الوظيفة في التخزين المحلي، منع duplicate work عبر `ExistingWorkPolicy.KEEP`، إعادة polling بعد restart، وإظهار `recoverable` قبل retry. لا ينشئ job ثانية إذا كانت `remote_job_id` و`idempotency_key` محفوظتين. عند إغلاق التطبيق أثناء المعالجة يعاود WorkManager التنفيذ من الحالة المحفوظة.
+
+| الحالة | سلوك Android |
 |---|---|
-| Home | فتح استيراد فيديو، عرض آخر وظيفة، الوصول إلى الإعدادات، وتمييز وجود وظيفة قيد التنفيذ |
-| Import Video | اختيار `video/*` مع persistable URI permission، عرض اسم وحجم الملف، بدء المعالجة |
-| Processing | عرض `state` و`progress` و`stage` و`message` التي يعيدها Gateway، مع زر cancel |
-| Processing Error | عرض رسالة ورمز آمنين، وإظهار retry فقط عندما تكون الوظيفة recoverable |
-| Results | عرض المقاطع الحقيقية التي أعادها Gateway بعد تنزيلها والتحقق من حجمها |
-| Clip Review | معاينة محلية آمنة، ضبط start/end عبر sliders، وحفظ التعديل الأساسي محليًا |
-| Settings | حفظ Gateway URL ورمز الجلسة، اختبار الاتصال، وعدم طلب أو عرض Gemini secret |
-
-## حالات الاعتماد والاستعادة
-
-يُحفظ `local_job_id` و`remote_job_id` و`idempotency_key` قبل وبعد كل حد شبكي مهم. يستخدم WorkManager `ExistingWorkPolicy.KEEP` باسم فريد لكل وظيفة، لذلك لا ينشئ التطبيق وظيفة ثانية إذا كان العمل مجدولًا أو قيد التنفيذ بالفعل. عند بدء التطبيق، تُقرأ الوظيفة المحفوظة؛ إذا كانت غير نهائية يُعاد enqueue للعمل نفسه ويستأنف polling.
-
-| الحالة | استجابة Android |
-|---|---|
-| انقطاع الشبكة | Network constraint + exponential backoff، إبقاء الوظيفة في التخزين وعرض انتظار عودة الاتصال |
-| إعادة تشغيل التطبيق | إعادة قراءة الوظيفة وإعادة enqueue باستخدام نفس local/remote IDs |
-| job already running | عدم إعادة إنشاء الوظيفة؛ الاستعلام باستخدام remote job ID المحفوظ |
-| اكتملت أثناء إغلاق التطبيق | قراءة `COMPLETED` عند التشغيل التالي، تنزيل `results.render.outputs`، وفتح Results |
+| انقطاع الشبكة | network constraint وexponential backoff، مع إبقاء الوظيفة محفوظة |
+| إعادة تشغيل التطبيق | قراءة local/remote IDs وإعادة enqueue للعمل نفسه |
+| job running | الاستعلام باستخدام `remote_job_id` دون إنشاء job جديدة |
 | `INTERRUPTED` | استدعاء `/resume` ثم متابعة polling |
-| `FAILED` | عرض الخطأ الموحّد، مع retry فقط عند `recoverable=true` |
-| cancel | استدعاء `/cancel` ثم حفظ الحالة النهائية التي يعيدها Gateway وإيقاف unique work |
-| نتائج فارغة | اعتبارها فشلًا آمنًا `NO_VALID_CLIPS` بدل فتح Review فارغ وكأنه نجاح |
+| `FAILED` | عرض error code/message، وإظهار retry فقط عند `recoverable=true` |
+| cancel | استدعاء `/cancel` ثم حفظ الحالة النهائية وإيقاف unique work |
+| outputs فارغة | فشل آمن `NO_VALID_CLIPS` بدل فتح Review فارغ |
 
-## عقد API المستخدم
+## عقد Engine وMedia
 
-يرسل التطبيق `Authorization: Bearer <gateway-session-token>` عند الحاجة، ويستخدم فقط الحقول العامة التالية:
+```python
+from publikclip_pipeline.engine import PipelineEngine
 
-```text
-GET  /health
-GET  /v1/auth/session
-GET  /v1/processing/capabilities
-POST /v1/sources/upload
-POST /v1/processing/jobs
-GET  /v1/processing/jobs/{id}
-POST /v1/processing/jobs/{id}/cancel
-POST /v1/processing/jobs/{id}/retry
-POST /v1/processing/jobs/{id}/resume
-GET  /v1/processing/jobs/{id}/media/{filename}
+engine = PipelineEngine()
+job = engine.create_job(source, settings=None, source_type=None)
+status = engine.get_job_status(job.id)
+result = engine.start_job(job.id, on_progress=callback)
+clip = engine.get_clip(job.id, 0)
+updated = engine.render_clip(job.id, 0, on_progress=callback)
 ```
 
-طلب الإنشاء يرسل `source` و`llm=gemini` و`captions=classic` و`mode=balanced` و`idempotency_key`. واجهة Android لا تعرف كيف ينفذ Gateway المعالجة، ولا تعرض مسارات ملفات خاصة أو stack traces أو secrets.
+الـcallback يستقبل `ProgressEvent` لا تفاصيل `StageContext`. الأخطاء العامة هي `EngineError` مع `code` و`safe_message` و`recoverable`؛ لا تعبر stack traces أو secrets الحد العام. يحتفظ CLI بصيغة JSONL التوافقية: `job` ثم `progress` ثم `result`.
+
+يدعم Gateway resumable upload عبر `POST /v1/sources/uploads`، و`GET` للحالة، و`PUT` للـchunks، و`POST /complete` للتحقق من الحجم وSHA-256 والـatomic finalize. تُحفظ الأجزاء المؤقتة داخل storage خاص ولا يُكشف filesystem path. تُفحص outputs قبل إعادتها مع bytes وSHA-256 وintegrity metadata. يبقى `/v1/sources/upload` one-shot للتوافق، لكن العميل canonical يجب أن يستخدم session contract.
+
+## API المستخدم
+
+| Method | Path | الاستخدام |
+|---|---|---|
+| `GET` | `/health` | readiness عام محدود |
+| `GET` | `/v1/auth/session` | session/device status دون user accounts |
+| `GET` | `/v1/processing/capabilities` | pipeline/FFmpeg/storage/provider capabilities |
+| `POST` | `/v1/sources/uploads` | بدء أو استئناف upload session |
+| `GET` | `/v1/sources/uploads/{id}` | offset/progress |
+| `PUT` | `/v1/sources/uploads/{id}` | chunk upload |
+| `POST` | `/v1/sources/uploads/{id}/complete` | finalize/checksum |
+| `POST` | `/v1/processing/jobs` | إنشاء job idempotent |
+| `GET` | `/v1/processing/jobs/{id}` | state/progress/results |
+| `POST` | `/v1/processing/jobs/{id}/cancel` | طلب الإلغاء |
+| `POST` | `/v1/processing/jobs/{id}/retry` | retry محدود |
+| `POST` | `/v1/processing/jobs/{id}/resume` | checkpoint resume |
+| `GET` | `/v1/processing/jobs/{id}/media/{filename}` | تنزيل artifact محمي |
+
+يستخدم العميل `Authorization: Bearer <gateway-session-token>`، ويفضل `X-Device-ID` و`X-Request-ID`. لا يوجد user account أو billing أو subscription. لا يرسل Android Gemini key؛ المفاتيح تبقى في Gateway/AI runtime.
 
 ## الاختبارات والتحقق
 
-تمت إضافة `RemoteGatewayApiContractTest` باستخدام MockWebServer وRobolectric. يغطي الاختبار اختبار الاتصال عبر health/session/capabilities، Authorization header، upload raw video stream، create job، polling للحالة `RENDERING` مع progress، قراءة `COMPLETED` و`results.render.outputs`، وتنزيل MP4 حقيقي والتحقق من محتواه.
+تم تسجيل baseline Agent 01 قبل دمج آخر remote changes: React/Vite build وPython `compileall` نجحا؛ `gateway/tests` نجحت بـ`29 passed, 1 skipped`؛ `backend/tests` نجحت بـ`6 passed`؛ و`pipeline/tests` نجحت بـ`97 passed` بعد تجهيز scipy/librosa في sandbox. full `pytest gateway` كان فيه فشل واحد في root bridge test بسبب قراءة `media_uploads` قبل `init_db()`.
 
-تم تشغيل الاختبارات التالية بنجاح بعد تجهيز JDK 21 وAndroid SDK في بيئة البناء:
+في بيئة Agent 01 لم يثبت Android Gradle/APK لأن Java runtime كان موجودًا دون `javac`، ولم يُشغّل Docker أو device smoke. توجد في GitHub تغييرات لاحقة أضافت Android contract/remote classes واختبارات APK، لكن اختبار CI أو جهاز فعلي يبقى المرجع النهائي وليس ادعاءً مشتقًا من وجود الملفات فقط.
 
-```text
-./gradlew :app:compileDebugKotlin
-./gradlew :app:testDebugUnitTest --tests com.example.RemoteGatewayApiContractTest
-./gradlew :app:testDebugUnitTest
-./gradlew :app:lintDebug
-./gradlew :app:assembleDebug
-```
+## ما يعمل وما لا يمثل production
 
-نتج APK Debug فعلي في:
+`PROVIDER_MODE=mock` وmock OAuth/publisher development-only ولا ينشران إلى حسابات حقيقية. المسار المحلي في `ProductionVideoPipeline.kt` ليس parity مع Python WhisperX/PyTorch؛ يجب ألا يُعلن بديلًا عن Server Engine. كما أن Tauri generated Android مسار مستقل عن native `android/` ولا يدخل release حتى توحيد الهوية.
 
-```text
-android/app/build/outputs/apk/debug/app-debug.apk
-```
+## الأولويات المتبقية
 
-اختبار الاتصال الحالي هو اختبار عقد محلي مع Mock Gateway ولا يتطلب أسرارًا أو تشغيل Python. لا يمكن اعتبار اتصال Gateway الإنتاجي مُتحققًا دون عنوان Gateway ورمز جلسة حقيقيين؛ يستطيع المستخدم تشغيل **اختبار الاتصال** من Settings بعد إدخالهما.
+| الأولوية | المطلوب |
+|---|---|
+| P0 | تثبيت Gateway كـbackend واحد، إثبات APK import → process → render → download، وفرض auth/readiness في remote deployment |
+| P1 | توحيد error envelope، إكمال Android resumable upload/idempotency، تثبيت model hashes، إزالة duplicate Gateway routes، وتوثيق single-instance worker |
+| P2 | إصلاح test initialization، توحيد native/generated identity، ضمان release signing، مراجعة backup والمواءمة بين URL/local-file UI contract |
 
-## تشغيل التطبيق
+## حدود التغيير
 
-```bash
-cd android
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+لم تُحذف الوظائف، ولم تُنقل stages، ولم تُعدّل خوارزميات scoring أو diarization أو camera أو rendering. لا يجوز أن ينتقل Python أو model runtime إلى APK. أي تنفيذ لاحق يجب أن يحافظ على checkpoint names أو يقدم migration صريحًا، وأن يمر عبر `docs/ARCHITECTURE.md` و`docs/CONTRACTS.md`.
 
-بعد فتح التطبيق، انتقل إلى **Settings**، أدخل عنوان Gateway بصيغة HTTPS في البيئات البعيدة أو عنوانًا محليًا عند التطوير، أدخل Gateway session token، ثم شغّل **اختبار الاتصال**. بعد نجاح capabilities يمكن اختيار الفيديو وبدء الوظيفة.
+### المراجع
+
+[1]: docs/ARCHITECTURE.md "Architecture baseline"
+[2]: docs/AUDIT.md "Repository audit and test evidence"
+[3]: docs/CONTRACTS.md "Preliminary API and Engine contracts"
+[4]: docs/PARALLEL_WORK.md "Ownership and parallel work plan"
+[5]: pipeline/publikclip_pipeline/engine/contracts.py "Engine contract v1"
+[6]: gateway/main.py "Canonical Gateway implementation candidate"
+[7]: android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Android routing and WorkManager"
