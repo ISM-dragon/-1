@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Settings
@@ -46,6 +47,7 @@ fun ToolsScreen(
     onOpenDashboard: () -> Unit,
     onOpenBenchmark: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenCaptionEditor: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -71,6 +73,15 @@ fun ToolsScreen(
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
+        }
+        item {
+            ToolCard(
+                title = "مختبر الكابشن المتقدم",
+                description = "حرّر كل كلمة، راقب الكاريوكي لحظياً، واضبط بداية ونهاية المقطع.",
+                icon = Icons.Default.AutoAwesome,
+                accent = OpusVioletGlow,
+                onClick = onOpenCaptionEditor
+            )
         }
         item {
             ToolCard(

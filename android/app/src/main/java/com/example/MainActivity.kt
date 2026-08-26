@@ -32,6 +32,7 @@ import com.example.ui.components.ApiKeySettingsDialog
 import com.example.ui.components.OpusBottomNav
 import com.example.ui.components.OpusHeader
 import com.example.ui.components.OpusNavTab
+import com.example.captions.ui.CaptionEditorScreen
 import com.example.ui.screens.ApiManagementSettingsScreen
 import com.example.ui.screens.ClipCompetitorComparisonScreen
 import com.example.ui.screens.ClipStudioScreen
@@ -81,6 +82,7 @@ fun OpusProApp(repository: OpusRepository) {
     var selectedComparisonClipId by remember { mutableStateOf<Long?>(null) }
     var showUploadScreen by remember { mutableStateOf(false) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
+    var showCaptionEditor by remember { mutableStateOf(false) }
 
     val customApiKey by repository.customApiKey.collectAsState()
     val googleFlowCredits by repository.googleFlowCredits.collectAsState()
@@ -103,7 +105,7 @@ fun OpusProApp(repository: OpusRepository) {
         modifier = Modifier.fillMaxSize(),
         containerColor = OpusDarkCanvas,
         topBar = {
-            if (!showUploadScreen) {
+            if (!showUploadScreen && !showCaptionEditor) {
                 OpusHeader(
                     onApiKeyClick = {
                         showApiKeyDialog = true
@@ -115,12 +117,13 @@ fun OpusProApp(repository: OpusRepository) {
             }
         },
         bottomBar = {
-            if (!showUploadScreen) {
+            if (!showUploadScreen && !showCaptionEditor) {
                 OpusBottomNav(
                     currentTab = currentTab,
                     onTabSelected = { tab ->
                         currentTab = tab
                         showUploadScreen = false
+                        showCaptionEditor = false
                     }
                 )
             }
@@ -132,7 +135,11 @@ fun OpusProApp(repository: OpusRepository) {
                 .background(OpusDarkCanvas)
                 .padding(innerPadding)
         ) {
-            if (showUploadScreen) {
+            if (showCaptionEditor) {
+                CaptionEditorScreen(
+                    onBack = { showCaptionEditor = false }
+                )
+            } else if (showUploadScreen) {
                 VideoUploadScreen(
                     repository = repository,
                     onBack = { showUploadScreen = false },
@@ -218,7 +225,8 @@ fun OpusProApp(repository: OpusRepository) {
                             ToolsScreen(
                                 onOpenDashboard = { currentTab = OpusNavTab.DASHBOARD },
                                 onOpenBenchmark = { currentTab = OpusNavTab.BENCHMARK },
-                                onOpenSettings = { currentTab = OpusNavTab.SETTINGS }
+                                onOpenSettings = { currentTab = OpusNavTab.SETTINGS },
+                                onOpenCaptionEditor = { showCaptionEditor = true }
                             )
                         }
                     }

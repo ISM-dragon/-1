@@ -104,6 +104,7 @@ dependencies {
   implementation(libs.androidx.media3.ui)
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.google.mlkit.face.detection)
+  implementation(libs.dagger)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
@@ -130,4 +131,5 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+  "ksp"(libs.dagger.compiler)
 }
