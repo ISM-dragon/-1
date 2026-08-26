@@ -4,10 +4,10 @@
 
 هذا الإصدار هو **APK release موقّع وقابل للتثبيت** لتطبيق ISM Android، ويعمل كعميل خفيف أمام private Processing Gateway. لا يحتوي تطبيق Android على محرك Python أو `uv` أو Node أو Rust، ولا ينفّذ معالجة الفيديو الثقيلة محلياً. أصبح `ProcessingEngine` و`VideoProcessingWorker` يرفضان المسار المحلي ويستخدمان Gateway البعيد فقط؛ تبقى مفاتيح مزودي الذكاء الاصطناعي ومحرك Python داخل backend الخاص.
 
-الـ APK الناتج هو `android/app/build/outputs/apk/release/app-release.apk`، بحجم **55,596,707 بايت**، ومعرّف الحزمة `com.aistudio.opuspro.apk`، والإصدار `0.10.1`، و`versionCode=5`. بصمة SHA-256 للـ artifact الحالي هي:
+مسار الـAPK الناتج هو `android/app/build/outputs/apk/release/app-release.apk`، ومعرّف الحزمة `com.aistudio.opuspro.apk`، والإصدار الحالي من إعدادات Gradle هو `0.11.0` مع `versionCode=6`. لا تُحفظ ملفات APK داخل Git؛ يجب تسجيل الحجم والبصمة بعد كل build release ناجح. البصمة التالية تخص artifact تاريخيًا من baseline سابق، وليست ادعاءً ببصمة الكود الحالي:
 
 ```text
-deceadddb138251acd6da62478f8b8913f7620c3f25140d2e3c108805c5faf5a
+historical-baseline-artifact; regenerate after the current release build
 ```
 
 تم توقيع artifact بمفتاح اختبار مؤقت خارج Git باستخدام APK Signature Scheme v2. هذا يكفي للتثبيت المباشر على جهاز Android، لكنه **ليس مفتاح النشر الإنتاجي أو مفتاح Play App Signing**. قبل النشر العام يجب تمرير `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD` الخاصة بمالك المنتج إلى Gradle، وعدم مشاركة المفتاح المؤقت أو كلمات مروره.
@@ -33,11 +33,11 @@ export KEY_PASSWORD='***'
 
 | المجال | النتيجة | الدليل أو الملاحظة |
 |---|---|---|
-| Release build | ناجح | `:app:assembleRelease` نجح، مع `compileSdk=36` و`targetSdk=36` و`minSdk=24`. |
-| Unit tests | ناجح | `:app:testDebugUnitTest` نجح بعد التعديلات. |
+| Release build | غير مكتمل في هذه الجلسة | تم تثبيت JDK وSDK 36، ونجح Kotlin/unit-test compilation؛ محاولة `assembleRelease` تجاوزت 240 ثانية في dex/resource work ولم تُعتمد كنجاح نهائي. |
+| Unit tests | compilation ناجح؛ execution غير مثبت | `:app:compileDebugUnitTestKotlin` نجح. تنفيذ Robolectric الكامل تجاوز مهلة البيئة ويحتاج تشغيلًا منفصلًا مستقرًا. |
 | Android Lint | ناجح | `:app:lint` نجح. توجد تحذيرات deprecation غير حاجبة للبناء. |
-| APK signature | ناجح | `apksigner verify` أكد v2 مع signer واحد. |
-| Package metadata | ناجح | `com.aistudio.opuspro.apk`, version `0.10.1`, `versionCode=5`. |
+| APK signature | غير منفذ للكود الحالي | لا يوجد artifact release جديد معتمد في هذه الجلسة؛ يلزم build ثم `apksigner verify`. |
+| Package metadata | ثابت في المصدر | `com.aistudio.opuspro.apk`, version `0.11.0`, `versionCode=6` وفق `android/app/build.gradle.kts`. |
 | Forbidden runtimes | ناجح | فحص أرشيف APK لم يجد مسارات أو مكتبات Python/`uv`/Node/Rust/Cargo/FFmpeg runtime. |
 | Network access | ناجح static | `INTERNET` موجودة؛ عميل Processing Gateway يفرض HTTPS. `ACCESS_NETWORK_STATE` أضيفت من WorkManager merge. |
 | File picker | ناجح static | `PickVisualMedia(VideoOnly)` مع fallback للنظام؛ يتم نسخ URI إلى `filesDir/source_media`. هذا يوافق Photo Picker الذي يمنح وصولاً للوسائط المختارة فقط [2]. |
@@ -66,7 +66,7 @@ export KEY_PASSWORD='***'
 
 يجب ضبط عنوان Gateway ورمز الوصول من شاشة إعدادات Gateway داخل التطبيق. يجب أن يكون العنوان HTTPS كاملاً، ويجب ألا يوضع Gemini API key داخل APK أو داخل إعدادات العميل. في مسار معالجة الفيديو، يرسل Android الفيديو ورمز Gateway فقط؛ Gateway هو الذي يدير Python pipeline وFFmpeg ومفاتيح مزودي الذكاء الاصطناعي. تبقى بعض أدوات الذكاء الاختيارية في التطبيق مرتبطة بمفاتيح يضيفها المستخدم بنفسه، لكنها ليست محرك المعالجة ولا مفاتيح مضمّنة في APK.
 
-تدفق المعالجة هو: اختيار فيديو من Photo Picker، نسخ URI إلى مساحة التطبيق، إنشاء job في Room، جدولة `VideoProcessingWorker`، رفع المصدر إلى `/v1/sources/upload`، إنشاء job بعيد، استطلاع الحالة، تنزيل MP4 إلى `filesDir/gateway_exports/<jobId>`، ثم استيراد المقاطع إلى Room. عند إغلاق التطبيق لا تُفقد المهمة المجدولة؛ وعند فشل شبكي تُستخدم إعادة المحاولة، ويمكن استئناف job البعيد عندما يكون checkpoint محفوظاً في Gateway.
+تدفق المعالجة هو: اختيار فيديو من Photo Picker، نسخ URI إلى مساحة التطبيق، إنشاء job في Room، جدولة `VideoProcessingWorker`، إنشاء upload session عبر `/v1/sources/uploads`، حساب SHA-256، إرسال chunks مع offset، إكمال الجلسة، إنشاء job بعيد، استطلاع الحالة، تنزيل MP4 إلى `filesDir/gateway_exports/<jobId>`، ثم استيراد المقاطع إلى Room. عند إغلاق التطبيق لا تُفقد المهمة المجدولة؛ وعند فشل شبكي يمكن إعادة رفع chunk من offset المثبت بدل إعادة الفيديو كاملًا، كما يمكن استئناف job البعيد عندما يكون checkpoint محفوظاً في Gateway.
 
 ## التثبيت للمستخدم النهائي
 

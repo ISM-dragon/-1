@@ -1,6 +1,6 @@
 # سجل قرارات الترحيل
 
-**النطاق:** SupoClip reference ZIP مقابل ISM / PublikClip.
+**النطاق:** OpenSource Clipping reference ZIP مقابل ISM / PublikClip.
 
 **تاريخ المراجعة:** 2026-08-26.
 
@@ -21,7 +21,7 @@
 | IGNORE_REFERENCE | accounts/billing/subscriptions | عدم نقلها | خارج هدف single-user APK ويزيد attack surface. |
 | IGNORE_REFERENCE | Redis/ARQ topology | عدم إدخالها في Wave الحالية | SQLite + worker واحد كافيان لمستخدم واحد، والتوسع ليس شرطًا حاليًا. |
 | IGNORE_REFERENCE | MCP/social/analytics | إبقاؤها اختيارية ومنفصلة | لا تمنع إنشاء clip ولا ينبغي أن تكون dependency للمسار الأساسي. |
-| MANUAL_REVIEW | Copying code | لا نسخ مباشر من ZIP | المرجع AGPL-3.0؛ أي نقل لاحق يحتاج تحديد file-level notice وتوافق ترخيص. |
+| MANUAL_REVIEW | Copying code | لا نسخ مباشر من ZIP | المرجع MIT؛ أي نقل لاحق يتطلب حفظ copyright/license notices ومراجعة file-level dependencies. |
 | MANUAL_REVIEW | External model/provider | لا إضافة provider افتراضي جديد | يتطلب مفاتيح، privacy review، cost/performance baseline، وfailure tests. |
 | MANUAL_REVIEW | Tauri generated Android | لا دمج binary أو resources مع native Android | يوجد runtimeان؛ يجب اختيار identity/artifact واحد قبل أي release migration. |
 

@@ -9,7 +9,7 @@
 
 الموجود فعليًا هو ثلاثة مسارات متداخلة وليست منتجًا واحدًا متجانسًا: تطبيق desktop مبني بـReact/Tauri يشغل Python/uv محليًا، تطبيق Android native بـKotlin يملك مسارًا محليًا تقريبيًا ومسارًا remote إلى Gateway، وطبقتا backend متوازيتان هما `gateway/` و`backend/`. الـPython pipeline نفسها تحتوي Engine contract v1 وترتيبًا واضحًا من ingest إلى render مع checkpoint/resume، ونجحت اختبارات pipeline بعد تجهيز اعتماديات الاختبار في البيئة. هذه النواة هي أقوى جزء في المشروع ويجب أن تبقى على خادم خاص [1] [2] [3].
 
-الجاهزية الفعلية لا تساوي ما توحي به بعض الوثائق القديمة. React build وcompileall واختبارات Gateway/backend تمر جزئيًا، لكن APK لم يُبنَ في sandbox بسبب غياب `javac`، وGateway full pytest يحتوي فشل initialization في اختبار جذري، وAndroid client لا يستخدم عقد الرفع المتقطع الموثق بل legacy one-shot upload. النشر الاجتماعي الحقيقي غير منفذ؛ mock OAuth وmock publisher هما development-only، وDocker/compose يقدمان أساس نشر لا إثبات تشغيل end-to-end. لذلك لا ينبغي إعلان المشروع “production ready” قبل تثبيت مسار واحد وعقد واحد واختبار smoke حقيقي.
+الجاهزية الفعلية لا تساوي ما توحي به بعض الوثائق القديمة. React build وcompileall واختبارات Python تمر، وتم إصلاح مسار Android ليستخدم upload sessions القابلة للاستئناف وSHA-256، كما أصبح Gateway يعيد error envelope موحدًا. يبقى APK/device smoke غير مثبت في هذه البيئة ما لم يتوفر Android SDK ومحاكي مستقر، والنشر الاجتماعي الحقيقي غير منفذ؛ mock OAuth وmock publisher هما development-only، وDocker/compose يقدمان أساس نشر لا إثبات تشغيل end-to-end. لذلك لا ينبغي إعلان المشروع production ready قبل اختبار smoke حقيقي على جهاز أو emulator مستقر.
 
 ## 1. ما الموجود فعلًا؟
 
@@ -36,7 +36,7 @@
 
 المشكلة ليست سببًا واحدًا، بل سلسلة dependencies وقرارات هوية ومسارات متنافسة. على سطح المكتب، أول تشغيل يحتاج Node/Rust للبناء أو حزمة بنيت مسبقًا، ثم Python 3.12/uv، تنزيل عدة نماذج كبيرة، وFFmpeg قادرًا على captions. على Android، لا يمكن نسخ هذه الافتراضات إلى APK: لا يوجد Python/uv/WhisperX/PyTorch داخل التصميم، والـTauri shell نفسه يرفض local Python processing على Android [6].
 
-على الهاتف، المسار remote يحتاج Gateway قابلًا للوصول من الشبكة، `PUBLIC_BASE_URL` صحيحًا، token صالحًا، storage دائمًا، FFmpeg، pipeline dependencies، model downloads، وGemini key server-side عند اختيار Gemini. القيم الافتراضية مثل `127.0.0.1` تصل إلى الخادم نفسه لا إلى الهاتف، و`REQUIRE_GATEWAY_TOKEN` في المثال المحلي false. كما أن Android client يرفع عبر endpoint one-shot قديم، رغم وجود contract أحدث للرفع المتقطع.
+على الهاتف، المسار remote يحتاج Gateway قابلًا للوصول من الشبكة، `PUBLIC_BASE_URL` صحيحًا، token صالحًا، storage دائمًا، FFmpeg، pipeline dependencies، model downloads، وGemini key server-side عند اختيار Gemini. القيم الافتراضية مثل `127.0.0.1` تصل إلى الخادم نفسه لا إلى الهاتف، و`REQUIRE_GATEWAY_TOKEN` في المثال المحلي false. أصبح Android client يستخدم contract الرفع المتقطع `/v1/sources/uploads` مع offset وchecksum؛ يبقى endpoint one-shot للتوافق الخلفي فقط.
 
 إضافة إلى ذلك، توجد هويتان Android native/generated: `android/` يستخدم `applicationId=com.aistudio.opuspro.apk` وnamespace `com.example`، بينما Tauri generated يستخدم `com.publikhq.publikclip`. هذا ليس فشل compile بحد ذاته، لكنه يجعل “APK الحالي” غير محدد ويمنع release contract واحدًا. signing release اختياري؛ إذا لم توجد keystore ومتغيرات كلمات المرور ينتج البناء غير موقع أو غير صالح لمسار توزيع production.
 
@@ -67,7 +67,7 @@
 
 ## 7. ما الذي يجب إعادة تصميمه؟
 
-يجب أولًا توحيد backend على Gateway، لا إعادة كتابة pipeline. ثم يُعرّف adapter مباشر من Gateway إلى `ProcessingEngine` مع إبقاء JSONL fallback أثناء migration. يجب مواءمة Android مع resumable upload أو توثيق one-shot كعقد مقصود، وإضافة error envelope واحد، وإزالة hardcoded `llm=gemini` من عميل Android. يجب أيضًا اختيار APK واحد: native Android أو Tauri generated، ثم توحيد application identity وrelease signing.
+تم تثبيت Gateway كـcanonical backend دون إعادة كتابة pipeline، مع إبقاء adapter المباشر إلى `ProcessingEngine` وJSONL fallback. وتمت مواءمة عملاء Android النشطين مع resumable upload وإضافة error envelope موحد. ما يزال `llm=gemini` اختيارًا server-side افتراضيًا في بعض مسارات Android، ويجب توحيد اختيار APK identity وrelease signing قبل التوزيع النهائي.
 
 لا يُحذف `ProductionVideoPipeline.kt` ولا social functionality في هذه المرحلة؛ لكن يجب وسمها بوضوح كـfallback/optional، ومنعها من تقديم نفسها كبديل production عن Python Engine. كما يجب ألا تُضاف dependencies جديدة إلا إذا أغلقت فجوة مثبتة في build أو runtime.
 
@@ -86,9 +86,9 @@
 
 | ID | المشكلة والدليل | الأثر | الإصلاح المقترح |
 |---|---|---|---|
-| P1-1 | Android يستخدم `/v1/sources/upload` one-shot، بينما العقد الحديث resumable `/v1/sources/uploads` | انقطاع رفع فيديو طويل يعيد العملية من الصفر | إضافة client resumable أو إعلان حد one-shot واختباره تحت interruption |
-| P1-2 | `gateway/main.py` يحتوي تعريفات متكررة لمسارات AI providers في موضعين | route ambiguity واحتمال اختلاف behavior بين registry والcompatibility | إزالة التكرار بعد اختبار contract، دون حذف capability |
-| P1-3 | وثيقة API تعد بخطأ `{error:{code,message,request_id,retryable}}`، بينما Gateway غالبًا يعيد FastAPI `detail` الخام | العميل لا يملك parsing ثابتًا ولا رسائل مستقرة | global exception handler/envelope في Gateway مع الحفاظ على HTTP codes |
+| P1-1 | كان Android يستخدم `/v1/sources/upload` one-shot | كان انقطاع الرفع يعيد العملية من الصفر | **RESOLVED**: العملاء النشطون يستخدمون session + offset + SHA-256؛ يلزم device/network smoke لاحقًا. |
+| P1-2 | كانت `gateway/main.py` تحتوي تعريفات متكررة لمسارات AI providers | route ambiguity واحتمال اختلاف behavior | **RESOLVED**: بقيت routes registry-backed الفعلية فقط، مع نجاح فحص route uniqueness. |
+| P1-3 | كان Gateway يعيد FastAPI `detail` الخام في بعض الأخطاء | العميل لا يملك parsing ثابتًا ولا رسائل مستقرة | **RESOLVED**: global HTTP/validation handlers تعيد `code`, `message`, `request_id`, و`retryable` مع HTTP codes الأصلية. |
 | P1-4 | pipeline weights الثقيلة تُنزّل runtime، وعدة `ModelSpec` بلا sha256 مثبت | first-run طويل ومخاطر integrity/عدم reproducibility | pin hashes حيث يمكن، وإظهار manifest/version/size وتخزينها في readiness |
 | P1-5 | queue Gateway داخل الذاكرة مع SQLite bookkeeping | آمن لمثيل واحد فقط؛ غير آمن للتوسع الأفقي أو claim متزامن | توثيق single-instance deployment وإضافة DB lease قبل أي replica |
 | P1-6 | source/media validation ليست موحدة بين one-shot وresumable والـffprobe validation مؤجلة | bytes غير صالحة قد تستهلك التخزين وتفشل متأخرًا | فحص container/stream مبكرًا وتنظيف orphan artifacts |
@@ -97,7 +97,7 @@
 
 | ID | المشكلة والدليل | الأثر | الإصلاح المقترح |
 |---|---|---|---|
-| P2-1 | full `pytest gateway` يفشل في root bridge test لأن `media_uploads` غير مهيأة، رغم نجاح `gateway/tests` | CI المحلي يعطي failure مضللًا | fixture أو `init_db()` واضح للاختبار، لا تغيير business behavior بلا حاجة |
+| P2-1 | كان full `pytest gateway` يفشل في root bridge test بسبب تهيئة `media_uploads` | CI المحلي يعطي failure مضللًا | **RESOLVED/VERIFIED**: full Python suite يمر بعد تهيئة البيئة، مع بقاء اختبار large-media اختياريًا. |
 | P2-2 | اختبار pipeline من بيئة نظيفة يحتاج scipy/librosa وغيرهما؛ الاختبار ينجح فقط بعد تثبيت dependencies | onboarding/contributor path غير deterministic | جعل command الموثق `uv sync && uv run pytest` هو gate، وتوضيح عدم كفاية system Python |
 | P2-3 | native Android وTauri generated Android لهما identities ومسارات مختلفة | release ownership غير واضح | قرار artifact واحد وتوثيق migration مستقبلية |
 | P2-4 | release signing مشروط بوجود keystore/env | يمكن إنتاج APK غير قابل للتوزيع | CI release signing منفصل، مع بقاء debug build للاختبار |

@@ -26,8 +26,9 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, Form
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
 
 try:
@@ -126,6 +127,33 @@ async def request_context(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+def _error_code(status_code: int, detail: Any) -> str:
+    text = str(detail or "").strip()
+    prefix = text.split(":", 1)[0].strip()
+    if re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", prefix):
+        return prefix
+    return {401: "UNAUTHORIZED", 403: "FORBIDDEN", 404: "NOT_FOUND", 409: "CONFLICT", 413: "UPLOAD_TOO_LARGE", 422: "VALIDATION_ERROR"}.get(status_code, f"HTTP_{status_code}")
+
+
+def _error_response(request: Request, status_code: int, detail: Any, headers: dict[str, str] | None = None) -> JSONResponse:
+    message = str(detail or "Request failed").split(":", 1)[-1].strip()
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": _error_code(status_code, detail), "message": message[:500], "request_id": getattr(request.state, "request_id", None), "retryable": status_code in {408, 425, 429, 502, 503, 504} or status_code >= 500}},
+        headers=headers,
+    )
+
+
+@app.exception_handler(HTTPException)
+async def gateway_http_error(request: Request, exc: HTTPException) -> JSONResponse:
+    return _error_response(request, exc.status_code, exc.detail, exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def gateway_validation_error(request: Request, _exc: RequestValidationError) -> JSONResponse:
+    return _error_response(request, 422, "VALIDATION_ERROR: Request validation failed")
 
 
 _scheduler_task: asyncio.Task | None = None
@@ -1320,31 +1348,6 @@ async def diagnostics_pipeline() -> dict[str, Any]:
         checks["ffmpeg_usable"] = False
     checks["ready"] = bool(checks["pipeline"] and checks["pipeline_importable"] and checks["python"] and checks["ffmpeg_usable"] and checks["storage"])
     return checks
-
-
-@app.get("/v1/ai/providers", dependencies=[Depends(auth)])
-async def list_ai_providers() -> dict[str, Any]:
-    return {"providers": [public_provider_profile(item) for item in read_provider_profiles()]}
-
-
-@app.post("/v1/ai/providers", dependencies=[Depends(auth)])
-async def save_ai_provider(payload: AIProviderPayload) -> dict[str, Any]:
-    profiles = read_provider_profiles()
-    item = payload.model_dump()
-    profiles = [profile for profile in profiles if profile.get("id") != payload.id]
-    profiles.append(item)
-    write_provider_profiles(profiles)
-    return {"provider": public_provider_profile(item), "status": "saved"}
-
-
-@app.delete("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
-async def delete_ai_provider(provider_id: str) -> dict[str, Any]:
-    profiles = read_provider_profiles()
-    filtered = [profile for profile in profiles if profile.get("id") != provider_id]
-    if len(filtered) == len(profiles):
-        raise HTTPException(status_code=404, detail="AI provider not found")
-    write_provider_profiles(filtered)
-    return {"id": provider_id, "status": "deleted"}
 
 
 def personal_state_path() -> Path:

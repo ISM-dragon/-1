@@ -1,41 +1,37 @@
-# Third-Party Licenses
+# تراخيص الأطراف الثالثة
 
-**الغرض:** سجل audit للتراخيص قبل أي دمج من المشروع المرجعي أو إضافة dependency.
+**الغرض:** سجل التدقيق قبل أي دمج من مشروع مرجعي أو إضافة dependency.
 
 ## نتيجة مراجعة الأرشيف المرجعي
 
-الأرشيف `supoclip-main.zip` يحتوي على ملف `LICENSE` نصه **GNU Affero General Public License v3.0**، مع copyright notice منسوب إلى Sami Hindi. لذلك فإن أي نسخ أو adaptation من كود SupoClip يحتاج مراجعة قانونية لتوافق AGPL-3.0 مع ترخيص المستودع الهدف، وحفظ notices المناسبة، وتحديد corresponding source عند التوزيع. في هذه الدفعة لم تُنسخ أي ملفات source أو binary أو asset من الأرشيف.
+الأرشيف المرفق `opensource-clipping-main.zip` هو مشروع **OpenSource Clipping**. يحتوي ملف `LICENSE` على ترخيص **MIT** وإشعار copyright باسم Muhammad Naufal Rizqullah. لم تُنسخ ملفات source أو binary أو asset أو build output من الأرشيف إلى المستودع الهدف؛ استُخدمت ملاحظاته على مستوى السلوك والميزات لتوجيه المقارنة وإعادة التنفيذ المستقلة.
+
+ترخيص MIT يسمح بالنسخ والتعديل وإعادة التوزيع بشرط الاحتفاظ بإشعار copyright ونص الترخيص، مع بقاء ضمانات المشروع كما هي. هذا السجل ليس رأيًا قانونيًا، ولذلك يجب إعادة فحص الترخيص وملفات dependencies إذا أُدخل أي كود فعليًا في إصدار لاحق.
 
 | المصدر | الترخيص المرصود | ما استُخدم من المصدر | القرار |
 |---|---|---|---|
-| SupoClip reference ZIP | AGPL-3.0 | مقارنة architecture/UX فقط | لا نسخ؛ الأفكار العامة يعاد تنفيذها مستقلًا. |
-| Target root | كما هو موثق في `LICENSE` | كود المستودع الحالي | يبقى notice الحالي دون تغيير. |
-| Pipeline caption font | notice موجود داخل `pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt` | font asset الحالي | يحتفظ notice المحلي وشروط OFL الخاصة به. |
-| Vendor model/code | notices ومسارات vendor داخل `pipeline/publikclip_pipeline/vendor/` و`VENDORED-LICENSES.md` | الموجود مسبقًا في الهدف | لا تعديل للـnotice؛ أي تحديث يحتاج مراجعة مستقلة. |
-| Android/Gradle/npm dependencies | تراخيص upstream غير منسوخة إلى source | dependencies build-time/runtime | يجب توليد/مراجعة dependency notice عند التوزيع النهائي. |
+| OpenSource Clipping reference archive | MIT؛ `opensource-clipping-main/LICENSE` | مقارنة architecture/UX وميزات clipping فقط | لا نسخ مباشر؛ إعادة التنفيذ المستقلة هي المعتمدة. |
+| Target root | AGPL-3.0-or-later؛ `LICENSE` | كود المستودع الحالي | يبقى notice الحالي دون تغيير. |
+| Pipeline caption font | OFL-1.1؛ `pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt` | font asset الموجود مسبقًا | يحتفظ notice المحلي وشروط OFL. |
+| Vendor model/code | notices ومسارات vendor داخل `pipeline/` و`VENDORED-LICENSES.md` | الموجود مسبقًا في الهدف | لا تعديل للـnotice؛ أي تحديث يحتاج مراجعة مستقلة. |
+| Android/Gradle/npm dependencies | تراخيص upstream في ملفات lock/cache أو metadata | dependencies build-time/runtime | يجب توليد ومراجعة dependency notice عند توزيع APK أو Gateway. |
 
 ## قواعد الدمج
 
-قبل إدخال dependency أو file من مشروع آخر يجب تحديد license على مستوى repository وfile، وفحص dependency transitive ذات الصلة، وتسجيل copyright/notice، والتحقق من compatibility. إذا كان الترخيص غير واضح أو غير متوافق، لا يُنسخ الكود؛ تُكتب implementation مستقلة مبنية على السلوك العام فقط. لا تُقبل build outputs أو secrets أو model artifacts من مشاريع مرجعية.
+قبل إدخال dependency أو file من مشروع آخر يجب تحديد license على مستوى repository وfile، وفحص dependencies العابرة ذات العلاقة، وتسجيل copyright/notice، والتحقق من التوافق مع طريقة توزيع المستودع. إذا كان الترخيص غير واضح أو غير متوافق، لا يُنسخ الكود؛ تُكتب implementation مستقلة مبنية على السلوك العام فقط. لا تُقبل build outputs أو secrets أو model artifacts من مشاريع مرجعية.
+
+لا يحتوي هذا التغيير على مادة من الأرشيف المرجعي تتطلب notice إضافيًا. إذا تغير ذلك، يجب إضافة notice صريح ونسخة من نص الترخيص في موضع مناسب قبل الدمج.
 
 ## فحص المستودع
 
 تم التفريق بين source المتعقب وملفات build/cache. لا يُعتد بملفات `node_modules` أو Gradle caches كمرجع ترخيص للمشروع، ولا تُضاف إلى Git. يظل `VENDORED-LICENSES.md` وnotices المحلية مصدر المراجعة للمواد الموجودة بالفعل.
 
-> هذا سجل هندسي وليس رأيًا قانونيًا. يلزم counsel review قبل توزيع APK أو Gateway مشتق إذا أُضيف كود AGPL أو dependency ذات copyleft متعارض.
-
-### المراجع
-
-[1]: ../../upload/supoclip-main.zip "Supplied reference archive; not committed"
-[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
-[3]: ../LICENSE "Target license"
-[4]: ../VENDORED-LICENSES.md "Existing vendor notices"
-[5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"
+> هذا سجل هندسي وليس رأيًا قانونيًا. يلزم counsel review قبل توزيع APK أو Gateway إذا أضيفت مادة ذات شروط خاصة أو تغيرت طريقة التجميع والتوزيع.
 
 ## References
 
-[1]: https://github.com/FujiwaraChoki/supoclip "Reference project represented by supplied archive"
-[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
-[3]: ../LICENSE "Target license"
+[1]: https://github.com/NaufalRizqullah/opensource-clipping "OpenSource Clipping reference project"
+[2]: ../../upload/opensource-clipping-main.zip "Supplied reference archive; not committed"
+[3]: ../LICENSE "Target AGPL-3.0-or-later license"
 [4]: ../VENDORED-LICENSES.md "Existing vendor notices"
 [5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"

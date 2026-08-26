@@ -10,8 +10,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.security.MessageDigest
 import java.util.UUID
 
 /**
@@ -95,41 +97,111 @@ class ProcessingGatewayClient(
         sourceUri: Uri,
         onProgress: suspend (Int) -> Unit
     ): String {
-        val connection = openConnection("$baseUrl/v1/sources/upload", token, "POST").apply {
-            setRequestProperty("Content-Type", "video/mp4")
+        val total = contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
+        require(total > 0L) { "تعذر معرفة حجم الفيديو للرفع" }
+        val digest = sha256(sourceUri, total)
+        val filename = sourceUri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "source.mp4"
+        val session = requestJson(
+            "$baseUrl/v1/sources/uploads",
+            token,
+            "POST",
+            JSONObject().put("filename", filename).put("bytes", total).put("sha256", digest)
+        )
+        val uploadId = session.optString("id").takeIf { it.isNotBlank() } ?: error("Gateway لم يُرجع معرّف جلسة الرفع")
+        var offset = session.optLong("offset", 0L).coerceIn(0L, total)
+        val chunkBytes = session.optLong("chunk_bytes", DEFAULT_UPLOAD_CHUNK_BYTES.toLong()).coerceIn(1L, MAX_UPLOAD_CHUNK_BYTES.toLong())
+        if (session.optString("status").equals("done", true) || session.optString("status").equals("completed", true)) {
+            onProgress(10)
+            return session.optString("source").takeIf { it.isNotBlank() } ?: error("جلسة الرفع المكتملة بلا مصدر")
+        }
+        while (offset < total) {
+            val length = minOf(chunkBytes, total - offset)
+            val response = uploadChunk(baseUrl, token, uploadId, sourceUri, total, offset, length)
+            val nextOffset = response.optLong("offset", offset + length)
+            require(nextOffset == offset + length) { "Gateway أعاد offset غير متوقع لجلسة الرفع" }
+            offset = nextOffset
+            onProgress((offset * 10L / total).toInt().coerceIn(0, 10))
+        }
+        val completed = requestJson(
+            "$baseUrl/v1/sources/uploads/${URI.create(uploadId).toASCIIString()}/complete",
+            token,
+            "POST",
+            JSONObject()
+        )
+        onProgress(10)
+        return completed.optString("source").takeIf { it.isNotBlank() } ?: error("Gateway لم يُرجع رابط المصدر المرفوع")
+    }
+
+    private fun sha256(sourceUri: Uri, total: Long): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val input = contentResolver.openInputStream(sourceUri) ?: throw IOException("تعذر فتح ملف الفيديو للرفع")
+        var read = 0L
+        input.use { source ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = source.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+                read += count
+            }
+        }
+        require(read == total) { "تغير حجم الفيديو أثناء الرفع" }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun uploadChunk(baseUrl: String, token: String, uploadId: String, sourceUri: Uri, total: Long, offset: Long, length: Long): JSONObject {
+        val connection = openConnection("$baseUrl/v1/sources/uploads/${URI.create(uploadId).toASCIIString()}", token, "PUT").apply {
             doOutput = true
+            setRequestProperty("Content-Type", contentResolver.getType(sourceUri) ?: "video/mp4")
+            setRequestProperty("X-Upload-Offset", offset.toString())
+            setRequestProperty("Content-Range", "bytes $offset-${offset + length - 1}/$total")
+            setFixedLengthStreamingMode(length)
         }
         return try {
-            val input = contentResolver.openInputStream(sourceUri)
-                ?: error("تعذر فتح ملف الفيديو للرفع")
-            val totalBytes = contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
-            var writtenBytes = 0L
-            var lastReportedAt = 0L
+            val input = contentResolver.openInputStream(sourceUri) ?: throw IOException("تعذر فتح ملف الفيديو للرفع")
             input.use { source ->
+                skipFully(source, offset)
                 connection.outputStream.use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    while (true) {
-                        val count = source.read(buffer)
-                        if (count < 0) break
+                    var remaining = length
+                    while (remaining > 0L) {
+                        val count = source.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                        if (count < 0) throw IOException("انتهى مصدر الفيديو قبل اكتمال الجزء")
                         output.write(buffer, 0, count)
-                        writtenBytes += count
-                        val now = System.currentTimeMillis()
-                        if (now - lastReportedAt >= 250L || (totalBytes > 0L && writtenBytes >= totalBytes)) {
-                            val percent = if (totalBytes > 0L) {
-                                (writtenBytes.toDouble() / totalBytes.toDouble() * 10.0).toInt().coerceIn(0, 10)
-                            } else {
-                                0
-                            }
-                            onProgress(percent)
-                            lastReportedAt = now
-                        }
+                        remaining -= count
                     }
                 }
             }
-            onProgress(10)
-            val json = readJson(connection)
-            json.optString("source").takeIf { it.isNotBlank() }
-                ?: error("Gateway لم يُرجع رابط المصدر المرفوع")
+            readJson(connection)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun skipFully(input: InputStream, bytes: Long) {
+        var remaining = bytes
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (remaining > 0L) {
+            val skipped = input.skip(remaining)
+            if (skipped > 0L) remaining -= skipped
+            else {
+                val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                if (count < 0) throw IOException("تعذر الوصول إلى موضع الاستئناف")
+                remaining -= count
+            }
+        }
+    }
+
+    private fun requestJson(url: String, token: String, method: String, body: JSONObject? = null): JSONObject {
+        val connection = openConnection(url, token, method).apply {
+            if (body != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+        }
+        return try {
+            body?.let { connection.outputStream.use { output -> output.write(it.toString().toByteArray(Charsets.UTF_8)) } }
+            readJson(connection)
         } finally {
             connection.disconnect()
         }
@@ -248,5 +320,7 @@ class ProcessingGatewayClient(
 
     companion object {
         private const val POLL_INTERVAL_MS = 2_000L
+        private const val DEFAULT_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
+        private const val MAX_UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024
     }
 }

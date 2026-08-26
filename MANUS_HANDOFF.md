@@ -75,7 +75,7 @@ export KEY_PASSWORD='***'
 
 ## جلسة التدقيق والتجهيز — 2026-08-26
 
-تم فحص `supoclip-main.zip` باعتباره مرجعًا خارجيًا، وفحص بنية المستودع الحالي قبل أي نسخ. المرجع AGPL-3.0 ويحتوي على web stack وBackend متعدد الخدمات؛ لم تُنسخ منه ملفات source أو assets أو secrets أو build outputs. القرار المعتمد هو الاحتفاظ بمسار `android/` + `gateway/` + `pipeline/` كمسار APK canonical، مع استخدام أفكار UX وrubric فقط عبر إعادة تنفيذ مستقلة واختبارات regression.
+تم فحص `opensource-clipping-main.zip` باعتباره مرجعًا خارجيًا، وفحص بنية المستودع الحالي قبل أي نسخ. المرجع هو OpenSource Clipping بترخيص MIT، ويحتوي على Python pipeline محلي وWeb Studio وFastAPI wrapper، وليس Android/backend منفصلين؛ لم تُنسخ منه ملفات source أو assets أو secrets أو build outputs. القرار المعتمد هو الاحتفاظ بمسار `android/` + `gateway/` + `pipeline/` كمسار APK canonical، مع استخدام أفكار UX وميزات clipping فقط عبر إعادة تنفيذ مستقلة واختبارات regression.
 
 تمت إضافة الوثائق المطلوبة التالية: `docs/API.md`, `docs/ENGINE.md`, `docs/AI_RUNTIME.md`, `docs/MEDIA_RUNTIME.md`, `docs/ANDROID_UI.md`, `docs/TEST_MATRIX.md`, `docs/PERFORMANCE.md`, `docs/SECURITY.md`, `docs/THIRD_PARTY_LICENSES.md`, `docs/REFERENCE_COMPARISON.md`, `docs/REFERENCE_MIGRATION_PLAN.md`, و`docs/MIGRATION_DECISIONS.md`. كما أضيف `scripts/verify.sh` لتشغيل Python regression وfrontend build، وتشغيل Android checks تلقائيًا عند توفر SDK.
 
@@ -83,12 +83,17 @@ export KEY_PASSWORD='***'
 
 | الفحص | النتيجة |
 |---|---:|
-| `python3 -m pytest -q` | 164 passed، 1 skipped، 4 deprecation warnings |
-| `scripts/verify.sh` | نجح؛ Python وfrontend مرّا، Android skipped بسبب غياب SDK في البيئة الحالية |
+| `python3 -m pytest -q` | 166 passed، 1 skipped، 4 deprecation warnings |
+| `scripts/verify.sh` | Python/frontend path كان ناجحًا؛ Android كان skipped قبل تثبيت SDK |
 | `npm ci && npm run build` | نجح، 0 vulnerabilities في audit الخاص بـnpm |
 | `bash -n scripts/verify.sh` | PASS |
-| reference license inspection | AGPL-3.0؛ لا code copied |
-| Git status | تغييرات محصورة في الوثائق و`scripts/verify.sh` |
+| reference license inspection | OpenSource Clipping: MIT؛ لا code copied |
+| Android compilation | PASS جزئيًا: `:app:compileDebugUnitTestKotlin` نجح باستخدام JDK 21 وSDK 36؛ تنفيذ Robolectric وassembleRelease تجاوزا مهلة بيئة sandbox ولم يُعلنا نجاحًا. |
+| Git status | سيتم تثبيت التغييرات في commit واضح بعد الفحص النهائي |
+
+## تغييرات جلسة 2026-08-26
+
+تم تحويل عملاء Android النشطين (`GatewayApiClient`, `ApiContractClient`, و`ProcessingGatewayClient`) من endpoint الرفع one-shot إلى جلسات الرفع resumable: يحسب العميل SHA-256، ينشئ session، يرسل chunks مع `X-Upload-Offset` و`Content-Range`، ثم ينفذ `complete` idempotently. أضيفت اختبارات عقد Android للتحقق من ترتيب الطلبات والـoffsets. كما أصبح Gateway يعيد error envelope موحدًا يحتوي `code`, `message`, `request_id`, و`retryable`، وأزيلت تعريفات AI-provider المتكررة التي كانت تجعل مسار registry اللاحق غير قابل للوصول.
 
 ## Known blockers غير البرمجية
 

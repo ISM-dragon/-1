@@ -11,14 +11,14 @@
 | الموجة | النطاق | مخرجاتها | بوابة الانتقال |
 |---|---|---|---|
 | Wave 1 — Audit | مقارنة الكود والميزات والتراخيص | هذه المقارنة، قرارات الدمج، وثائق architecture/contracts | لا production replacement قبل اكتمال الوثائق. |
-| Wave 2 — Engine/Runtime | تثبيت Engine facade، lifecycle، media errors، model diagnostics | عقود v1، checkpoints، failure envelope، اختبارات restart/cancel/resume | جميع اختبارات Python الحالية تمر، مع evidence لاختبار failure paths. |
-| Wave 3 — Android Core | upload sessions، Room state، WorkManager، notifications، secure config | APK client لا يعرف Python ولا الأسرار | unit/lint/build، ثم device test على جهاز فعلي. |
+| Wave 2 — Engine/Runtime | تثبيت Engine facade، lifecycle، media errors، model diagnostics | عقود v1، checkpoints، failure envelope، اختبارات restart/cancel/resume | **منجزة**؛ جميع اختبارات Python الحالية تمر، وGateway error envelope موحد. |
+| Wave 3 — Android Core | upload sessions، Room state، WorkManager، notifications، secure config | APK client لا يعرف Python ولا الأسرار | **منجزة برمجيًا**؛ العملاء يستخدمون session + offset + SHA-256. يبقى unit/lint/build وdevice test بوابة مستقلة. |
 | Wave 4 — Integration | ربط APK بـGateway خاص، تنزيل النتائج، preview/edit/export | E2E من URI إلى artifact | job ID، stage evidence، hashes، وعدم وجود mock في المسار الأساسي. |
 | Wave 5 — Release QA | توقيع، device matrix، network loss، process death، restart/recovery | release APK وrelease evidence | لا تغلق blockers دون دليل تشغيل فعلي. |
 
 ## ترتيب التغييرات
 
-أولًا، يجب تثبيت `/v1` وعقد `ProcessingEngine` بحيث تظل مراحل `ingest → asr → diarize → events → candidates → score → camera → render` خلف facade واحدة. ثانيًا، يجب تحسين upload/session وdiagnostics دون تغيير سلوك one-shot compatibility route قبل اكتمال العميل. ثالثًا، يجب استكمال Android UX على شكل Home → Import → Generate → Processing → Results → Review → Edit → Render → Export، مع تخزين حالة job في Room واستخدام WorkManager للاستمرار.
+تم تثبيت `/v1` وعقد `ProcessingEngine` بحيث تظل مراحل `ingest → asr → diarize → events → candidates → score → camera → render` خلف facade واحدة. وتم تحسين upload/session بإضافة SHA-256 وoffset و`Content-Range` في عملاء Android، وإضافة error envelope وdiagnostics في Gateway، مع إبقاء one-shot route للتوافق الخلفي فقط. يستمر التحقق من Android UX على شكل Home → Import → Generate → Processing → Results → Review → Edit → Render → Export، مع Room وWorkManager للاستمرار.
 
 بعد ذلك فقط تُضاف أفكار المرجع ذات القيمة المحدودة: presets للـcaptions، بيانات rubric واضحة للـscoring، وعمليات trim/split/merge في شاشة التحرير. هذه الإضافات يجب أن تعمل فوق artifacts والعقود الحالية؛ لا يجوز أن تجعل Android يعيد transcription أو يشغل FFmpeg محليًا. أما B-roll، النشر الاجتماعي، MCP، الحسابات، billing، والـmulti-user فخارج هذه الخطة.
 
