@@ -328,7 +328,13 @@ class ProcessingGatewayClient(
         val normalized = raw.trim().removeSuffix("/")
         require(normalized.isNotBlank()) { "Gateway URL غير مضبوط" }
         val uri = URI(normalized)
-        require(uri.scheme?.lowercase() == "https") { "يجب استخدام HTTPS مع private Processing Gateway" }
+        val host = uri.host.orEmpty().lowercase()
+        val local = host == "localhost" || host == "127.0.0.1" || host == "[::1]" ||
+            host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("172.16.")
+        require(!uri.host.isNullOrBlank()) { "عنوان Gateway غير صالح" }
+        require(uri.scheme?.lowercase() == "https" || (uri.scheme?.lowercase() == "http" && local)) {
+            "استخدم HTTPS خارج الشبكة المحلية"
+        }
         return normalized
     }
 
