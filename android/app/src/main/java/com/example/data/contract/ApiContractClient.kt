@@ -113,32 +113,33 @@ class ApiContractClient(private val contentResolver: ContentResolver) {
         withContext(Dispatchers.IO) {
             runCatching {
                 val mediaUrl = validateMediaUrl(config.baseUrl, artifact.mediaUrl)
+                val parent = destination.parentFile ?: error("مجلد النتيجة غير صالح")
+                parent.mkdirs()
+                val temporary = File(parent, ".${destination.name}.part")
                 val connection = openConnection(mediaUrl, config.token, "GET")
                 try {
-                    destination.parentFile?.mkdirs()
                     val digest = MessageDigest.getInstance("SHA-256")
                     connection.inputStream.use { input ->
-                        destination.outputStream().use { output ->
+                        temporary.outputStream().use { output ->
                             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                             while (true) {
                                 val count = input.read(buffer)
                                 if (count < 0) break
+                                if (count == 0) continue
                                 digest.update(buffer, 0, count)
                                 output.write(buffer, 0, count)
                             }
                         }
                     }
-                    require(destination.isFile && destination.length() > 0) { "ملف النتيجة فارغ" }
+                    require(temporary.isFile && temporary.length() > 0) { "ملف النتيجة فارغ" }
                     artifact.sha256?.trim()?.lowercase()?.takeIf { it.isNotBlank() }?.let { expected ->
-                        val actual = digest.digest().hex()
-                        if (actual != expected) {
-                            destination.delete()
-                            error("فشل التحقق من سلامة ملف النتيجة")
-                        }
+                        require(digest.digest().hex() == expected) { "فشل التحقق من سلامة ملف النتيجة" }
                     }
+                    require(temporary.renameTo(destination)) { "تعذر تثبيت ملف النتيجة" }
                     destination
                 } finally {
                     connection.disconnect()
+                    if (temporary.exists()) temporary.delete()
                 }
             }
         }
@@ -292,31 +293,26 @@ class ApiContractClient(private val contentResolver: ContentResolver) {
 
     private fun parseApiError(status: Int, body: String, responseMessage: String): ApiError {
         val json = runCatching { JSONObject(body) }.getOrNull()
+        val envelope = json?.optJSONObject("error")
         val detail = json?.opt("detail")
-        var code: String? = null
-        var message: String? = null
-        when (detail) {
-            is JSONObject -> {
-                code = detail.optString("code").takeIf { it.isNotBlank() }
-                message = detail.optString("message").takeIf { it.isNotBlank() }
-            }
-            is String -> {
-                message = detail.takeIf { it.isNotBlank() }
-                code = message?.let { codeFor(status, it) }?.takeIf { it != "HTTP_$status" }
-            }
-        }
-        val errors = json?.optJSONArray("errors")
-        val firstError = errors?.optJSONObject(0)
-        if (firstError != null) {
-            code = code ?: firstError.optString("code").takeIf { it.isNotBlank() }
-            message = message ?: firstError.optString("message").takeIf { it.isNotBlank() }
-        }
+        val firstError = json?.optJSONArray("errors")?.optJSONObject(0)
+        val candidates = listOfNotNull(envelope, detail as? JSONObject, firstError)
+        val code = candidates.asSequence()
+            .mapNotNull { it.optString("code").takeIf(String::isNotBlank) }
+            .firstOrNull()
+        val message = candidates.asSequence()
+            .mapNotNull { it.optString("message").takeIf(String::isNotBlank) }
+            .firstOrNull()
+            ?: (detail as? String)?.takeIf { it.isNotBlank() }
         val safeMessage = (message ?: body).take(300).ifBlank { responseMessage }
+        val retryable = envelope?.optBoolean("retryable")
+            ?: (status == 408 || status == 425 || status == 429 || status >= 500)
         return ApiError(
             code = code ?: codeFor(status, safeMessage),
             message = safeMessage,
-            requestId = json?.optString("request_id")?.takeIf { it.isNotBlank() },
-            retryable = status == 408 || status == 425 || status == 429 || status >= 500
+            requestId = envelope?.optString("request_id")?.takeIf { it.isNotBlank() }
+                ?: json?.optString("request_id")?.takeIf { it.isNotBlank() },
+            retryable = retryable
         )
     }
 
