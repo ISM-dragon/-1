@@ -75,7 +75,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 خامسًا، أظهر أول build فعلي بعد توفير SDK وJDK خطأ ترجمة موجودًا في `OpusBottomNav.kt`: `NavigationBarItem` هو امتداد لـ`RowScope` في نسخة Material3 المستخدمة، بينما كان helper خارج هذا الـscope. أُصلح ذلك بتحويل `PrimaryItem` إلى `RowScope.PrimaryItem` دون تغيير السلوك المرئي.
 
-سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection أولًا بسبب `ModuleNotFoundError: fastapi` ثم كشف التشغيل التالي غياب `httpx` الذي يستورده `ProviderRouter`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. وأظهر التشغيل التالي أن اختبار الوسائط الفاسدة يعتمد ضمنيًا على وجود FFprobe في runner؛ عُزل ذلك الاختبار باستخدام mock يعيد probe فاشلًا، مع إبقاء اختبار جاهزية FFprobe منفصلًا. بعد تجاوز هذه النقاط وصل CI إلى اختبار render وكشف غياب `ffmpeg` من runner؛ أضيف تثبيت FFmpeg صراحةً إلى Workflow. عولجت المشاكل في Workflow والاختبارات نفسها، من دون تخفيف فحوص الأمان.
+سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection أولًا بسبب `ModuleNotFoundError: fastapi` ثم كشف التشغيل التالي غياب `httpx` الذي يستورده `ProviderRouter`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. وأظهر التشغيل التالي أن اختبار الوسائط الفاسدة يعتمد ضمنيًا على وجود FFprobe في runner؛ عُزل ذلك الاختبار باستخدام mock يعيد probe فاشلًا، مع إبقاء اختبار جاهزية FFprobe منفصلًا. بعد تجاوز هذه النقاط وصل CI إلى اختبار render وكشف غياب `ffmpeg` من runner؛ أضيف تثبيت FFmpeg صراحةً إلى Workflow. ثم كشف Windows CI أن اختبار ASR يعتمد على توفر WhisperX وسلوك runtime الحقيقي، فتم حقن runtime وهمي يفشل عند تحميل النموذج، مع إبقاء تصنيف `ASR_MODEL_UNAVAILABLE` ورسالة الخطأ الحالية. عولجت المشاكل في Workflow والاختبارات نفسها، من دون تخفيف فحوص الأمان.
 
 ## القرارات التقنية
 
@@ -106,6 +106,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | `.github/workflows/quality-gate.yml` | تثبيت `gateway/requirements.txt` و`httpx` قبل اختبارات Python، وتثبيت FFmpeg قبل اختبار render.
 | `gateway/test_processing_bridge.py` | تهيئة SQLite المؤقتة وإضافة upload مكتمل مطابق للحجم وSHA-256.
 | `gateway/tests/test_gateway_safety.py` | جعل اختبار الوسائط الفاسدة deterministic عبر mock لـFFprobe مع الحفاظ على عقد 422.
+| `pipeline/tests/test_asr_errors.py` | جعل اختبار فشل runtime الخاص بـASR deterministic عبر fake `torch` و`whisperx`، والتحقق من عقد `ASR_MODEL_UNAVAILABLE`.
 | `MANUS_HANDOFF.md` | هذه الوثيقة.
 
 لم تُعدّل Python pipeline أو Gateway API في هذه الجلسة لأن الحد الفاصل القائم، بعد دمج تحسينات `origin/main`، كان كافيًا لإعادة الاستخدام. أُصلح اختبار Gateway وWorkflow التحقق فقط. لم تُحذف الوظائف الاجتماعية أو التحليلية أو إعدادات المزودين، لأنها ليست blocker لمسار معالجة الفيديو الشخصي.
@@ -131,11 +132,13 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | `./gradlew :app:assembleDebug` | لم يكتمل محليًا بسبب ضغط الذاكرة عند مراحل dex؛ لا يوجد APK محلي نهائي من هذه الجلسة.
 | `python3 -m pytest gateway -q` | نجح: `40 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
 | `python3 -m pytest -q` | نجح: `157 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
+| `python3 -m pytest pipeline/tests/test_asr_errors.py -q` | نجح: `1 passed` بعد جعل runtime deterministic.
 | `python3 -m compileall -q gateway pipeline/publikclip_pipeline` | نجح.
 | اختبار Android المستهدف بعد rebase | نجح: `:app:testDebugUnitTest --tests com.example.ProcessingEngineTest`؛ ترجمة Kotlin وKSP وJava و6 حالات ProcessingEngine مرّت.
 | `./gradlew :app:testDebugUnitTest` الكامل | بقي عالقًا محليًا في Test Executor ولم يُعتمد كنجاح؛ يلزم تأكيده عبر CI.
 | `git diff --check` | نجح بعد كل التعديلات الحالية.
-| Quality Gate على GitHub قبل الإصلاح | فشل بسبب FastAPI ثم `httpx` ثم اعتماد اختبار safety على FFprobe ثم غياب FFmpeg لاختبار render؛ تم إصلاح Workflow والاختبارات، ويجب تأكيد التشغيل الجديد بعد هذا commit.
+| Quality Gate على GitHub قبل الإصلاح | فشل بسبب FastAPI ثم `httpx` ثم اعتماد اختبار safety على FFprobe ثم غياب FFmpeg لاختبار render؛ تم إصلاح Workflow والاختبارات، ونجح Quality Gate لاحقًا للcommit `57aca4c`.
+| Windows CI على `57aca4c` | فشل اختبار ASR لأن runtime الحقيقي صنّف فشل تحميل/تشغيل النموذج كـ`ASR_FAILED`؛ تم عزل الاختبار بحقن runtime فاشل عند `load_model`.
 
 ## الافتراضات
 
@@ -153,7 +156,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 ## Next steps للجلسة التالية
 
-1. رفع الإصلاحات الحالية إلى GitHub وانتظار Quality Gate وEmbedded Android App، ثم معالجة أي failure جديد من logs بدل تجاوزه.
+1. رفع إصلاح ASR الحالي إلى GitHub وانتظار Quality Gate وWindows CI، ثم معالجة أي failure جديد من logs بدل تجاوزه.
 2. تجهيز Gateway على جهاز خاص أو خدمة دائمة، وضبط البيئة من دون وضع أي secret في Git أو APK، ثم تمرير اختبار `/health` و`/v1/processing/capabilities` وdiagnostic pipeline/Gemini.
 3. تشغيل Native Android على جهاز أو emulator، اختبار اختيار فيديو محلي، الرفع، polling، تنزيل MP4، الاستيراد إلى Room، cancel، retry، وresume على نفس `remoteGatewayJobId`.
 4. إكمال `assembleDebug` و`lint` في CI أو بيئة ذات ذاكرة كافية، وحفظ APK الناتج كartifact؛ ثم تشغيل اختبار instrumentation الأساسي على جهاز فعلي إن توفر.
