@@ -1,55 +1,45 @@
 # سجل قرارات الترحيل
 
-**المستودع:** `ISM-dragon/-1`
+**النطاق:** SupoClip وwhisper.cpp reference ZIPs مقابل ISM / PublikClip.
 
-**المرجع:** `autoclip-main.zip`
+**تاريخ المراجعة:** 2026-08-26.
 
-**تاريخ القرار:** 2026-08-26
-
-## منهج التقييم
-
-تم تقييم البدائل وفق الأوزان المحددة للمشروع: توافق Android بنسبة 20%، الصحة 20%، الاستقرار 15%، الأداء 15%، قابلية الصيانة 10%، اكتمال الميزة 10%، كلفة الدمج 5%، وكلفة الاعتماديات 5%. هذه الدرجات توجه القرار ولا تستبدل benchmark أو اختبارًا فعليًا.
-
-## سجل القرارات
-
-| المجال | القرار | الأساس | الإجراء |
+| القرار | المكوّن أو الفكرة | القرار المطبق | الدليل |
 |---|---|---|---|
-| Android client | `KEEP_CURRENT` | المرجع لا يملك Android client، والمسار الأساسي يفصل الهاتف عن Python | تثبيت Kotlin/Compose/Room/WorkManager وGateway client |
-| Desktop frontend | `IGNORE_REFERENCE` | واجهة المرجع لا تعالج هدف APK الشخصي | عدم نسخ `frontend/` إلى `app/` أو `android/` |
-| Gateway/backend boundary | `KEEP_CURRENT` | Gateway الحالي يملك auth/upload/queue/state/diagnostics | اعتباره canonical للمسار Android وتجميد backend البديل للميزات الجديدة |
-| Engine facade | `KEEP_CURRENT` | يوجد adapter واضح مع JSONL وcontracts | إبقاء `backend/engine.py` وpipeline contracts كحد فاصل |
-| Pipeline stages | `KEEP_CURRENT` | المشروع الأساسي يملك مراحل أوسع مع checkpoints | عدم حذف ingest/ASR/diarization/events/candidates/scoring/camera/render |
-| Media helpers | `IMPROVE_CURRENT` | المرجع يملك اختبارات FFmpeg وpaths مفيدة | نقل حالات الاختبار والأخطاء كعقود مستقلة، لا نسخ renderer كامل |
-| ASR/WhisperX | `KEEP_CURRENT` | runtime الأساسي متكامل server-side | لا native Whisper على Android قبل إثبات حاجة وbenchmark |
-| Diarization | `KEEP_CURRENT` | CAM++ وتوزيع speaker timestamps جزء من المسار الحالي | لا استبدال implementation المرجعية دون بيانات دقة |
-| Audio events | `KEEP_CURRENT` | وجود laughter/PANNs/DSP وإشارات arousal | الحفاظ على الأدلة متعددة الإشارات وعدم تبسيط scoring |
-| Candidate boundaries | `COMBINE` | المرجع يحتوي اختبارات boundaries وdedupe قابلة للاستفادة | إضافة regression tests أو إعادة تنفيذ الفكرة داخل contracts الحالية |
-| Scoring | `KEEP_CURRENT` | scoring الحالي يدعم LLM/fallback/confidence | عدم جعل فشل LLM crash إذا أمكن fallback، مع versioning |
-| Camera/reframe | `MANUAL_REVIEW` | اختلاف البيانات والأداء كبير ولا يكفي code diff | benchmark مشترك قبل أي replacement |
-| Captions | `IMPROVE_CURRENT` | المرجع يعرض حالات اختبار مفيدة، والأساسي يملك word timestamps | فصل caption state عن render logic وتحسين readability دون إعادة transcription |
-| Model manager | `KEEP_CURRENT` | الأساسي يملك registry/cache/diagnostics أوسع | استكمال checksum/health/size metadata عند الحاجة |
-| Job lifecycle | `COMBINE` | كلا المشروعين يملكان state/checkpoint ideas | توحيد transition/error contract مع بقاء Gateway authoritative |
-| Android resume | `IMPROVE_CURRENT` | يجب استخدام `remoteGatewayJobId` بعد restart/retry | تغطية worker الحالي بالاختبار وعدم إنشاء remote job جديد بلا حاجة |
-| Resumable upload | `MANUAL_REVIEW` | one-shot الحالي عامل لكن أقل تحملًا لانقطاع الشبكة | إضافة لاحقة بعد contract وbenchmark وليس ضمن نسخ المرجع |
-| Secrets | `KEEP_CURRENT` | Gateway token وGemini secrets خارج APK | رفض أي secret من الأرشيف أو source tree |
-| Docker | `COMBINE` | المرجع يملك compose أبسط، والأساسي يملك Gateway image | مقارنة التشغيل والحجم قبل أي تعديل deployment |
-| CI/tests | `COMBINE` | لكل مشروع تغطية مختلفة | إضافة حالات مرجعية دون تكرار suites أو تشغيل code غير موثوق |
-| Build artifacts | `IGNORE_REFERENCE` | لا حاجة لنسخ caches أو generated outputs | عدم إدخال `node_modules`, `.venv`, models, APKs أو DBs |
+| KEEP_CURRENT | Native Android client | الاحتفاظ بمشروع `android/` كعميل APK canonical | Compose، Room، WorkManager، Media3، وGateway client موجودة في المصدر. |
+| KEEP_CURRENT | Private Gateway | الاحتفاظ بـ`gateway/` كـcontrol plane لمسار Android | يملك auth، upload، SQLite job state، worker، diagnostics، وmedia delivery. |
+| KEEP_CURRENT | PublikClip stages | الاحتفاظ بالـPipeline stages والـcheckpoints | `pipeline/publikclip_pipeline/engine` يعرض contract v1 ويغطي lifecycle والاستئناف. |
+| KEEP_CURRENT | ASR/diarization/media runtime | إبقاء Python/WhisperX/FFmpeg على الخادم الخاص | requirement صريح يمنع تشغيل desktop runtime داخل Android. |
+| IGNORE_REFERENCE | whisper.cpp JNI/CMake Android sample | عدم نقل JNI أو CMake أو GGML model إلى APK في Wave الحالية | العينة ASR محلية فقط، ولا تغطي video/job/checkpoint/diarization/render؛ نقلها يرفع الحجم والذاكرة ويخلق مسارًا ثانيًا. |
+| ADD_REFERENCE | whisper.cpp timing/system-info/benchmark idea | الاحتفاظ بفكرة القياس وتسجيل timestamps كـcontract/benchmark مستقل | تُعاد كتابتها فوق العقود الحالية دون نسخ source، وتُشغّل فقط بعد baseline ومقارنة على أجهزة فعلية. |
+| IMPROVE_CURRENT | Job lifecycle | توحيد الحالات والتحكم والـtransition history تدريجيًا | يلزم بقاء jobs بعد restart/network loss وعدم إعادة معالجة checkpoint صالح. |
+| IMPROVE_CURRENT | Error handling | جعل error code/retryable/correlation جزءًا من الحدود العامة | يمنع تسرب stack traces ويتيح retry/resume آمنًا. |
+| IMPROVE_CURRENT | Captions | فصل caption state عن render logic وإضافة presets versioned | يحقق karaoke/emphasis/readability دون إعادة transcription. |
+| IMPROVE_CURRENT | Scoring | إضافة rubric أو signals versioned فقط بعد baseline | يحافظ على scoring الحالي ويمنع اعتماد LLM وحيدًا. |
+| ADD_REFERENCE | Editor UX | استعارة trim/split/merge وflow الواضح من الويب كـAndroid UX جديد | لا تُنقل مكونات Next.js أو CSS أو state إلى Kotlin. |
+| ADD_REFERENCE | Caption presets | إضافة أفكار قوالب العرض فقط إذا لم تكسر contract | المرجع غني بالقوالب، لكن التنفيذ يجب أن يظل server/render compatible. |
+| COMBINE | Progress and worker model | Room/WorkManager على Android مع SQLite/worker على Gateway | لكل طرف lifecycle مختلف؛ لا يُستبدل أحدهما بالآخر. |
+| COMBINE | Candidate selection | rubric المرجع كإشارة اختيارية مع scoring الحالي | يسمح بالقياس والرجوع إلى default السابق. |
+| IGNORE_REFERENCE | accounts/billing/subscriptions | عدم نقلها | خارج هدف single-user APK ويزيد attack surface. |
+| IGNORE_REFERENCE | Redis/ARQ topology | عدم إدخالها في Wave الحالية | SQLite + worker واحد كافيان لمستخدم واحد، والتوسع ليس شرطًا حاليًا. |
+| IGNORE_REFERENCE | MCP/social/analytics | إبقاؤها اختيارية ومنفصلة | لا تمنع إنشاء clip ولا ينبغي أن تكون dependency للمسار الأساسي. |
+| MANUAL_REVIEW | Copying code | لا نسخ مباشر من ZIP | المرجع AGPL-3.0؛ أي نقل لاحق يحتاج تحديد file-level notice وتوافق ترخيص. |
+| MANUAL_REVIEW | External model/provider | لا إضافة provider افتراضي جديد | يتطلب مفاتيح، privacy review، cost/performance baseline، وfailure tests. |
+| MANUAL_REVIEW | Future local ASR provider | لا يبدأ قبل إثبات accuracy/latency/RAM/APK-size/battery parity مع WhisperX | يجب أن يكون opt-in، downloadable model مع checksum، ويحفظ MIT/OpenAI notices ذات الصلة. |
+| MANUAL_REVIEW | Tauri generated Android | لا دمج binary أو resources مع native Android | يوجد runtimeان؛ يجب اختيار identity/artifact واحد قبل أي release migration. |
 
-## قرارات الترخيص
+## قرارات غير قابلة للتفاوض
 
-لم يتم نسخ أي source file من المرجع إلى المشروع الأساسي. ملف المرجع `LICENSE` يعلن MIT مع copyright باسم مؤلفه، بينما المشروع الأساسي AGPL-3.0-or-later. دراسة الخوارزميات أو إعادة تنفيذ contract لا تعني نسخ الكود. أي دمج مستقبلي يتطلب حفظ notice وملء سجل `THIRD_PARTY_LICENSES.md` واختبار dependency compatibility.
+لا يُنقل secret أو API key أو model artifact أو build output أو source من المرجع. لا يُستبدل implementation حالي لمجرد اختلاف الحجم أو أسلوب التصميم. لا يُغلق أي blocker إنتاجي اعتمادًا على compilation أو mocks فقط. وأي دمج مستقبلي لـwhisper.cpp أو غيره يجب أن يضيف regression test وقياسًا عند تأثيره على correctness أو الأداء، ويحافظ على remote Gateway كالمسار الافتراضي.
 
-## قرارات النطاق
+## References
 
-المنتج المستهدف تطبيق شخصي واحد مع private backend. لذلك لا تُضاف multi-user accounts أو billing أو subscriptions أو public SaaS infrastructure. Social OAuth/publishing يبقى optional وfeature-gated ولا يدخل في acceptance لمسار clip generation الأساسي.
-
-## العناصر المفتوحة
-
-| العنصر | الحالة | دليل الإغلاق |
-|---|---|---|
-| جهاز Android حقيقي | مفتوح | APK مثبت، screenshots/logcat، ومسار E2E حقيقي |
-| Release signing | مفتوح | keystore خارجي، `apksigner verify` ناجح، SHA-256 محفوظ |
-| Gemini/AI runtime | مفتوح | diagnostics وASR/diarization/scoring/camera/render فعلية |
-| Private HTTPS Gateway | مفتوح | endpoint قابل للوصول من الهاتف مع token وrestart/network evidence |
-| Large media | مفتوح | تشغيل صريح بملف كبير ومساحة كافية |
+[1]: REFERENCE_COMPARISON.md "Reference comparison"
+[2]: REFERENCE_MIGRATION_PLAN.md "Migration plan"
+[3]: ARCHITECTURE.md "Architecture baseline"
+[4]: CONTRACTS.md "Contracts"
+[5]: ../android/ "Native Android project"
+[6]: ../gateway/ "Private Gateway"
+[7]: ../pipeline/publikclip_pipeline/engine/ "PublikClip Engine"
+[8]: REFERENCE_COMPARISON.md "whisper.cpp fit check and reference comparison"
+[9]: THIRD_PARTY_LICENSES.md "Third-party license audit"

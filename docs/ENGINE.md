@@ -1,25 +1,57 @@
 # PublikClip Engine
 
-## Facade
+**العقد:** `engine_contract_version=1`.
 
-يجب أن يتعامل Gateway مع Engine facade بدل استيراد pipeline internals عشوائيًا. العمليات المطلوبة هي `create_job`، `start_job`، `get_status`، `get_progress`، `cancel_job`، `resume_job`، `get_results`، و`render_clip`. التطبيق الأساسي يحتوي adapter وJSONL compatibility path في `backend/engine.py`، بينما تبقى الخوارزميات داخل `pipeline/`.
+**الملكية:** الـEngine مسؤول عن orchestration وخوارزميات clip generation، وليس عن auth أو UI أو provider secrets.
 
-## Stages
+## الواجهة العامة
+
+يعتمد Gateway وCLI والاختبارات على facade واحدة بدل استيراد stage modules مباشرة:
+
+```python
+job = engine.create_job(source, settings=None, source_type=None)
+status = engine.get_job_status(job.id)
+result = engine.start_job(job.id, on_progress=callback)
+clip = engine.get_clip(job.id, 0)
+updated = engine.render_clip(job.id, 0, on_progress=callback)
+```
+
+الأنواع العامة هي `JobRef`, `JobStatus`, `JobResults`, `ClipResult`, `ProgressEvent`, و`EngineError`. كل error يعيد `code`, `safe_message`, و`recoverable` دون stack trace أو secret.
+
+## المراحل
 
 ```text
 ingest → asr → diarize → events → candidates → score → camera → render
 ```
 
-كل stage يسجل state وprogress وartifacts وerrors. لا تعتمد Android على أسماء ملفات داخلية؛ يعتمد فقط على API resource.
+كل مرحلة تكتب envelope قابلًا للقراءة وتعلن progress. عند إعادة التشغيل يُعاد استخدام checkpoint صالح بدل إعادة الفيديو كاملًا. النتيجة النهائية لا تعتبر ناجحة إلا بعد وجود artifacts قابلة للقراءة والتحقق.
 
-## Checkpoint/resume
+| الوظيفة | الضمان |
+|---|---|
+| `create_job` | إنشاء job directory وmetadata دون بدء معالجة غير idempotent. |
+| `start_job` | تشغيل المراحل بالترتيب مع progress وcheckpoint. |
+| `get_status` | قراءة الحالة الحالية من التخزين. |
+| `cancel_job` | يثبت cancel request ثم يوقف التنفيذ بأمان. |
+| `resume_job` | يمسح marker المؤقت ويكمل من checkpoint صالح إذا كانت الحالة قابلة للاسترداد. |
+| `get_results` | يعيد نتائج آمنة وartifacts المكتملة فقط. |
+| `render_clip` | يعيد render لمقطع محدد بعد التحقق من index والمدخلات. |
 
-يُحفظ checkpoint بعد كل مرحلة قابلة لإعادة الاستخدام مع version وinput identity وartifact metadata. عند restart أو retry، يتحقق Engine من صلاحية checkpoint قبل المتابعة. إذا كان checkpoint غير صالح، يُعاد بناء المرحلة المطلوبة فقط بدل إعادة الفيديو كاملًا بلا تحقق.
+## قواعد الفشل
 
-## Cancellation
+يفصل Engine بين `MEDIA_INVALID`, `FFMPEG_MISSING`, `FFMPEG_FAILED`, `MODEL_MISSING`, `MODEL_INVALID`, `INSUFFICIENT_DISK`, و`UNSUPPORTED_FORMAT`. فشل LLM اختياري لا يجب أن يحول الوظيفة إلى crash إذا كان fallback rubric أو provider بديلًا متاحًا. أما failure غير القابل للاسترداد فيثبت transition واضحًا ويترك artifacts التشخيصية.
 
-الإلغاء يبدأ من Android/Gateway ويصل إلى worker/process. يجب أن تكون النتيجة transition واضحة إلى `CANCELLED`، وألا تُفهرس ملفات جزئية كـresults. إذا كان process لا يستجيب، يستخدم Gateway timeout/termination آمنًا مع cleanup.
+### المراجع
 
-## Compatibility
+[1]: ../pipeline/publikclip_pipeline/engine/contracts.py "Engine public types"
+[2]: ../pipeline/publikclip_pipeline/engine/pipeline.py "Pipeline orchestration"
+[3]: ../pipeline/publikclip_pipeline/jobs/queue.py "Checkpoint and job persistence"
+[4]: ../gateway/processing_service.py "Gateway-to-engine bridge"
+[5]: CONTRACTS.md "Cross-component contract"
 
-لا تُحذف `ProductionVideoPipeline` أو adapters القديمة دون إثبات أن جميع callers انتقلوا إلى facade. المسار المعتمد للـAPK هو Gateway remote؛ أي local Kotlin pipeline يبقى fallback/experimental وموسومًا بذلك.
+## References
+
+[1]: ../pipeline/publikclip_pipeline/engine/contracts.py "Engine public types"
+[2]: ../pipeline/publikclip_pipeline/engine/pipeline.py "Pipeline orchestration"
+[3]: ../pipeline/publikclip_pipeline/jobs/queue.py "Checkpoint and job persistence"
+[4]: ../gateway/processing_service.py "Gateway-to-engine bridge"
+[5]: CONTRACTS.md "Cross-component contract"

@@ -73,15 +73,81 @@ export KEY_PASSWORD='***'
 التفاصيل التشغيلية، مصفوفة الصلاحيات، بصمة APK، وقيود اختبار الجهاز موجودة في [`docs/RELEASE.md`](docs/RELEASE.md). يجب أن يكون أي backend مستخدم في الإنتاج خاصاً ومحمياً بـ HTTPS وGateway token، ويجب عدم نقل محرك Python أو أسراره إلى تطبيق Android.
 
 
-## تحديث جلسة التدقيق والترحيل — 2026-08-26
+## جلسة التدقيق والتجهيز — 2026-08-26
 
-تم فحص `autoclip-main.zip` كمرجع منفصل ومقارنته بالمشروع الأساسي على مستوى Android وGateway وEngine وAI/media وcaptions وcamera وjob lifecycle وlicenses. لم يتم نسخ المشروع المرجعي أو استبدال بنية PublikClip. أضيفت الوثائق التالية: `docs/REFERENCE_COMPARISON.md` و`docs/REFERENCE_MIGRATION_PLAN.md` و`docs/MIGRATION_DECISIONS.md` و`docs/THIRD_PARTY_LICENSES.md` و`docs/API.md` و`docs/ENGINE.md` و`docs/AI_RUNTIME.md` و`docs/MEDIA_RUNTIME.md` و`docs/ANDROID_UI.md` و`docs/TEST_MATRIX.md` و`docs/PERFORMANCE.md` و`docs/SECURITY.md`.
+تم فحص `supoclip-main.zip` باعتباره مرجعًا خارجيًا، وفحص بنية المستودع الحالي قبل أي نسخ. المرجع AGPL-3.0 ويحتوي على web stack وBackend متعدد الخدمات؛ لم تُنسخ منه ملفات source أو assets أو secrets أو build outputs. القرار المعتمد هو الاحتفاظ بمسار `android/` + `gateway/` + `pipeline/` كمسار APK canonical، مع استخدام أفكار UX وrubric فقط عبر إعادة تنفيذ مستقلة واختبارات regression.
 
-تم إصلاح فجوة recovery في المسار النشط: `ProcessingGatewayClient.process()` يقبل الآن `existingGatewayJobId`، و`VideoProcessingWorker` يمرر المعرف المحفوظ من Room. عند وجود job بعيد قابل للاستعادة، لا يعاد رفع المصدر أو إنشاء job مكرر؛ وتُطلب عملية resume للحالات `INTERRUPTED` أو الفشل القابل للاستعادة. إذا كان الإلغاء صريحًا ثم طلب المستخدم retry، يبدأ المسار job جديدًا بدل إعادة استخدام job ملغى. أضيف اختبار regression مصدره `android/app/src/test/java/com/example/ProcessingGatewayClientResumeTest.kt`، وتم التحقق من compile لمصادر التطبيق والاختبار.
+تمت إضافة الوثائق المطلوبة التالية: `docs/API.md`, `docs/ENGINE.md`, `docs/AI_RUNTIME.md`, `docs/MEDIA_RUNTIME.md`, `docs/ANDROID_UI.md`, `docs/TEST_MATRIX.md`, `docs/PERFORMANCE.md`, `docs/SECURITY.md`, `docs/THIRD_PARTY_LICENSES.md`, `docs/REFERENCE_COMPARISON.md`, `docs/REFERENCE_MIGRATION_PLAN.md`, و`docs/MIGRATION_DECISIONS.md`. كما أضيف `scripts/verify.sh` لتشغيل Python regression وfrontend build، وتشغيل Android checks تلقائيًا عند توفر SDK.
 
-نتائج التحقق في هذه الجلسة: `python3 scripts/check_identity.py` نجح، compileall نجح، Gateway `39 passed, 1 skipped`، backend `6 passed`، pipeline `117 passed`، وfrontend `npm ci && npm run build` نجح. كما نجح `:app:compileDebugKotlin` و`:app:compileDebugUnitTestKotlin` بعد تجهيز JDK 21 وAndroid API 36. تنفيذ Robolectric الكامل تجاوز مدة التنفيذ العملية في هذه البيئة ولم يُعلن نجاحه؛ لذلك لا تُغلق مصفوفة Android unit/lint/release إلا بسجل نهائي مكتمل. لا يزال اختبار الجهاز الحقيقي، private HTTPS Gateway، AI/model runtime، وrelease signing الخارجي مفتوحًا كما هو موثق في `docs/RELEASE_BLOCKERS.md`.
+## Evidence هذه الجلسة
+
+| الفحص | النتيجة |
+|---|---:|
+| `python3 -m pytest -q` | 164 passed، 1 skipped، 4 deprecation warnings |
+| `scripts/verify.sh` | نجح؛ Python وfrontend مرّا، Android skipped بسبب غياب SDK في البيئة الحالية |
+| `npm ci && npm run build` | نجح، 0 vulnerabilities في audit الخاص بـnpm |
+| `bash -n scripts/verify.sh` | PASS |
+| reference license inspection | AGPL-3.0؛ لا code copied |
+| Git status | تغييرات محصورة في الوثائق و`scripts/verify.sh` |
+
+## Known blockers غير البرمجية
+
+لا يزال القبول النهائي مشروطًا بتوفير Android SDK/JDK كاملين لبيئة البناء، جهاز Android فعلي أو emulator مستقر لاختبار install/open/picker/process death/export، Gateway خاص عبر HTTPS مع token، مزود ASR/diarization/LLM جاهز، وrelease keystore. لا يُعلن release accepted قبل حفظ job IDs وstage outputs وartifact hashes وscreenshots/logcat لهذه المسارات. هذه القيود موثقة تفصيليًا في `docs/FINAL_ACCEPTANCE.md` و`docs/RELEASE_BLOCKERS.md`.
 
 
-## نتائج البناء النهائية
+## ملحق جلسة البناء والدمج — 2026-08-26
 
-بعد تجهيز JDK 21 وAndroid SDK API 36 محليًا، نجح `:app:lint` و`:app:assembleRelease` في `evidence/current_run/android_release_verify.log`. الناتج المحلي هو `android/app/build/outputs/apk/release/app-release-unsigned.apk` بحجم 55,690,915 bytes وبصمة SHA-256 هي `c327acb5fd98318e0f64bfa4f7227f613ef6a153b93f2e75ee048385aa5b8d1c`. يظل غير موقع لأن keystore release ليس موجودًا، ولذلك لا يُعامل كنسخة توزيع نهائية. نجح كذلك compile للتطبيق والاختبار، بينما بقي تنفيذ Robolectric الكامل غير معتمد بسبب تجاوز زمن البيئة؛ لا يوجد ادعاء بقبول الجهاز أو المسار E2E.
+بعد مزامنة main مع تحديثات remote المتزامنة، حُفظت وثائق التدقيق وملفات الإصدار الأحدث من remote، وأُبقي إصلاح `ApiContractClient` واختباره كإضافة مستقلة. الإصلاح يقرأ `detail` الكائني وقائمة `errors` و`request_id` من Gateway بدل تحويل الكائن إلى نص غير مفيد. كما بقيت ملفات Android الثلاثة المطلوبة للبناء واعتماد MockWebServer موجودة.
+
+| الفحص | النتيجة |
+|---|---:|
+| `python3 -m pytest -q` | 164 passed، 1 skipped |
+| `:app:testDebugUnitTest` | PASS |
+| `:app:lint` | PASS مع تحذيرات deprecated غير مانعة |
+| `:app:assembleRelease` | PASS؛ الناتج unsigned لغياب keystore الإنتاجي |
+| `:app:assembleDebug` | PASS؛ APK Debug موقّع v2 متاح خارج Git |
+| `unzip -t` وAPK badging | PASS؛ package `com.aistudio.opuspro.apk` وSDK 36 |
+
+نسخة release الإنتاجية يجب توقيعها لاحقًا باستخدام keystore خاص عبر متغيرات `KEYSTORE_PATH`, `STORE_PASSWORD`, و`KEY_PASSWORD`. لا تزال اختبارات الجهاز الحقيقي أو emulator المستقر وGateway الخاص ومزودات runtime شروطًا لتجربة end-to-end، وليست مغطاة بالكامل داخل sandbox.
+
+## ملحق التنفيذ المحلي — 2026-08-26
+
+تمت إضافة `pipeline/publikclip_pipeline/runtime/` كحد مستقل لإدارة موارد المضيف والوسائط والنماذج. `MediaManager` يصنف أخطاء `MEDIA_INVALID`, `FFMPEG_MISSING`, `FFMPEG_FAILED`, `UNSUPPORTED_FORMAT`, و`INSUFFICIENT_DISK` ويغطي probe/validation/audio/frame/transcode/render/cleanup. `ModelManager` يسجل name/version/size/checksum/source/local path وحالة installed/loaded، ويدعم verify/download/resume/load/unload/delete. يعرض Gateway الحالة في `GET /v1/processing/capabilities` تحت `details.runtime`، ويعلن `runtime_ready=false` عندما تكون النماذج المطلوبة مفقودة.
+
+تم تحديث عميل Android ليقرأ `runtime_ready` ويعرضه في إعدادات Gateway، مع اختبار عقدي لذلك. أضيف CI assembly لـ`app-release-unsigned.apk` دون أسرار أو keystore. لم تُنسخ أي ملفات أو assets أو secrets من `supoclip-main.zip`؛ المرجع AGPL-3.0 كما يثبت ملف `LICENSE` المرفق، وهو موثق في `docs/THIRD_PARTY_LICENSES.md`.
+
+نتيجة التحقق في هذه الجلسة: `123 passed` لاختبارات pipeline، و`48 passed, 1 skipped` لاختبارات Gateway، و`python3 -m compileall -q pipeline gateway` نجح، و`npm run typecheck` و`npm run build` نجحا بعد `npm ci`. تحقق runtime الفعلي من FFmpeg/ffprobe، واكتشف 6 نماذج معلنة مفقودة وأعاد `runtime_ready=false` كما هو متوقع. محاولة Android Gradle الحالية توقفت لأن Android SDK/`local.properties` غير موجودين في sandbox؛ لذلك لا أضيف ادعاء نجاح بناء Android جديد إلى هذه الجلسة.
+
+## جلسة تدقيق whisper.cpp — 2026-08-26
+
+تم فحص الأرشيف المرفق `whisper.cpp-master.zip` دون نسخ source أو binary أو model إلى المستودع. العينة `examples/whisper.android.java` هي Android Java/JNI ضيقة للـASR المحلي، تعتمد على ملفات المستودع الكامل وCMake/NDK، وتضع نموذج GGML وWAV داخل `assets`. لا تغطي video picker، upload، job lifecycle، checkpoints، diarization، events، candidates، scoring، camera، rendering، أو recovery بعد process death.
+
+القرار هو **IGNORE_REFERENCE** لدمج JNI/CMake/GGML في APK في Wave الحالية، مع **ADD_REFERENCE** لفكرة benchmark/system-info و**IMPROVE_CURRENT** لحفظ timestamps ضمن العقود الحالية. يبقى المسار canonical: Android → Private Gateway → PublikClip Engine → AI/Media Runtime. أي ASR محلي مستقبلي يحتاج provider contract مستقلًا وقياس accuracy/latency/RAM/APK-size/battery على أجهزة حقيقية، ولا يغير remote path الافتراضي.
+
+## Evidence هذه المراجعة
+
+| الفحص | النتيجة |
+|---|---|
+| `python3 -m pytest -q` بعد تثبيت `gateway/requirements.txt` و`pipeline` | 164 passed، 1 skipped، 4 warnings |
+| مراجعة `whisper.cpp/LICENSE` وnotices الفرعية | MIT root؛ notices إضافية داخل اختبارات مقتبسة من OpenAI Whisper |
+| مراجعة Android sample README/JNI | local ASR demo فقط، وليس pipeline أو backend |
+| Git status قبل التعديل | clean على `main`، متتبعًا `origin/main` |
+| نطاق التغييرات في هذه الدفعة | وثائق المقارنة/التراخيص/التدقيق/الخطة والـhandoff، وresumable upload في عميل Android؛ لا production source من whisper.cpp |
+
+## تنفيذ Wave 2/3 المحدود
+
+تم تحديث `android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt` ليستخدم `POST /v1/sources/uploads`، يحسب SHA-256 للملف المحلي، يعيد استخدام جلسة بنفس `(bytes, sha256)` عند retry، يقرأ offset، ويرسل chunks بحجم 4 MiB مع `X-Upload-Offset` و`Content-Range`، ثم ينفذ `complete`. هذا يحافظ على Gateway كمسار المعالجة ولا يضيف whisper.cpp أو runtime native إلى APK.
+
+## Pending work
+
+لم يُثبت في هذه الجلسة Android Gradle build/device smoke أو Gateway production E2E بسبب غياب Android SDK/JDK release وبيئة Gateway خارجية. توحيد error envelope واختبار process death تبقيان ضمن موجات التنفيذ التالية؛ أما Android resumable upload فأُضيف في هذه الدفعة إلى `ProcessingGatewayClient` مع SHA-256 وsession dedupe وoffset/Content-Range، ويظل اختبار interruption على جهاز/Gateway فعلي مطلوبًا. لا يجوز إعلان release نهائي قبل توفير evidence لهذه المسارات.
+
+راجع `docs/REFERENCE_COMPARISON.md` و`docs/REFERENCE_MIGRATION_PLAN.md` و`docs/THIRD_PARTY_LICENSES.md` و`docs/AUDIT.md` قبل بدء أي integration لاحق.
+
+## هذه الجولة — Android resumable upload والتحقق
+
+بعد دمج تغييرات العمل المتوازي، أضيف إلى `GatewayApiClient` مسار resumable فعلي يستخدم `POST /v1/sources/uploads`، SHA-256، `Content-Range`، `X-Upload-Offset`، chunk sizing، واستعلام الحالة عند انقطاع الشبكة. إعادة تشغيل WorkManager بنفس المصدر تعيد استخدام جلسة Gateway الجزئية لأن الخادم يطابق `sha256 + bytes`. أضيفت اختبارات contract للـinitialization، ranges، completion، واستئناف offset، وأصبحت قيمة `llm` جزءًا من `GatewayConfig` بدل hardcoding داخل العميل. أزيل Foojay resolver غير الضروري من `android/settings.gradle.kts` حتى يستخدم البناء JDK المحلي دون plugin خارجي.
+
+نتائج التحقق الأخيرة: `python3 -m compileall -q pipeline/publikclip_pipeline backend gateway` نجح؛ pipeline tests `117 passed`؛ Gateway tests `39 passed, 1 skipped`؛ backend tests `6 passed`؛ وAndroid `:app:compileDebugKotlin :app:assembleDebug` نجح باستخدام JDK 21 وAndroid API 36. نجح subset من Android unit tests. full Android unit-test task وصل إلى runtime لكنه فشل في `RemoteGatewayApiContractTest` بسبب TLS أثناء تنزيل artifact Robolectric عبر `MavenArtifactFetcher`، وليس بسبب compiler error؛ يلزم CI أو بيئة Maven مستقرة لإثبات اختبار HTTP الكامل. لم يُعتمد device/emulator smoke.
+
+الـreference الإضافي في هذه الجولة هو `VideoClipper-main` المرفق بترخيص MIT؛ تمت إضافة تفاصيله إلى `docs/REFERENCE_COMPARISON.md` و`docs/THIRD_PARTY_LICENSES.md`، ولم تُنسخ منه ملفات إلى production.

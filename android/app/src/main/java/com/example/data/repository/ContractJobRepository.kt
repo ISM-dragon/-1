@@ -125,7 +125,7 @@ class ContractJobRepository(private val context: Context) {
                         id = item.optString("id"), title = item.optString("title"), mediaUrl = item.optString("mediaUrl"),
                         startSeconds = item.optInt("startSeconds"), endSeconds = item.optInt("endSeconds"),
                         durationSeconds = item.optInt("durationSeconds"), score = item.optInt("score"),
-                        transcript = item.optString("transcript"), filename = item.optString("filename")
+                        transcript = item.optString("transcript"), filename = item.optString("filename"), sha256 = item.optString("sha256").takeIf { it.isNotBlank() }
                     )
                 )
             }
@@ -139,7 +139,7 @@ class ContractJobRepository(private val context: Context) {
                 put("id", item.id); put("title", item.title); put("mediaUrl", item.mediaUrl)
                 put("startSeconds", item.startSeconds); put("endSeconds", item.endSeconds)
                 put("durationSeconds", item.durationSeconds); put("score", item.score)
-                put("transcript", item.transcript); put("filename", item.filename)
+                put("transcript", item.transcript); put("filename", item.filename); item.sha256?.let { put("sha256", it) }
             })
         }
         prefs.edit().putString("artifacts_$jobId", array.toString()).apply()

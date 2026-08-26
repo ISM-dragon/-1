@@ -9,6 +9,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.security.MessageDigest
 import java.net.URI
 import java.util.UUID
 
@@ -87,8 +88,26 @@ class ApiContractClient(private val contentResolver: ContentResolver) {
                 require(artifact.mediaUrl.startsWith("http")) { "رابط النتيجة غير صالح" }
                 val connection = openConnection(artifact.mediaUrl, config.token, "GET")
                 try {
-                    connection.inputStream.use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    connection.inputStream.use { input ->
+                        destination.outputStream().use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                digest.update(buffer, 0, count)
+                                output.write(buffer, 0, count)
+                            }
+                        }
+                    }
                     require(destination.isFile && destination.length() > 0) { "ملف النتيجة فارغ" }
+                    artifact.sha256?.trim()?.lowercase()?.takeIf { it.isNotBlank() }?.let { expected ->
+                        val actual = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+                        if (actual != expected) {
+                            destination.delete()
+                            error("فشل التحقق من سلامة ملف النتيجة")
+                        }
+                    }
                     destination
                 } finally {
                     connection.disconnect()
@@ -130,17 +149,39 @@ class ApiContractClient(private val contentResolver: ContentResolver) {
         val stream = if (status in 200..299) connection.inputStream else connection.errorStream
         val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
         if (status !in 200..299) {
-            val detail = runCatching { JSONObject(text).optString("detail") }.getOrNull().orEmpty()
-            val safeMessage = detail.ifBlank { text }.take(300).ifBlank { connection.responseMessage.orEmpty() }
-            throw ApiContractException(
-                ApiError(
-                    code = codeFor(status, safeMessage),
-                    message = safeMessage,
-                    retryable = status == 408 || status == 425 || status == 429 || status >= 500
-                )
-            )
+            throw ApiContractException(parseApiError(status, text, connection.responseMessage.orEmpty()))
         }
         return JSONObject(text)
+    }
+
+    private fun parseApiError(status: Int, body: String, responseMessage: String): ApiError {
+        val json = runCatching { JSONObject(body) }.getOrNull()
+        val detail = json?.opt("detail")
+        var code: String? = null
+        var message: String? = null
+        when (detail) {
+            is JSONObject -> {
+                code = detail.optString("code").takeIf { it.isNotBlank() }
+                message = detail.optString("message").takeIf { it.isNotBlank() }
+            }
+            is String -> {
+                message = detail.takeIf { it.isNotBlank() }
+                code = message?.let { codeFor(status, it) }?.takeIf { it != "HTTP_$status" }
+            }
+        }
+        val errors = json?.optJSONArray("errors")
+        val firstError = errors?.optJSONObject(0)
+        if (firstError != null) {
+            code = code ?: firstError.optString("code").takeIf { it.isNotBlank() }
+            message = message ?: firstError.optString("message").takeIf { it.isNotBlank() }
+        }
+        val safeMessage = (message ?: body).take(300).ifBlank { responseMessage }
+        return ApiError(
+            code = code ?: codeFor(status, safeMessage),
+            message = safeMessage,
+            requestId = json?.optString("request_id")?.takeIf { it.isNotBlank() },
+            retryable = status == 408 || status == 425 || status == 429 || status >= 500
+        )
     }
 
     private fun codeFor(status: Int, message: String): String = when {

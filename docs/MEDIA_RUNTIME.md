@@ -1,41 +1,47 @@
-# Media Runtime Contract
+# Media Runtime
 
-## المسؤولية
+**المكان:** Private backend وPublikClip Engine.
 
-Media Runtime يعمل على private backend فقط. وظيفته فحص المصدر، probing، استخراج الصوت والإطارات، normalization إلى CFR عند الحاجة، transcoding، rendering، وإزالة الملفات المؤقتة بعد نجاح أو فشل job.
+## دورة الوسائط
 
-## المسار
+تبدأ كل وظيفة بـprobe وvalidation قبل تشغيل AI. يُحفظ المصدر في job-private directory، وتُستخرج نسخة audio عند الحاجة، وتُستخدم frame extraction وCFR/transcoding حسب متطلبات stages. بعد render يتحقق النظام من وجود MP4 غير صفري، وقابلية القراءة، والحجم، والـchecksum، ثم ينشر artifact عبر Gateway المحمي. تُحذف الملفات المؤقتة فقط بعد نجاح النشر أو وفق retention policy تشخيصية.
 
-```text
-source upload
-  → validation/probe
-  → audio extraction
-  → frame extraction
-  → ASR/analysis artifacts
-  → candidate render
-  → caption/camera composition
-  → MP4 artifact
-  → authorized download
-```
+| العملية | شرط النجاح |
+|---|---|
+| Probe | وجود container/streams وduration قابلة للقراءة. |
+| Validate | صيغة وحجم وcodec ضمن policy، مع رفض الملف الفاسد قبل pipeline. |
+| Audio extraction | ملف audio قابل للقراءة ومعدل عينة مناسب للـASR. |
+| Frame extraction | timestamps منتظمة لاستخدام face/speaker analysis. |
+| CFR/transcode | مصدر متوافق مع render دون drift أو variable-rate مفاجئ. |
+| Render | خروج clip يطابق 9:16 وإعدادات captions/camera المطلوبة. |
+| Cleanup | إزالة temp files دون حذف checkpoints أو outputs المنشورة. |
 
-يُعاد استخدام artifact الموجود في checkpoint صالح، ولا تُعاد معالجة الفيديو كاملًا بعد restart بلا سبب. يجب أن تكون الكتابة atomic وأن تبقى الملفات الجزئية خارج result index.
+## الأخطاء المستقرة
 
-## تصنيف الأخطاء
+| code | المعنى | قابلية retry |
+|---|---|---:|
+| `MEDIA_INVALID` | الملف غير قابل للفحص أو فاسد | لا |
+| `FFMPEG_MISSING` | الأدوات غير مثبتة أو غير قابلة للتشغيل | بعد إصلاح الخادم فقط |
+| `FFMPEG_FAILED` | فشل أمر FFmpeg بعد validation | حسب السبب |
+| `MODEL_MISSING` | نموذج مطلوب غير موجود | بعد التثبيت |
+| `MODEL_INVALID` | checksum أو metadata غير صالح | بعد إعادة التنزيل |
+| `INSUFFICIENT_DISK` | المساحة غير كافية للمصدر/intermediates/output | بعد التنظيف أو زيادة المساحة |
+| `UNSUPPORTED_FORMAT` | container/codec خارج policy | لا |
 
-| الكود | المعنى | retry |
-|---|---|---|
-| `MEDIA_INVALID` | الملف تالف أو لا يحتوي stream صالحًا | لا |
-| `UNSUPPORTED_FORMAT` | الحاوية أو codec غير مدعوم | لا |
-| `FFMPEG_MISSING` | binary أو capability المطلوبة غير متاحة | لا حتى إصلاح البيئة |
-| `FFMPEG_FAILED` | فشل أمر FFmpeg أثناء التحويل أو التصيير | حسب السبب |
-| `MODEL_MISSING` | model artifact غير مثبت | لا حتى التثبيت |
-| `MODEL_INVALID` | checksum/metadata/تحميل النموذج غير صالح | لا حتى الإصلاح |
-| `INSUFFICIENT_DISK` | لا توجد مساحة كافية للعمل أو النتيجة | لا حتى التنظيف/التوسعة |
+لا يضمّن Gateway command lines كاملة أو مسارات host أو secrets في response للعميل. تُحفظ التفاصيل محليًا في logs مرتبطة بـ`correlation_id`.
 
-## حدود Android
+### المراجع
 
-Android يختار URI ويرفع المصدر ويحفظ النتيجة محليًا للعرض أو التصدير. لا يعتمد APK على FFmpeg server binary أو Python desktop runtime. Media3 وواجهات preview/edit الخفيفة لا تُعامل كبديل عن server renderer.
+[1]: ../pipeline/publikclip_pipeline/media/ "Media pipeline modules"
+[2]: ../pipeline/publikclip_pipeline/render/ "Rendering and FFmpeg resolution"
+[3]: ../gateway/main.py "Upload validation and media delivery"
+[4]: ../gateway/processing_service.py "Processing bridge"
+[5]: ../evidence/gateway_smoke.json "Observed invalid-media behavior"
 
-## Cleanup وintegrity
+## References
 
-ينبغي ربط كل source وartifact بـjob ID، منع path traversal، تنظيف orphan uploads بعد retention معلن، وفحص حجم الملف ووجوده قبل إرجاعه للعميل. تُحفظ SHA-256 للـrelease/artifact في evidence عندما يكون ذلك جزءًا من acceptance.
+[1]: ../pipeline/publikclip_pipeline/media/ "Media pipeline modules"
+[2]: ../pipeline/publikclip_pipeline/render/ "Rendering and FFmpeg resolution"
+[3]: ../gateway/main.py "Upload validation and media delivery"
+[4]: ../gateway/processing_service.py "Processing bridge"
+[5]: ../evidence/gateway_smoke.json "Observed invalid-media behavior"

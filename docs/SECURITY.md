@@ -1,29 +1,40 @@
 # Security Boundary
 
-## Threat model
+## نموذج التهديد
 
-المشروع تطبيق شخصي أمام private processing service، وليس SaaS عامًا. الخطر الأساسي هو كشف source media أو Gateway token أو provider secrets، أو السماح بتنزيل artifact لا يخص job، أو تشغيل Gateway بلا مصادقة.
+المنتج شخصي، لكن الفيديوهات والـtranscripts حساسة. التهديدات الأساسية هي تسريب provider keys، كشف media URLs، anonymous Gateway access، path traversal، رفع ملفات فاسدة أو ضخمة، وترك artifacts في public storage. التصميم يقلل ذلك بفصل Android عن runtime الخاص، وبحصر auth والتخزين والمزودات في Gateway.
 
-## Controls
-
-| المجال | الضابط |
+| الأصل | الحماية المطلوبة |
 |---|---|
-| Android secrets | حفظ token عبر secure key manager وعدم تضمينه في APK أو logs |
-| Transport | HTTPS لكل Gateway غير loopback؛ HTTP المحلي للاختبارات فقط |
-| Gateway auth | Bearer token إلزامي في deployment الخاص، مع fail-closed configuration |
-| Provider secrets | Gemini وأي مفاتيح AI تبقى server-side ولا تعبر إلى Android |
-| Artifact access | authorization على job/artifact، منع path traversal، وفحص file existence/size |
-| Uploads | فحص media مبكر، حدود حجم/مساحة، وcleanup للملفات الجزئية واليتيمة |
-| Logs | عدم طباعة tokens أو prompts الحساسة أو stack traces للمستخدم |
-| Backup | مراجعة Android backup حتى لا تُنسخ secrets أو media الخاصة بلا سياسة |
-| Dependencies | تثبيت versions وفحص license/provenance قبل إضافة dependency |
+| Gateway token | لا يضمّن في source أو APK؛ يُخزن في secure storage ويُمرر عبر HTTPS. |
+| Provider keys | `gateway/secret_vault.py` أو secret manager على الخادم فقط. |
+| Source media | job-private storage، checksum، policy للحجم والصيغة، وretention واضح. |
+| Outputs | media route محمي بـBearer ولا يعيد filesystem path داخليًا. |
+| Job state | SQLite volume دائم مع correlation/request IDs ومنع تعديل state من العميل. |
+| Upload | offset مثبت، SHA-256، filename normalization، ورفض invalid range. |
+| Logs | لا transcripts أو tokens أو command secrets في response/log public. |
+| Deployment | شبكة خاصة أو reverse proxy/VPN، HTTPS، `REQUIRE_GATEWAY_TOKEN=true`، وvolume دائم. |
 
-## Release
+## قواعد Android
 
-توقيع release keystore خارج المستودع عبر متغيرات البيئة. لا تُرفع ملفات `.env` أو keystore أو models أو قواعد بيانات evidence تحتوي بيانات حقيقية. يجب إعادة فحص APK بحثًا عن secrets قبل التوزيع.
+لا يحتوي APK على Python أو uv أو pip أو Rust أو Node أو FFmpeg binaries أو model weights أو Gemini key. لا تُضاف صلاحيات واسعة بلا مبرر. يجب طلب `POST_NOTIFICATIONS` عند الحاجة فقط، ونسخ URI إلى `filesDir` بدل منح الخادم وصولًا مباشرًا إلى content provider. يجب مسح الملفات المؤقتة بعد النجاح أو وفق retention policy.
 
-## Scope exclusions
+## قواعد النشر الشخصي
 
-لا توجد multi-user accounts أو billing أو social OAuth live ضمن الحد الأدنى. إضافة هذه المكونات توسّع threat model وتتطلب مراجعة مستقلة.
+SQLite وworker واحد مناسبان لمستخدم واحد، لكنهما لا يقدمان horizontal scaling أو multi-tenant isolation. لا يجوز فتح Gateway على الإنترنت العام بلا HTTPS وtoken وreverse proxy مناسب. الأسرار والقيم الإنتاجية توضع في environment/secret manager خارج Git؛ ملفات `.env.example` placeholders فقط.
 
-> هذا توثيق هندسي لتقليل المخاطر وليس اعتمادًا أمنيًا أو قانونيًا.
+### المراجع
+
+[1]: ../gateway/secret_vault.py "Gateway secret boundary"
+[2]: ../gateway/main.py "Auth, upload, and media routes"
+[3]: ../android/app/src/main/AndroidManifest.xml "Android permissions"
+[4]: ../.env.example "Example configuration without secrets"
+[5]: ../docker-compose.gateway.yml "Private deployment shape"
+
+## References
+
+[1]: ../gateway/secret_vault.py "Gateway secret boundary"
+[2]: ../gateway/main.py "Auth, upload, and media routes"
+[3]: ../android/app/src/main/AndroidManifest.xml "Android permissions"
+[4]: ../.env.example "Example configuration without secrets"
+[5]: ../docker-compose.gateway.yml "Private deployment shape"

@@ -1,46 +1,65 @@
-# Third-Party Licenses and Provenance
+# Third-Party Licenses
 
-**Scope:** PublikClip/ISM Android client, private Gateway, Python Engine, and the attached `autoclip-main.zip` reference.
+**الغرض:** سجل audit للتراخيص قبل أي دمج من المشروع المرجعي أو إضافة dependency.
 
-## Policy
+## نتيجة مراجعة الأرشيفات المرجعية
 
-لا تُدمج شفرة أو نماذج أو خطوط من مشروع مرجعي دون تحديد الترخيص وحقوق الإسناد وتوافق dependency. لا تُحفظ مفاتيح API أو ملفات نماذج runtime أو build artifacts في Git. عند عدم وضوح الترخيص، يكون القرار `IGNORE_REFERENCE` أو إعادة تنفيذ مستقلة بعد مراجعة قانونية.
+### whisper.cpp-master.zip
 
-## Reference archive
+يحتوي الأرشيف المرفق على `LICENSE` بترخيص MIT، مع copyright notice منسوب إلى The ggml authors. توجد أيضًا notices خاصة بأجزاء اختبارية مقتبسة من OpenAI Whisper داخل مجلدات tests، ولذلك لا يُفترض أن كل ملف في المستودع يملك notice واحدًا بمجرد قراءة الترخيص الجذري. عينة Android تعتمد على مصدر whisper.cpp وggml من المستودع الكامل، وعلى CMake/NDK، وتضمّن نموذجًا محليًا داخل assets بحسب README. لم تُنسخ أي ملفات أو نماذج أو binaries إلى المستودع الهدف، فلا يضاف dependency notice تشغيلي إلى APK في هذه الدفعة.
 
-| المادة | المصدر | الترخيص الظاهر | حالة الدمج |
+| المصدر | الترخيص المرصود | ما استُخدم من المصدر | القرار |
 |---|---|---|---|
-| تطبيق Autoclip Python/frontend/tests | `autoclip-main.zip`، ملف `LICENSE` | MIT، Copyright 2026 Jad Ghazi | لم تُنسخ ملفات إلى المستودع الأساسي |
-| Docker/compose في المرجع | `autoclip-main/docker/` | يخضع لملف LICENSE العام ما لم يظهر notice مختلف | لم يُدمج؛ يحتاج مراجعة تشغيلية مستقلة |
-| frontend dependencies | `autoclip-main/frontend/package.json` وlockfile | تراخيص upstream لكل dependency | لم تُنقل إلى مشروع Android أو app |
-| Python dependencies | `autoclip-main/pyproject.toml` | تراخيص upstream لكل dependency | لم تُضاف بسبب اختلاف runtime والعقود |
+| whisper.cpp root | MIT | قراءة LICENSE وREADME والعينة فقط | لا نسخ؛ إذا أضيفت dependency مستقبلًا يجب حفظ MIT notice. |
+| whisper.cpp `ggml/` | MIT-style notice كما يظهر في الأرشيف | مقارنة CMake/JNI/ASR فقط | لا نسخ؛ يلزم file-level audit قبل أي vendoring. |
+| whisper.cpp test normalizers | OpenAI Whisper MIT notice | لم يُستخدم | لا نسخ ولا dependency. |
+| whisper.cpp Android sample | MIT-covered source plus repository dependencies | fit check معماري فقط | IGNORE_REFERENCE للـAPK الحالي؛ لا نقل مباشر. |
 
-## Existing project provenance
+### SupoClip reference
 
-السجل التفصيلي للشفرة المقتبسة أو المكيّفة والنماذج والخطوط موجود في [`../VENDORED-LICENSES.md`](../VENDORED-LICENSES.md). وهو المرجع الأساسي لأي notice إضافي، ولا يُعاد نسخ المعلومات هنا على نحو قد يسبب drift.
+الأرشيف `supoclip-main.zip` يحتوي على ملف `LICENSE` نصه **GNU Affero General Public License v3.0**، مع copyright notice منسوب إلى Sami Hindi. لذلك فإن أي نسخ أو adaptation من كود SupoClip يحتاج مراجعة قانونية لتوافق AGPL-3.0 مع ترخيص المستودع الهدف، وحفظ notices المناسبة، وتحديد corresponding source عند التوزيع. في هذه الدفعة لم تُنسخ أي ملفات source أو binary أو asset من الأرشيف.
 
-| الفئة | أمثلة مسجلة | الملاحظة |
-|---|---|---|
-| Code adaptations | clip-forge، clippyme، openshorts، whisperX، 3D-Speaker، autoclip | موثقة مع upstream/license/path في `VENDORED-LICENSES.md` |
-| Model weights | Whisper، wav2vec2، Silero، CAM++، PANNs، UltraFace، LR-ASD وغيرها | تُنزّل runtime ولا تُوزع من هذا المستودع وفق السجل الحالي |
-| Fonts | Anton، Inter، Public Sans، Martian Mono، Archivo Black | SIL OFL 1.1 وفق السجل الموجود في pipeline |
-| Android libraries | Compose، Room، WorkManager، Media3، ML Kit | يجب الرجوع إلى Gradle resolution وnotices عند توزيع APK |
-| Python libraries | FastAPI، SQLite bindings، FFmpeg integrations، ML stack | لا يُفترض ترخيص موحّد؛ يجب الاحتفاظ بملفات lock وmetadata |
+| المصدر | الترخيص المرصود | ما استُخدم من المصدر | القرار |
+|---|---|---|---|
+| SupoClip reference ZIP | AGPL-3.0 | مقارنة architecture/UX فقط | لا نسخ؛ الأفكار العامة يعاد تنفيذها مستقلًا. |
+| whisper.cpp reference ZIP | MIT؛ مع notices فرعية داخل tests | مقارنة Android/JNI/ASR فقط | لا نسخ؛ أي استخدام لاحق يحتاج notice وfile-level dependency audit. |
+| Target root | كما هو موثق في `LICENSE` | كود المستودع الحالي | يبقى notice الحالي دون تغيير. |
+| Pipeline caption font | notice موجود داخل `pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt` | font asset الحالي | يحتفظ notice المحلي وشروط OFL الخاصة به. |
+| Vendor model/code | notices ومسارات vendor داخل `pipeline/publikclip_pipeline/vendor/` و`VENDORED-LICENSES.md` | الموجود مسبقًا في الهدف | لا تعديل للـnotice؛ أي تحديث يحتاج مراجعة مستقلة. |
+| Android/Gradle/npm dependencies | تراخيص upstream غير منسوخة إلى source | dependencies build-time/runtime | يجب توليد/مراجعة dependency notice عند التوزيع النهائي. |
 
-## Deliberately excluded material
+## قواعد الدمج
 
-لم تُنقل من المرجع واجهة `frontend/` كاملة، أو مجلد `autoclip/`، أو build caches، أو ملفات models، أو `.env`، أو مفاتيح، أو ملفات قاعدة بيانات، أو أي code بلا license واضح. كما لا تُستخدم أجزاء المرجع ذات شروط cloud/proprietary إن ظهرت كاعتماد منفصل.
+قبل إدخال dependency أو file من مشروع آخر يجب تحديد license على مستوى repository وfile، وفحص dependency transitive ذات الصلة، وتسجيل copyright/notice، والتحقق من compatibility. إذا كان الترخيص غير واضح أو غير متوافق، لا يُنسخ الكود؛ تُكتب implementation مستقلة مبنية على السلوك العام فقط. لا تُقبل build outputs أو secrets أو model artifacts من مشاريع مرجعية.
 
-## Compliance checklist قبل التوزيع
+## فحص المستودع
 
-| الفحص | الحالة |
-|---|---|
-| وجود LICENSE للمشروع الأساسي | موجود: `LICENSE` — AGPL-3.0-or-later |
-| provenance للشفرة المكيّفة | موجود: `VENDORED-LICENSES.md` |
-| عدم نسخ المرجع كاملًا | متحقق في مرحلة التدقيق |
-| فحص secrets و`.env` وkeys | يجب إعادة تشغيله في CI/release |
-| Android dependency notices | مطلوب قبل توزيع APK النهائي |
-| نماذج runtime وterms | مطلوب توثيقه عند تثبيت كل model version |
-| التحقق من compatibilty بين AGPL وdependencies | مطلوب لأي dependency جديدة |
+تم التفريق بين source المتعقب وملفات build/cache. لا يُعتد بملفات `node_modules` أو Gradle caches كمرجع ترخيص للمشروع، ولا تُضاف إلى Git. يظل `VENDORED-LICENSES.md` وnotices المحلية مصدر المراجعة للمواد الموجودة بالفعل.
 
-> هذا السجل توثيق هندسي وليس رأيًا قانونيًا. التوزيع العام أو إعادة الترخيص يحتاج مراجعة قانونية مناسبة، خصوصًا عند دمج AGPL مع مكونات خارجية أو نشر خادم معدل عبر الشبكة.
+> هذا سجل هندسي وليس رأيًا قانونيًا. يلزم counsel review قبل توزيع APK أو Gateway مشتق إذا أُضيف كود AGPL أو dependency ذات copyleft متعارض.
+
+## References
+
+[1]: https://github.com/FujiwaraChoki/supoclip "Reference project represented by supplied archive"
+[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
+[3]: ../LICENSE "Target license"
+[4]: ../VENDORED-LICENSES.md "Existing vendor notices"
+[5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"
+[6]: ../../upload/whisper.cpp-master.zip "Supplied whisper.cpp archive; not committed"
+[7]: https://github.com/ggerganov/whisper.cpp/blob/master/LICENSE "whisper.cpp MIT license"
+
+### VideoClipper-main المرفق
+
+يحتوي `VideoClipper-main/LICENSE` على **MIT License** مع `Copyright (c) 2026 Kacper`. فُحصت الملفات `ai_utils.py`, `video_utils.py`, و`app.py` على مستوى المكوّنات، ولم يُنسخ أي منها إلى production. استُخدمت أفكار عامة فقط في المقارنة: audio-energy fallback، face EMA/interpolation، crop presets، وcaption styling. لا توجد إشعارات تشغيلية جديدة مطلوبة ما دام الدمج إعادة تنفيذ مستقلة.
+
+| المصدر | الترخيص المرصود | ما استُخدم | القرار |
+|---|---|---|---|
+| `VideoClipper-main/app.py` | MIT ضمن repository | مقارنة Streamlit UX فقط | لا نسخ؛ IGNORE_REFERENCE للـAPK/Gateway |
+| `VideoClipper-main/ai_utils.py` | MIT ضمن repository | مقارنة ASR/Gemini/fallback فقط | لا نسخ؛ provider secrets تبقى server-side |
+| `VideoClipper-main/video_utils.py` | MIT ضمن repository | مقارنة crop/caption/RMS فقط | لا نسخ؛ إعادة تنفيذ مستقلة عند الحاجة |
+| `VideoClipper-main/LICENSE` | MIT، copyright Kacper | license audit | يُحفظ النص إذا حدث نسخ فعلي مستقبلًا |
+
+[8]: ../../references/VideoClipper-main/LICENSE "Attached VideoClipper MIT license"
+[9]: ../../references/VideoClipper-main/README.md "Attached VideoClipper README"
+[10]: ../../references/VideoClipper-main/ai_utils.py "Attached VideoClipper AI helpers"
+[11]: ../../references/VideoClipper-main/video_utils.py "Attached VideoClipper media helpers"

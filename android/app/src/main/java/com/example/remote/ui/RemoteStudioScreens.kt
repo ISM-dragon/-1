@@ -357,7 +357,7 @@ private fun SettingsScreen(state: RemoteUiState, viewModel: RemoteStudioViewMode
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(if (health.ok) "الاتصال ناجح" else "الاتصال غير جاهز", fontWeight = FontWeight.SemiBold)
                     Text(health.message)
-                    Text("Gateway: ${health.gatewayReady} · Pipeline: ${health.pipelineReady} · FFmpeg: ${health.ffmpegReady}")
+                    Text("Gateway: ${health.gatewayReady} · Pipeline: ${health.pipelineReady} · FFmpeg: ${health.ffmpegReady} · Runtime: ${health.runtimeReady}")
                 }
             }
         }

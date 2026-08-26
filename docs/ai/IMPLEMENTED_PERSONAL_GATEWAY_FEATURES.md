@@ -2,7 +2,7 @@
 
 ## Android → Gateway → Python → Gemini
 
-The Android worker uses the configured Gateway URL and encrypted Gateway token from the existing Social Gateway settings. For a local video, Android streams the MP4 to `POST /v1/sources/upload`. The Gateway stores the file under its private source directory, starts `POST /v1/processing/jobs`, and returns progress through `GET /v1/processing/jobs/{id}`. The Python pipeline runs with server-side credentials and writes rendered clips. Android downloads the verified MP4 files and imports them into Room.
+The Android worker uses the configured Gateway URL and encrypted Gateway token from the existing Social Gateway settings. For a local video, Android computes its SHA-256, creates a session through `POST /v1/sources/uploads`, sends 4 MiB chunks with `X-Upload-Offset` and `Content-Range`, and completes the session after the Gateway verifies size, checksum, and media validity. A retry reuses an in-progress session with the same `(bytes, sha256)` when available. The Gateway then stores the file under its private source directory, starts `POST /v1/processing/jobs`, and returns progress through `GET /v1/processing/jobs/{id}`. The Python pipeline runs with server-side credentials and writes rendered clips. Android downloads the verified MP4 files and imports them into Room.
 
 Gemini credentials are intentionally not sent by Android. They are resolved on the Gateway or pipeline host from server-side environment variables or its private secrets file.
 

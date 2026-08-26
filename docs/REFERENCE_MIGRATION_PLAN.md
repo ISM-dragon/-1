@@ -1,52 +1,51 @@
-# خطة ترحيل PublikClip من المقارنة المرجعية
+# خطة ترحيل الأفكار المرجعية
 
-**الحالة:** خطة معتمدة للتنفيذ التدريجي، وليست تصريحًا بنسخ المشروع المرجعي.
+**الحالة:** معتمدة للتنفيذ التدريجي، وليست تصريحًا بنسخ أي مشروع مرجعي. أضيف إلى نطاق التدقيق في 2026-08-26 أرشيف `whisper.cpp-master.zip` كمرجع Android/JNI/ASR فقط.
 
 ## المبدأ
 
-يُنفّذ الترحيل من خلال عقود واضحة واختبارات regression، مع إبقاء المسار العامل في المشروع الأساسي. لا يتم استبدال stage أو dependency أو backend لمجرد أن المرجع يملك implementation مختلفة. كل تغيير يجب أن يثبت فائدته في Android compatibility أو correctness أو stability أو performance.
+المسار المستهدف هو Android APK شخصي يتصل بـPrivate Gateway. ستُرحّل الأفكار التي تخدم هذا المسار فقط، وبحدود عقود واضحة. كل تغيير cross-component يبدأ بتثبيت contract واختبار regression، ثم يُدمج على دفعة صغيرة يمكن التراجع عنها. لا يُسمح بإعادة بناء المشروع من الصفر، ولا بإدخال user accounts أو billing أو Redis أو مزودات جديدة لمجرد مطابقة المرجع.
 
-## Wave 1 — Audit وArchitecture
+## الموجات
 
-| المخرج | الحالة | معيار القبول |
-|---|---|---|
-| مقارنة code/feature/license | مكتمل | `REFERENCE_COMPARISON.md` و`THIRD_PARTY_LICENSES.md` |
-| تثبيت Gateway كـcanonical Android backend | مكتمل توثيقيًا | Android contract يشير إلى `/v1/*` وGateway job ID |
-| تعريف Engine facade | موجود | `backend/engine.py` وpipeline engine contracts |
-| تحديد ownership | مكتمل | Android، Gateway، Engine، Models، Media Runtime موثقة منفصلة |
-| تحديد blockers | موجود | `docs/RELEASE_BLOCKERS.md` و`docs/FINAL-ACCEPTANCE.md` |
+| الموجة | النطاق | مخرجاتها | بوابة الانتقال |
+|---|---|---|---|
+| Wave 1 — Audit | مقارنة الكود والميزات والتراخيص | هذه المقارنة، قرارات الدمج، وثائق architecture/contracts | لا production replacement قبل اكتمال الوثائق. |
+| Wave 2 — Engine/Runtime | تثبيت Engine facade، lifecycle، media errors، model diagnostics | عقود v1، checkpoints، failure envelope، اختبارات restart/cancel/resume | جميع اختبارات Python الحالية تمر، مع evidence لاختبار failure paths. |
+| Wave 3 — Android Core | upload sessions، Room state، WorkManager، notifications، secure config | APK client لا يعرف Python ولا الأسرار | unit/lint/build، ثم device test على جهاز فعلي. |
+| Wave 4 — Integration | ربط APK بـGateway خاص، تنزيل النتائج، preview/edit/export | E2E من URI إلى artifact | job ID، stage evidence، hashes، وعدم وجود mock في المسار الأساسي. |
+| Wave 5 — Release QA | توقيع، device matrix، network loss، process death، restart/recovery | release APK وrelease evidence | لا تغلق blockers دون دليل تشغيل فعلي. |
 
-## Wave 2 — Engine وAI/Media وBackend foundations
+## ترتيب التغييرات
 
-يجب أولًا تثبيت lifecycle واحد للحالة، ثم مراجعة media validation وerror taxonomy. يحتفظ Engine بالمراحل الحالية: ingest، ASR، diarization، events، candidates، scoring، camera، render. تُضاف اختبارات للـresume من checkpoint، وتُمنع أخطاء LLM القابلة للتجاوز من إسقاط المهمة كاملة عندما يتوفر deterministic fallback.
+أولًا، يجب تثبيت `/v1` وعقد `ProcessingEngine` بحيث تظل مراحل `ingest → asr → diarize → events → candidates → score → camera → render` خلف facade واحدة. ثانيًا، تم تحسين upload/session في العميل canonical دون تغيير one-shot compatibility route. ثالثًا، يجب استكمال Android UX على شكل Home → Import → Generate → Processing → Results → Review → Edit → Render → Export، مع تخزين حالة job في Room واستخدام WorkManager للاستمرار.
 
-لا تُنقل نماذج Whisper أو diarization إلى Android. Model Manager يبقى server-side ويعرض الاسم والإصدار والحجم والـchecksum والمصدر والحالة الصحية. FFmpeg يبقى server-side ويجب أن يصنّف `MEDIA_INVALID` و`FFMPEG_MISSING` و`FFMPEG_FAILED` و`MODEL_MISSING` و`MODEL_INVALID` و`INSUFFICIENT_DISK` و`UNSUPPORTED_FORMAT`.
+بعد ذلك فقط تُضاف أفكار المرجع ذات القيمة المحدودة: presets للـcaptions، بيانات rubric واضحة للـscoring، وعمليات trim/split/merge في شاشة التحرير، ومبدأ تسجيل benchmark/system-info المستقل. هذه الإضافات يجب أن تعمل فوق artifacts والعقود الحالية؛ لا يجوز أن تجعل Android يعيد transcription أو يشغل FFmpeg محليًا. وبالنسبة إلى whisper.cpp، لا يُنقل JNI/CMake أو نموذج GGML إلى APK في هذه الموجة؛ أي مسار ASR محلي مستقبلي يحتاج عقد `LocalAsrProvider` منفصلًا، إدارة model/checksum، قياسًا على أجهزة فعلية، ومقارنة accuracy/latency/RAM مع WhisperX قبل تفعيله. أما B-roll، النشر الاجتماعي، MCP، الحسابات، billing، والـmulti-user فخارج هذه الخطة.
 
-## Wave 3 — Android core وUI وbuild
+## ضوابط الترحيل
 
-يحافظ Android على Compose وRoom وWorkManager وMedia3 وURI handling. المسار المطلوب هو Home → Import → Generate → Processing → Results → Clip Review → Edit → Render → Export. لا يُنقل Tauri desktop UI إلى Android حرفيًا، ولا يُضاف Python/uv/FFmpeg/Node/Rust إلى APK.
+| الخطر | الضابط |
+|---|---|
+| كسر checkpoints القديمة | قراءة legacy envelopes، وكتابة versioned envelopes، واختبار resume من كل stage. |
+| اختلاف نتائج scoring | إطلاق rubric versioned وتسجيله في job metadata، ثم مقارنة النتائج قبل تغيير default. |
+| تضخم APK | فحص APK archive يمنع Python/uv/Node/Rust/FFmpeg وWhisper/GGML models والنماذج والأسرار. |
+| فقد upload عند انقطاع الشبكة | offset + SHA-256 + idempotency key، واختبار interruption/resume. |
+| تسرب الأسرار | provider keys في Gateway فقط، وAndroid لا يستقبل إلا capability/result آمنًا. |
+| التباس بين Android native وTauri Android | artifact واحد وapplication ID واحد للمسار الشخصي؛ Tauri يبقى مسارًا منفصلًا. |
+| نسخ ترخيص غير واضح | إعادة التنفيذ المستقل عند أي غموض، وإضافة سجل إلى `THIRD_PARTY_LICENSES.md` قبل الدمج؛ whisper.cpp MIT-style لا يعني نسخ source بلا حفظ notice. |
 
-يبقى `GatewayProcessingWorker` مسؤولًا عن الرفع، إنشاء job، polling، حفظ remote job ID، retry، cancellation، واستعادة الحالة. يجب أن يفشل الإعداد غير الآمن closed: عنوان Gateway للإنتاج HTTPS ورمز Bearer غير فارغ. يثبت build في CI، بينما توقيع release يتطلب keystore خارج المستودع.
+## بوابة whisper.cpp المستقبلية
 
-## Wave 4 — Integration
+لا تُفتح تذكرة دمج native ASR إلا إذا توفرت عينة صوت وفيديو ممثلة، baseline موثق لـWhisperX، ومقارنة قابلة لإعادة الإنتاج لزمن ASR، الذاكرة، الدقة، حجم APK، واستهلاك البطارية. يجب أن يكون التشغيل opt-in ولا يغير المسار remote الافتراضي، وأن تعالج العملية النماذج القابلة للتنزيل والتحقق والحذف دون وضعها داخل Git.
 
-يُختبر تنفيذ Android مع Gateway خاص فعلي، وليس localhost داخل sandbox. يجب أن يتطابق job ID المحلي والبعيد، وأن تبقى artifacts قابلة للتنزيل بعد restart للـGateway أو التطبيق. تُراجع idempotency، network loss، retry، resume، authorization على artifacts، وcleanup للملفات المؤقتة.
+## معايير التراجع
 
-## Wave 5 — E2E وQA وRelease
+يُلغى التغيير إذا أدى إلى فشل في build أو regression suite، أو زاد زمن المعالجة/الذاكرة دون evidence، أو غيّر output السابق دون versioning، أو احتاج dependency غير متوافقة مع Android/ترخيص المشروع، أو جعل failure في LLM أو FFmpeg يسبب crash بدل error قابل للفحص.
 
-لا يغلق الإصدار إلا بعد تشغيل فيديو حقيقي من Android حتى MP4 نهائي ثم preview/edit/render-again/export، مع إثبات restart وnetwork interruption وfailure recovery. تُحفظ SHA-256 للـAPK والـartifacts، وسجل الجهاز وlogcat وtransition history. نجاح compilation أو unit tests وحده غير كافٍ.
+## References
 
-## التغييرات المسموح بها في هذه الخطة
-
-| التغيير | القرار | الشرط |
-|---|---|---|
-| إضافة docs/contracts واختبارات regression | مسموح | لا يغيّر السلوك القائم دون دليل |
-| إصلاح resume باستخدام remote job ID | مسموح | اختبار Android unit/contract قبل الدمج |
-| تحسين error envelope | مسموح | الحفاظ على HTTP status والتوافق القديم |
-| إضافة resumable upload | لاحق | benchmark وانقطاع شبكي مثبت |
-| استبدال camera أو ASR أو diarization | ممنوع حاليًا | benchmark وmanual review وlicense review |
-| نسخ المشروع المرجعي كاملًا | ممنوع | لا يتوافق مع النطاق أو architecture |
-
-## شروط التوقف أو طلب handoff
-
-إذا تطلب التغيير تعديل subsystem غير مملوك للمهمة، يُكتب contract أو handoff بدل تعديل واسع. وإذا تعذر إثبات تشغيل model/runtime أو جهاز Android حقيقي، تُبقى الحالة `OPEN` ولا تُخفى تحت test doubles أو وثائق عامة.
+[1]: REFERENCE_COMPARISON.md "Comparison and decisions"
+[2]: ARCHITECTURE.md "Canonical topology and ownership"
+[3]: CONTRACTS.md "Public API and engine contracts"
+[4]: FINAL_ACCEPTANCE.md "Evidence-based acceptance matrix"
+[5]: REFERENCE_COMPARISON.md "SupoClip and whisper.cpp comparison"

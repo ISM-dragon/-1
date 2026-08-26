@@ -1,39 +1,44 @@
-# AI Runtime Contract
+# AI Runtime
 
-## Boundary
+**المكان:** Private Gateway/AI host فقط.
 
-كل المعالجة الثقيلة للذكاء الاصطناعي تبقى داخل private Gateway/Engine. تطبيق Android لا يحتوي Python أو WhisperX أو PyTorch أو CAM++ أو PANNs، ولا يحمل مفاتيح Gemini. الهاتف يرسل source وخيارات المعالجة ويتلقى حالة job وartifacts.
+لا يحتوي APK على Python أو WhisperX أو PyTorch أو provider keys أو model weights. يحتفظ الخادم الخاص بسجل المزودات، وmodel cache، وdiagnostics، ويعرض للعميل readiness وerrors آمنة فقط.
 
-## Stages
+## نموذج السجل
 
-| المرحلة | المسؤولية | المخرجات المتوقعة |
-|---|---|---|
-| ASR/alignment | transcription وword timestamps | transcript قابل لإعادة الاستخدام |
-| Diarization | speaker segments وword-speaker mapping | speaker timeline |
-| Events | laughter/audio/arousal/visual signals | event evidence |
-| Candidates | windows وboundaries وdedupe | candidate clips |
-| Scoring | LLM أو deterministic fallback وconfidence | ranked candidates |
-| Camera | face/speaker/active-speaker framing | crop paths/director decisions |
-| Render | captions وvideo output | MP4 artifacts |
-
-## Model Manager
-
-يجب أن يسجل النظام اسم النموذج، الإصدار، الحجم، المصدر، checksum، المسار المحلي، installed state، وhealth. يُفصل download/verify/load/unload/delete عن pipeline stages. فشل provider خارجي لا يتحول إلى crash إذا كان fallback deterministic ممكنًا، ويجب تسجيل error code وretryability.
-
-## Readiness
-
-لا تعني ملفات النموذج وحدها أن runtime جاهز. فحص الجاهزية المطلوب قبل job فعلي هو importability، مساحة القرص، توفر FFmpeg، صحة storage، صلاحية النموذج، ووصول provider المطلوب. نتائج diagnostics يجب أن تبقى آمنة ولا تكشف أسرارًا أو مفاتيح.
-
-## القرارات
-
-تم الإبقاء على WhisperX/diarization الحالية في الخادم بدل استبدالها بـ native Android Whisper من المشروع المرجعي. السبب هو الحفاظ على parity مع scoring والكاميرا والـcheckpoints. أي تغيير في النموذج يجب أن يكون versioned، benchmarked، وقابلًا للمقارنة.
-
-## الفشل والاسترداد
-
-| الخطأ | السلوك |
+| الحقل | الغرض |
 |---|---|
-| `MODEL_MISSING` | إيقاف job برسالة قابلة للإجراء وعدم إنشاء artifact ناقص |
-| `MODEL_INVALID` | رفض checksum أو health وإظهار diagnostics آمنة |
-| LLM timeout/auth | deterministic fallback إن أمكن، وإلا `FAILED` مع retryability صحيحة |
-| insufficient RAM/disk | إيقاف مبكر وتنظيف الملفات المؤقتة |
-| restart | استعادة stage/checkpoint بدل transcription كاملة |
+| `name` | الاسم المنطقي للنموذج أو المزود. |
+| `version` | تثبيت reproducible للنتائج. |
+| `size_bytes` | التحقق من disk budget. |
+| `sha256` | منع model corruption أو substitution. |
+| `source` | مصدر التنزيل أو artifact registry. |
+| `local_path` | مسار خاص بالخادم، ولا يخرج إلى العميل. |
+| `installed` | هل الملفات كاملة ومتحقق منها؟ |
+| `health` | `ready`, `missing`, `invalid`, أو `unavailable`. |
+
+## الحدود التشغيلية
+
+تبدأ الخدمة بفحص FFmpeg/ffprobe، مساحة التخزين، قابلية كتابة job directory، ووجود ASR/diarization models. عند اختيار Gemini أو Ollama يجب أن تعيد diagnostics سببًا قابلًا للفهم. لا يبدأ job جديد إذا كان provider المطلوب غير جاهز، ولا يحوّل هذا الوضع إلى 500 غامض أو crash.
+
+يجب أن يكون model download قابلًا للاستئناف والتحقق والحذف الآمن. تحميل النموذج أو provider client يكون lazy ومخزنًا في cache لتجنب reload لكل job. تُقاس أزمنة ASR وdiarization وscoring واستهلاك RAM/VRAM قبل أي optimization.
+
+## Scoring وfallback
+
+يبقى scoring الحالي هو الأساس. يمكن للـLLM أن يضيف hook/value/shareability signals أو تفسيرًا، لكنه لا يحتكر صحة النتيجة. عند network/provider failure، يستخدم المحرك fallback rubric أو signal-based scoring عندما يكون متاحًا، ويسجل `provider_status`, `rubric_version`, و`confidence` في metadata. لا تُرسل transcript أو media إلى provider إلا وفق إعداد مالك Gateway.
+
+### المراجع
+
+[1]: ../gateway/provider_registry.py "Provider registry and health"
+[2]: ../gateway/secret_vault.py "Gateway-owned secrets"
+[3]: ../pipeline/publikclip_pipeline/insights/ "Scoring and calibration"
+[4]: ../pipeline/publikclip_pipeline/asr/ "ASR runtime"
+[5]: ../docs/FINAL_ACCEPTANCE.md "Observed readiness blockers"
+
+## References
+
+[1]: ../gateway/provider_registry.py "Provider registry and health"
+[2]: ../gateway/secret_vault.py "Gateway-owned secrets"
+[3]: ../pipeline/publikclip_pipeline/insights/ "Scoring and calibration"
+[4]: ../pipeline/publikclip_pipeline/asr/ "ASR runtime"
+[5]: FINAL_ACCEPTANCE.md "Observed readiness blockers"
