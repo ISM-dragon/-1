@@ -1181,7 +1181,24 @@ async def get_post(post_id: str) -> dict[str, Any] | None:
 
 
 def mark_processing_worker_error(job_id: str, error: str) -> None:
-    update_processing_job(job_id, status="failed", error=error, message="Processing worker stopped the job")
+    with closing(db()) as connection:
+        row = connection.execute("SELECT state FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        return
+    current = str(row["state"] or "QUEUED")
+    if current in {"COMPLETED", "CANCELLED"}:
+        return
+    if current == "FAILED":
+        update_processing_job(job_id, error=error, error_code="WORKER_FAILED", message="Processing worker stopped the job", recoverable=1)
+        return
+    processing_transition(
+        job_id,
+        "FAILED",
+        error=error,
+        error_code="WORKER_FAILED",
+        message="Processing worker stopped the job",
+        recoverable=True,
+    )
 
 
 def mark_source_worker_error(job_id: str, error: str) -> None:
@@ -1212,10 +1229,11 @@ async def startup() -> None:
     cleanup_media_uploads()
     with closing(db()) as connection:
         timestamp = now_iso()
-        interrupted = connection.execute("SELECT id FROM processing_jobs WHERE state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED') AND cancel_requested=0").fetchall()
+        interrupted = connection.execute("SELECT id, state FROM processing_jobs WHERE state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED') AND cancel_requested=0").fetchall()
         for interrupted_row in interrupted:
+            previous_state = interrupted_row["state"]
             connection.execute("UPDATE processing_jobs SET state='INTERRUPTED', status='queued', error=NULL, message='Interrupted by Gateway restart; checkpoint resume is available', recoverable=1, updated_at=? WHERE id=?", (timestamp, interrupted_row['id']))
-            connection.execute("INSERT INTO processing_job_transitions (job_id, from_state, to_state, message, created_at) VALUES (?, 'RUNNING', 'INTERRUPTED', ?, ?)", (interrupted_row['id'], 'Gateway restart recovery', timestamp))
+            connection.execute("INSERT INTO processing_job_transitions (job_id, from_state, to_state, message, created_at) VALUES (?, ?, 'INTERRUPTED', ?, ?)", (interrupted_row['id'], previous_state, 'Gateway restart recovery', timestamp))
         connection.execute("UPDATE source_jobs SET status='queued', error=NULL, message='Requeued after Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
         connection.commit()
         processing_ids = [row["id"] for row in connection.execute("SELECT id FROM processing_jobs WHERE status='queued' ORDER BY created_at").fetchall()]
@@ -1501,8 +1519,13 @@ def _parse_upload_range(request: Request, current: int, expected: int) -> tuple[
         start, end, total = (int(value) for value in match.groups())
         if total != expected or start > end or end >= expected:
             raise HTTPException(status_code=416, detail="Upload range does not match the declared file size.")
-        if offset_header is not None and int(offset_header) != start:
-            raise HTTPException(status_code=409, detail="Upload offset conflicts with Content-Range.")
+        if offset_header is not None:
+            try:
+                declared_offset = int(offset_header)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail="X-Upload-Offset must be an integer.") from error
+            if declared_offset != start:
+                raise HTTPException(status_code=409, detail="Upload offset conflicts with Content-Range.")
         return start, end
     if offset_header is None:
         raise HTTPException(status_code=400, detail="Send X-Upload-Offset or Content-Range for resumable uploads.")
@@ -1677,8 +1700,15 @@ async def complete_media_upload(upload_id: str) -> dict[str, Any]:
 async def upload_source(request: Request) -> dict[str, Any]:
     """Legacy one-shot endpoint; resumable clients should use /v1/sources/uploads."""
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Content-Length must be an integer.") from error
+        if declared_length < 0:
+            raise HTTPException(status_code=400, detail="Content-Length must not be negative.")
+        if declared_length > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
     upload_id = f"upl_{secrets.token_urlsafe(12)}"
     temp_path = _media_upload_temp_path(upload_id)
     size = 0

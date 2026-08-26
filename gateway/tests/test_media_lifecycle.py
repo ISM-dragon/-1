@@ -151,7 +151,10 @@ class MediaLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status["offset"], pivot)
             second = list(generated_chunks(size - pivot, seed=seed, start_offset=pivot))
             await self.append(upload["id"], second, pivot, size - pivot)
-            result = await main.complete_media_upload(upload["id"])
+            # This matrix measures disk-backed resumable I/O, not codec validity;
+            # media probe behavior is covered by the dedicated safety tests.
+            with patch.object(main, "validate_uploaded_media"):
+                result = await main.complete_media_upload(upload["id"])
             self.assertEqual(result["integrity"]["bytes"], size)
             self.assertEqual(result["integrity"]["sha256"], expected_sha256)
 
