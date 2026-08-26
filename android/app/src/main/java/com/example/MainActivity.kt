@@ -24,18 +24,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.example.data.repository.OpusRepository
-import com.example.ui.components.ApiKeySettingsDialog
 import com.example.ui.components.OpusBottomNav
 import com.example.ui.components.OpusHeader
 import com.example.ui.components.OpusNavTab
-import com.example.ui.screens.ApiManagementSettingsScreen
-import com.example.ui.screens.ClipCompetitorComparisonScreen
+import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.ClipStudioScreen
 import com.example.ui.screens.HomeScreen
-import com.example.ui.screens.ProjectsScreen
-import com.example.ui.screens.SocialGatewayScreen
-import com.example.ui.screens.UsageDashboardScreen
-import com.example.ui.screens.ToolsScreen
 import com.example.ui.screens.VideoUploadScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.OpusDarkCanvas
@@ -47,7 +41,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
         repository = OpusRepository(this)
 
         setContent {
@@ -62,25 +55,14 @@ class MainActivity : ComponentActivity() {
 fun OpusProApp(repository: OpusRepository) {
     var currentTab by remember { mutableStateOf(OpusNavTab.HOME) }
     var selectedProjectId by remember { mutableLongStateOf(0L) }
-    var selectedComparisonClipId by remember { mutableStateOf<Long?>(null) }
     var showUploadScreen by remember { mutableStateOf(false) }
-    var showApiKeyDialog by remember { mutableStateOf(false) }
 
     val customApiKey by repository.customApiKey.collectAsState()
     val googleFlowCredits by repository.googleFlowCredits.collectAsState()
     val aiProviders by repository.aiProviders.collectAsState()
 
-    // Remove only the legacy demo record created by older builds.
-    // New installations start empty and populate from real user actions.
     LaunchedEffect(Unit) {
         repository.removeLegacyDemoDataIfPresent()
-    }
-
-    if (showApiKeyDialog) {
-        ApiKeySettingsDialog(
-            repository = repository,
-            onDismiss = { showApiKeyDialog = false }
-        )
     }
 
     Scaffold(
@@ -89,9 +71,7 @@ fun OpusProApp(repository: OpusRepository) {
         topBar = {
             if (!showUploadScreen) {
                 OpusHeader(
-                    onApiKeyClick = {
-                        showApiKeyDialog = true
-                    },
+                    onApiKeyClick = { currentTab = OpusNavTab.SETTINGS },
                     hasCustomApiKey = customApiKey.isNotBlank(),
                     remainingCreditsMinutes = googleFlowCredits.remainingCreditsMinutes,
                     activeProvidersCount = aiProviders.count { it.isEnabled && it.apiKey.isNotBlank() }
@@ -102,10 +82,7 @@ fun OpusProApp(repository: OpusRepository) {
             if (!showUploadScreen) {
                 OpusBottomNav(
                     currentTab = currentTab,
-                    onTabSelected = { tab ->
-                        currentTab = tab
-                        showUploadScreen = false
-                    }
+                    onTabSelected = { tab -> currentTab = tab }
                 )
             }
         }
@@ -132,79 +109,40 @@ fun OpusProApp(repository: OpusRepository) {
                     transitionSpec = {
                         fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(180))
                     },
-                    label = "tab_transition"
+                    label = "workflow_tab_transition"
                 ) { targetTab ->
                     when (targetTab) {
-                        OpusNavTab.HOME -> {
-                            HomeScreen(
-                                repository = repository,
-                                onProjectCreated = { newProjectId ->
-                                    selectedProjectId = newProjectId
-                                    currentTab = OpusNavTab.STUDIO
-                                },
-                                onOpenProject = { projectId ->
-                                    selectedProjectId = projectId
-                                    currentTab = OpusNavTab.STUDIO
-                                },
-                                onUploadLocalVideo = {
-                                    showUploadScreen = true
-                                },
-                                onOpenApiKeySettings = {
-                                    showApiKeyDialog = true
-                                }
-                            )
-                        }
-                        OpusNavTab.DASHBOARD -> {
-                            UsageDashboardScreen(repository = repository)
-                        }
-                        OpusNavTab.STUDIO -> {
-                            ClipStudioScreen(
-                                repository = repository,
-                                initialProjectId = selectedProjectId,
-                                onOpenComparison = { clipId ->
-                                    selectedComparisonClipId = clipId
-                                    currentTab = OpusNavTab.BENCHMARK
-                                }
-                            )
-                        }
-                        OpusNavTab.BENCHMARK -> {
-                            ClipCompetitorComparisonScreen(
-                                repository = repository,
-                                initialClipId = selectedComparisonClipId,
-                                onBack = { currentTab = OpusNavTab.STUDIO },
-                                onOpenStudio = { clipId ->
-                                    currentTab = OpusNavTab.STUDIO
-                                }
-                            )
-                        }
-                        OpusNavTab.PROJECTS -> {
-                            ProjectsScreen(
-                                repository = repository,
-                                onOpenProjectClips = { projectId ->
-                                    selectedProjectId = projectId
-                                    currentTab = OpusNavTab.STUDIO
-                                }
-                            )
-                        }
-                        OpusNavTab.GATEWAY -> {
-                            SocialGatewayScreen(
-                                repository = repository,
-                                onBack = { currentTab = OpusNavTab.HOME }
-                            )
-                        }
-                        OpusNavTab.SETTINGS -> {
-                            ApiManagementSettingsScreen(
-                                repository = repository,
-                                onBack = { currentTab = OpusNavTab.TOOLS }
-                            )
-                        }
-                        OpusNavTab.TOOLS -> {
-                            ToolsScreen(
-                                onOpenDashboard = { currentTab = OpusNavTab.DASHBOARD },
-                                onOpenBenchmark = { currentTab = OpusNavTab.BENCHMARK },
-                                onOpenSettings = { currentTab = OpusNavTab.SETTINGS }
-                            )
-                        }
+                        OpusNavTab.HOME -> HomeScreen(
+                            repository = repository,
+                            onProjectCreated = { newProjectId ->
+                                selectedProjectId = newProjectId
+                                currentTab = OpusNavTab.STUDIO
+                            },
+                            onOpenProject = { projectId ->
+                                selectedProjectId = projectId
+                                currentTab = OpusNavTab.STUDIO
+                            },
+                            onUploadLocalVideo = { showUploadScreen = true },
+                            onOpenApiKeySettings = { currentTab = OpusNavTab.SETTINGS }
+                        )
+                        OpusNavTab.STUDIO -> ClipStudioScreen(
+                            repository = repository,
+                            initialProjectId = selectedProjectId
+                        )
+                        OpusNavTab.SETTINGS -> SettingsScreen(repository = repository)
+                        else -> HomeScreen(
+                            repository = repository,
+                            onProjectCreated = { newProjectId ->
+                                selectedProjectId = newProjectId
+                                currentTab = OpusNavTab.STUDIO
+                            },
+                            onOpenProject = { projectId ->
+                                selectedProjectId = projectId
+                                currentTab = OpusNavTab.STUDIO
+                            },
+                            onUploadLocalVideo = { showUploadScreen = true },
+                            onOpenApiKeySettings = { currentTab = OpusNavTab.SETTINGS }
+                        )
                     }
                 }
             }

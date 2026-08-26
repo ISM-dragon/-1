@@ -91,15 +91,9 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
-import com.example.data.model.AiTemplateRecommendation
-import com.example.data.model.AutoPublishResult
-import com.example.data.model.Clip
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.repository.OpusRepository
 import com.example.data.repository.ProcessingStep
-import com.example.ui.components.AutoPublishResultDialog
-import com.example.ui.components.AutoPublishSettingsDialog
-import com.example.ui.components.CaptionPresetsList
 import com.example.ui.components.VideoProcessingLoadingDialog
 import com.example.ui.theme.OpusBorder
 import com.example.ui.theme.OpusDarkCanvas
@@ -145,14 +139,8 @@ fun VideoUploadScreen(
 
     // Repurposing Configuration Options
     var selectedCaptionTheme by remember { mutableStateOf("Opus Neon") }
-    var selectedTargetLength by remember { mutableStateOf("30s - 60s") }
     var selectedLayout by remember { mutableStateOf("9:16 Full Screen") }
     var autoDetectAiTemplate by remember { mutableStateOf(true) }
-    var detectedAiRecommendation by remember { mutableStateOf<AiTemplateRecommendation?>(null) }
-
-    var showAutoPublishSettingsDialog by remember { mutableStateOf(false) }
-    val autoPublishConfig by repository.autoPublishConfig.collectAsState()
-    var autoPublishDialogData by remember { mutableStateOf<Pair<Clip, AutoPublishResult>?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
     var activeProcessingJobId by remember { mutableStateOf<String?>(null) }
     val processingJobFlow = remember(activeProcessingJobId) {
@@ -172,30 +160,6 @@ fun VideoUploadScreen(
             isProcessing = false
             Toast.makeText(context, "فشلت المعالجة: ${completedJob.errorMessage}", Toast.LENGTH_LONG).show()
         }
-    }
-
-    if (showAutoPublishSettingsDialog) {
-        AutoPublishSettingsDialog(
-            repository = repository,
-            onDismiss = { showAutoPublishSettingsDialog = false }
-        )
-    }
-
-    autoPublishDialogData?.let { (clip, result) ->
-        AutoPublishResultDialog(
-            clip = clip,
-            publishResult = result,
-            onDismiss = {
-                val pId = clip.projectId
-                autoPublishDialogData = null
-                onProjectCreated(pId)
-            },
-            onOpenStudio = {
-                val pId = clip.projectId
-                autoPublishDialogData = null
-                onProjectCreated(pId)
-            }
-        )
     }
 
     if (isProcessing || processingStep !is ProcessingStep.Idle) {
@@ -335,14 +299,14 @@ fun VideoUploadScreen(
 
                 Column {
                     Text(
-                        text = "Upload Video File",
+                        text = "استيراد فيديو",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Black,
                             color = OpusTextPrimary
                         )
                     )
                     Text(
-                        text = "Extract viral shorts directly from your on-device video storage",
+                        text = "اختر فيديو طويلاً، ثم اترك ISM يحدد أفضل المقاطع.",
                         fontSize = 11.sp,
                         color = OpusTextSecondary
                     )
@@ -410,7 +374,7 @@ fun VideoUploadScreen(
                         Spacer(modifier = Modifier.height(14.dp))
 
                         Text(
-                            text = "Tap to Browse & Select Video",
+                            text = "اختر فيديو من الهاتف",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = OpusTextPrimary
@@ -420,7 +384,7 @@ fun VideoUploadScreen(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
-                            text = "Supports MP4, MOV, WEBM, MKV up to 500 MB",
+                            text = "MP4 أو MOV أو WEBM • حتى 500 MB",
                             fontSize = 12.sp,
                             color = OpusTextSecondary,
                             textAlign = TextAlign.Center
@@ -450,7 +414,7 @@ fun VideoUploadScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Choose Local File",
+                                text = "اختيار فيديو",
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
                                 fontSize = 13.sp
@@ -489,7 +453,7 @@ fun VideoUploadScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Selected Video Source",
+                                text = "الفيديو المختار",
                                 style = MaterialTheme.typography.titleSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = OpusTextPrimary
@@ -515,7 +479,7 @@ fun VideoUploadScreen(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "Replace",
+                                    text = "تغيير",
                                     fontSize = 11.sp,
                                     color = OpusElectricCyan,
                                     fontWeight = FontWeight.Bold
@@ -544,7 +508,7 @@ fun VideoUploadScreen(
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Analyzing video stream...",
+                                        text = "جارٍ تجهيز المعاينة…",
                                         fontSize = 12.sp,
                                         color = OpusTextSecondary
                                     )
@@ -610,7 +574,7 @@ fun VideoUploadScreen(
                                     )
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Text(
-                                        text = "Video Ready",
+                                        text = "الفيديو جاهز",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = OpusTextPrimary
@@ -701,7 +665,7 @@ fun VideoUploadScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "File validated & ready for ISM AI virality parsing",
+                                        text = "الفيديو جاهز لتحليل أفضل اللحظات",
                                         fontSize = 11.sp,
                                         color = OpusViralEmerald,
                                         fontWeight = FontWeight.SemiBold
@@ -713,255 +677,53 @@ fun VideoUploadScreen(
                 }
             }
 
-            // Repurposing Configuration Options (AI Autonomous by default)
+            // Fast path: AI chooses captions and framing by default.
+            // Detailed controls remain available in Clip Review / Editor after generation.
             item {
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
+                    modifier = Modifier.fillMaxWidth().testTag("import_smart_defaults_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = OpusDarkSurfaceVariant),
                     border = androidx.compose.foundation.BorderStroke(1.dp, OpusBorder)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = "AI Powered",
-                                    tint = OpusElectricCyan,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "تحديد القالب ونمط الترجمة بالذكاء الاصطناعي",
-                                    style = MaterialTheme.typography.titleSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = OpusTextPrimary
-                                    )
-                                )
-                            }
-
-                            Switch(
-                                checked = autoDetectAiTemplate,
-                                onCheckedChange = { autoDetectAiTemplate = it },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = OpusElectricCyan
-                                ),
-                                modifier = Modifier.testTag("upload_ai_auto_template_switch")
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        if (autoDetectAiTemplate) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(OpusPrimaryViolet.copy(alpha = 0.2f))
-                                    .border(1.dp, OpusVioletGlow.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                                    .padding(12.dp)
-                            ) {
-                                Column {
-                                    Text(
-                                        text = "⚡ محرك Gemini API يحدد القالب ديناميكياً",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = OpusElectricCyan
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "يتم فحص طبيعة الفيديو ومحتواه الصوتي عبر مفتاح API لتطبيق نمط الترجمة الحركية المناسب (Neon, Kinetic, Bold) وأبعاد 9:16 الذكية تلقائياً.",
-                                        fontSize = 11.sp,
-                                        color = OpusTextSecondary
-                                    )
-                                }
-                            }
-                        } else {
-                            // Manual Repurposing Parameters (Shown only when manual switch is off)
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            // Target Length Selector
-                            Text(
-                                text = "Target Clip Duration:",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = OpusVioletGlow
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                listOf("< 30s", "30s - 60s", "60s - 90s").forEach { length ->
-                                    val isSelected = selectedTargetLength == length
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) OpusPrimaryViolet else OpusDarkSurfaceVariant)
-                                            .border(1.dp, if (isSelected) OpusElectricCyan else OpusBorder, RoundedCornerShape(8.dp))
-                                            .clickable { selectedTargetLength = length }
-                                            .padding(vertical = 8.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = length,
-                                            fontSize = 11.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (isSelected) Color.White else OpusTextSecondary
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Auto-Reframing Format Selector
-                            Text(
-                                text = "Reframing & Aspect Ratio:",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = OpusVioletGlow
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                listOf("9:16 Full Screen", "Auto Split-Screen", "1:1 Square").forEach { layout ->
-                                    val isSelected = selectedLayout == layout
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) OpusDarkSurfaceHighlight else OpusDarkSurfaceVariant)
-                                            .border(1.dp, if (isSelected) OpusElectricCyan else OpusBorder, RoundedCornerShape(8.dp))
-                                            .clickable { selectedLayout = layout }
-                                            .padding(vertical = 8.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = layout,
-                                            fontSize = 10.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (isSelected) OpusElectricCyan else OpusTextSecondary,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Caption Style Theme
-                            Text(
-                                text = "Dynamic Caption Preset:",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = OpusVioletGlow
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(CaptionPresetsList) { preset ->
-                                    val isSelected = selectedCaptionTheme == preset.name
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) OpusDarkSurfaceHighlight else OpusDarkSurfaceVariant)
-                                            .border(1.dp, if (isSelected) OpusElectricCyan else OpusBorder, RoundedCornerShape(8.dp))
-                                            .clickable { selectedCaptionTheme = preset.name }
-                                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(8.dp)
-                                                    .clip(CircleShape)
-                                                    .background(preset.highlightColor)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = preset.name,
-                                                fontSize = 11.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) OpusElectricCyan else OpusTextSecondary
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Auto-Publish Option Switch Banner
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (autoPublishConfig.isEnabled) OpusPrimaryViolet.copy(alpha = 0.25f) else OpusDarkSurfaceVariant)
-                                .border(1.dp, if (autoPublishConfig.isEnabled) OpusElectricCyan else OpusBorder, RoundedCornerShape(10.dp))
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(OpusPrimaryViolet.copy(alpha = 0.24f)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                    Icon(
-                                        imageVector = Icons.Default.Send,
-                                        contentDescription = "Auto Publish",
-                                        tint = if (autoPublishConfig.isEnabled) OpusElectricCyan else OpusTextSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = "نشر تلقائي بعد انتهاء التوليد",
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = OpusTextPrimary
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Icon(
-                                                imageVector = Icons.Default.Settings,
-                                                contentDescription = "Config",
-                                                tint = OpusElectricCyan,
-                                                modifier = Modifier
-                                                    .size(16.dp)
-                                                    .clickable { showAutoPublishSettingsDialog = true }
-                                            )
-                                        }
-                                        Text(
-                                            text = if (autoPublishConfig.isEnabled) "مفعل (${autoPublishConfig.targetPlatforms.joinToString(", ")})" else "معطل (انقر للضبط)",
-                                            fontSize = 10.sp,
-                                            color = if (autoPublishConfig.isEnabled) OpusViralEmerald else OpusTextSecondary
-                                        )
-                                    }
-                                }
-
-                                Switch(
-                                    checked = autoPublishConfig.isEnabled,
-                                    onCheckedChange = { isChecked ->
-                                        coroutineScope.launch {
-                                            repository.saveAutoPublishConfig(autoPublishConfig.copy(isEnabled = isChecked))
-                                        }
-                                    },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Color.White,
-                                        checkedTrackColor = OpusElectricCyan
-                                    ),
-                                    modifier = Modifier.testTag("upload_auto_publish_switch")
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "الإعدادات الذكية",
+                                tint = OpusElectricCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "إعدادات ذكية تلقائياً",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    color = OpusTextPrimary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                            Text(
+                                text = "ترجمة، قصّ، وتأطير 9:16 يختارها ISM لأفضل نتيجة.",
+                                style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary)
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "مفعّل",
+                            tint = OpusViralEmerald,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
@@ -986,7 +748,6 @@ fun VideoUploadScreen(
                                             transcript = "Local uploaded video: $videoTitle",
                                             durationSec = maxOf(30, (durationMs / 1000).toInt())
                                         )
-                                        detectedAiRecommendation = aiRec
                                         appliedCaptionTheme = aiRec.recommendedCaptionTheme
                                         appliedLayout = aiRec.recommendedPlatform
                                     } catch (_: Exception) {}
@@ -1030,7 +791,7 @@ fun VideoUploadScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "جاري المعالجة بالذكاء الاصطناعي...",
+                            text = "جارٍ توليد المقاطع…",
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
                             fontSize = 13.sp
@@ -1044,7 +805,7 @@ fun VideoUploadScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Extract Viral Clips in 1 Click",
+                            text = "توليد أفضل المقاطع",
                             fontWeight = FontWeight.Black,
                             color = if (isReadyForProcessing) Color.White else OpusTextSecondary,
                             fontSize = 14.sp

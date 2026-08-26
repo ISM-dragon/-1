@@ -108,7 +108,7 @@ private fun RealClipPlayer(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "المقطع الحقيقي الناتج من Gemini + Media3",
+            text = "معاينة المقطع الحقيقي",
             color = OpusElectricCyan,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
