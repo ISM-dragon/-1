@@ -1,37 +1,34 @@
-# خطة وأساس قياس الأداء
+# Performance Baseline
+
+**الحالة:** القياس جزء من release evidence؛ لا توجد أرقام production جديدة في هذه الجلسة لأن نماذج المعالجة وجهاز Android الفعلي غير متاحين.
 
 ## المقاييس المطلوبة
 
-يُقاس على fixture ثابت وعلى host محدد: total processing time، ASR time، diarization time، scoring time، render time، peak RAM، CPU، GPU/VRAM عند وجودها، disk usage، model load time، وعدد مرات reload.
+| المكوّن | المقياس | طريقة القياس | معيار المقارنة |
+|---|---|---|---|
+| End-to-end | total processing time | timestamps من create إلى artifact verified | حسب مدة/دقة المصدر وmode. |
+| ASR | ASR wall time وRTF | stage timestamps ومدة الفيديو | baseline لكل model/version. |
+| Diarization | stage wall time وRAM peak | process metrics | مقارنة قبل/بعد model cache. |
+| Scoring | زمن signals وLLM | provider latency وfallback count | لا تضحى correctness لخفض latency. |
+| Camera | تحليل frames وcrop smoothing | stage timing وعدد frames | ثبات framing وغياب jitter. |
+| Render | render time وoutput size | FFmpeg logs وartifact metadata | bitrate/resolution/preset ثابت. |
+| Server | CPU/RAM/VRAM/disk | host metrics لكل job | منع OOM وdisk exhaustion. |
+| Android | upload throughput وbattery وcache size | WorkManager/device logs | لا ينهار job عند process death أو network loss. |
 
-## نقاط القياس
+## قواعد benchmark
 
-| النقطة | طريقة القياس | معيار المقارنة |
-|---|---|---|
-| ingest | timestamps في progress/checkpoint | أقل زمن مع validation محفوظ |
-| ASR | stage duration وmodel load | لا reload لكل job |
-| diarization/events | stage duration وRAM | لا تتجاوز limits المضبوطة |
-| scoring | local/LLM timing وfallback count | failure لا يسقط job |
-| render | per-clip وtotal render duration | artifact صالح وCFR مناسب |
-| Android upload | bytes/second وretries | استعادة بدون فقد state |
-| Android download | bytes/second وdisk free | لا ملف ناقص بدون error |
+يُستخدم source ثابت ومجموعة إعدادات ثابتة، ويُسجل commit وmodel versions وFFmpeg version وhardware. تُقارن النتيجة مع baseline لا مع انطباع بصري. أي optimization يجب أن تثبت فائدتها في الزمن أو الذاكرة أو الاستقرار، مع إبقاء output correctness وcaption timing وcamera framing ضمن regression checks.
 
-## baseline الحالي
+### المراجع
 
-لا توجد في بيئة التدقيق الحالية أدوات pytest أو Android SDK، لذلك لم يُسجل benchmark جديد. توجد سجلات سابقة في `evidence/` داخل المستودع، لكنها تُعامل كأدلة تاريخية مرتبطة ببيئتها ولا تُنسب إلى تشغيل هذا التدقيق. قبل النشر يجب إعادة القياس على host يملك Python runtime، FFmpeg/ffprobe، النماذج، وAndroid SDK.
-
-## ضوابط optimization
-
-لا تُنقل Whisper إلى Android لمجرد تقليل زمن الشبكة. لا تُفعل parallelism أو model caching جديد دون قياس peak RAM وdisk وcorrectness. كل تحسين يرفق قبل/بعد، fixture، commit، وقرار rollback.
-
-## المراجع
-
-[1]: ../pipeline/publikclip_pipeline/engine/pipeline.py "Pipeline stage execution"
-[2]: ../pipeline/publikclip_pipeline/models/registry.py "Model loading and registry"
-[3]: ../gateway/worker_queue.py "Worker resource and disk controls"
-[4]: ../evidence/environment.md "Recorded environment evidence"
-[5]: ../docs/TEST_MATRIX.md "QA matrix"
+[1]: ../evidence/environment.md "Environment evidence"
+[2]: ../docs/FINAL_ACCEPTANCE.md "Current acceptance limitations"
+[3]: ../pipeline/publikclip_pipeline/ "Pipeline runtime"
+[4]: ../gateway/processing_service.py "Stage execution bridge"
 
 ## References
 
-المراجع محلية في المستودع، والنتائج المستقبلية يجب أن تحفظ كأدلة قابلة لإعادة الفحص.
+[1]: ../evidence/environment.md "Environment evidence"
+[2]: FINAL_ACCEPTANCE.md "Current acceptance limitations"
+[3]: ../pipeline/publikclip_pipeline/ "Pipeline runtime"
+[4]: ../gateway/processing_service.py "Stage execution bridge"

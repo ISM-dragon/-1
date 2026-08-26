@@ -151,9 +151,13 @@ fun ContractApp(repository: ContractJobRepository) {
                     onCancel = { route = AppRoute.HOME },
                     onStart = { title, uri ->
                         scope.launch {
-                            val jobId = repository.startJob(title, uri, "classic", "balanced")
-                            selectedJobId = jobId
-                            route = AppRoute.PROCESSING
+                            try {
+                                val jobId = repository.startJob(title, uri, "classic", "balanced")
+                                selectedJobId = jobId
+                                route = AppRoute.PROCESSING
+                            } catch (error: Exception) {
+                                snackbar.showSnackbar(error.message ?: "تعذر بدء المعالجة")
+                            }
                         }
                     }
                 )
@@ -175,6 +179,7 @@ fun ContractApp(repository: ContractJobRepository) {
                 AppRoute.RESULTS -> ResultsScreen(
                     job = selectedJob,
                     repository = repository,
+                    snackbar = snackbar,
                     onReview = { artifact -> selectedArtifact = artifact; route = AppRoute.REVIEW },
                     onHome = { route = AppRoute.HOME }
                 )
@@ -311,7 +316,7 @@ private fun ProcessingErrorScreen(job: ProcessingJobEntity?, onRetry: () -> Unit
 }
 
 @Composable
-private fun ResultsScreen(job: ProcessingJobEntity?, repository: ContractJobRepository, onReview: (ClipArtifact) -> Unit, onHome: () -> Unit) {
+private fun ResultsScreen(job: ProcessingJobEntity?, repository: ContractJobRepository, snackbar: SnackbarHostState, onReview: (ClipArtifact) -> Unit, onHome: () -> Unit) {
     if (job == null) return
     val scope = rememberCoroutineScope()
     val artifacts by androidx.compose.runtime.produceState(initialValue = emptyList<ClipArtifact>(), job.jobId) { value = repository.artifacts(job.jobId) }
@@ -334,7 +339,13 @@ private fun ResultsScreen(job: ProcessingJobEntity?, repository: ContractJobRepo
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(onClick = { onReview(artifact) }) { Text("مراجعة") }
-                                Button(onClick = { scope.launch { repository.downloadArtifact(job.jobId, artifact).onSuccess { paths[artifact.id] = it } } }) {
+                                Button(onClick = {
+                                    scope.launch {
+                                        repository.downloadArtifact(job.jobId, artifact)
+                                            .onSuccess { paths[artifact.id] = it }
+                                            .onFailure { snackbar.showSnackbar(it.message ?: "تعذر تنزيل المقطع") }
+                                    }
+                                }) {
                                     Icon(Icons.Default.Download, null); Spacer(Modifier.size(5.dp)); Text(if (downloaded) "إعادة تنزيل" else "تنزيل")
                                 }
                             }
@@ -410,7 +421,7 @@ private fun SettingsScreen(repository: ContractJobRepository, snackbar: Snackbar
         }
         status?.let { Text(it, color = if (it.startsWith("متصل")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error) }
         Spacer(Modifier.weight(1f))
-        Text("النسخة 1 · API prefix /v1", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("النسخة ${BuildConfig.VERSION_NAME} · API prefix /v1", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

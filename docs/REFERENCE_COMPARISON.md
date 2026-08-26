@@ -1,66 +1,107 @@
-# مقارنة المشروع المرجعي مع publikclip
+# مقارنة المشروع المرجعي مع ISM / PublikClip
 
-**الحالة:** مكتملة كمرحلة تدقيق أولي في 26 أغسطس 2026. هذه الوثيقة تحليل ومقارنة، وليست تفويضًا لنسخ المشروع المرجعي أو استبدال بنية المستودع.
+**الحالة:** تدقيق موثق قبل أي نسخ أو استبدال واسع.
+
+**المصادر المرجعية:** الأرشيفان المتاحان في سجل المشروع هما `supoclip-main.zip` و`whisper.cpp-master.zip`. يضيف whisper.cpp عينة Android/Java محلية مبنية على JNI وGGML/Whisper، بينما يضيف SupoClip مرجعًا لواجهة الويب وBackend متعدد الخدمات. لم تُنسخ ملفات source أو binary أو model من أي أرشيف إلى المستودع الهدف.
 
 ## الخلاصة التنفيذية
 
-المشروع المرفق `video_clipper-main` هو تطبيق Flask أحادي العملية يضم واجهة ويب، إدارة وظائف، تحليلًا نصيًا، Whisper المحلي، تقطيع FFmpeg، مولد ترجمات وصور مصغرة، وتنزيلًا عبر `yt-dlp`. أما المستودع الأساسي فيحتوي بالفعل على فصل أقوى بين عميل Android أصلي، وطبقة Gateway/Backend، ومحرك Python متعدد المراحل يضم checkpoints ونتائج قابلة للتدقيق. لذلك لا توجد مبررات لإعادة كتابة المحرك أو نسخ المشروع المرجعي بالكامل.
+المشروع المرجعي قوي في تجربة الويب، وإدارة اختيار المقاطع، والتحرير الخفيف، والقوالب، والتكامل مع مزودات الذكاء الاصطناعي. أما المستودع الهدف فهو أقرب إلى المنتج المطلوب فعليًا لأنه يملك Android client، وPrivate Gateway، ومحرك PublikClip ذي checkpoints، واختبارات resilience، وعقودًا بين العميل والخادم. لذلك لا توجد مبررات تقنية لاستبدال بنية الهدف بنسخة المرجع. القرار المعتمد هو **COMBINE بصورة انتقائية**: الاحتفاظ بمسار Android/Gateway/Engine الحالي، واستخدام أفكار المرجع في UX والعقود القابلة للتوسع فقط بعد تحويلها إلى مكونات مستقلة واختبارها.
 
-القرار العام هو **KEEP_CURRENT** للمحرك ومراحل AI/media وjob system، و**ADD_REFERENCE** فقط للأفكار القابلة لإعادة التنفيذ مستقلًا، مثل واجهة الاختيار البسيطة، أوضاع التقطيع المتسلسل، وتحسينات تجربة مراجعة المقطع. وبسبب عدم وجود ملف `LICENSE` مستقل في الأرشيف، مع وجود إعلان MIT داخل `pyproject.toml` فقط، لا يُنقل أي كود حرفيًا قبل الحصول على مصدر ترخيص واضح؛ ستقتصر هذه المرحلة على فهم السلوك وإعادة التنفيذ المستقل عند الضرورة [1] [2].
+> لا يعتبر وجود implementation أكبر أو أحدث دليلًا كافيًا على صلاحيتها لمسار Android شخصي. معيار الاختيار هنا هو التوافق مع Android، والاستقرار، وكلفة الدمج، وقابلية القياس.
 
-## مقارنة على مستوى المكونات
+## whisper.cpp: نتيجة fit check
 
-| المجال | المشروع الأساسي | المشروع المرجعي | القرار | سبب القرار |
+عينة `examples/whisper.android.java` في الأرشيف المرجعي هي تطبيق Android تجريبي ضيق النطاق: يضع المستخدم نموذج GGML وملف WAV داخل `assets`، ثم يمرر مصفوفة `float` إلى `whisper_full` عبر JNI ويقرأ النصوص والتوقيتات. هي لا تنفذ اختيار فيديو، رفعًا، jobs، checkpoints، diarization، events، candidate scoring، camera، rendering، أو استعادة بعد process death. كما أن README يحذر من أن مشروع العينة يعتمد على ملفات المستودع الكامل، فلا يُعامل كوحدة Android مستقلة.
+
+| فكرة whisper.cpp | ملاءمتها للمشروع الهدف | القرار | السبب |
+|---|---|---|---|
+| JNI bridge لتهيئة نموذج من asset/file | محدودة ومحصورة في ASR المحلي | IGNORE_REFERENCE | المسار canonical هو Python/WhisperX داخل Private Gateway؛ نقل النموذج إلى APK يرفع الحجم والذاكرة ويكسر boundary المطلوب. |
+| timestamps للنصوص والمقاطع | مفيدة على مستوى contract | IMPROVE_CURRENT | تُحفظ word timestamps التي ينتجها backend، دون إعادة transcription محلي. |
+| CMake/NDK وABI filters | غير لازمة للمسار الحالي | IGNORE_REFERENCE | لا توجد native ASR dependency في APK، ولا دليل benchmark يبررها. |
+| نماذج GGML داخل `assets` | غير مناسبة للتوزيع الشخصي الحالي | MANUAL_REVIEW | تحتاج إدارة حجم/تنزيل/checksum/حذف وقياس على أجهزة فعلية قبل أي مسار اختياري لاحق. |
+| benchmark/system-info helpers | مفيدة كفكرة قياس فقط | ADD_REFERENCE | يمكن استعارة مبدأ تسجيل baseline للـCPU/RAM/زمن ASR دون نسخ helper أو native source. |
+
+## مصفوفة القرار
+
+| المجال | الموجود في الهدف | الموجود في المرجع | القرار | السبب والحدود |
 |---|---|---|---|---|
-| Android | Kotlin/Compose، Room، WorkManager، Media3، Photo Picker وعميل Gateway | لا يوجد عميل Android أصلي | KEEP_CURRENT | الأساس المطلوب للهاتف موجود في المستودع الأساسي؛ المرجع لا يضيف قيمة على lifecycle أو permissions. |
-| API/backend | Gateway FastAPI بعقد v1، SQLite، auth، workers، uploads، retry/resume | Flask monolith مع routes وjob manager محلي | KEEP_CURRENT + IGNORE_REFERENCE | الفصل بين العميل والخادم مطلوب، بينما Flask المرجعي لا يحقق حدود Android/Backend/Engine. |
-| رفع الوسائط | Gateway يملك upload one-shot وresumable sessions مع checksum | رفع Flask تقليدي وملفات محلية | IMPROVE_CURRENT | نضيف عميلًا متوافقًا مع عقد الرفع القابل للاستئناف، لا نعود إلى one-shot فقط. |
-| ingest/probing | Pipeline ingest وFFmpeg/ffprobe على الخادم | FFmpeg محلي وعمليات تنزيل | KEEP_CURRENT | المعالجة الثقيلة لا ينبغي أن تدخل APK، وpipeline الحالي يحتوي على checkpoint وvalidation. |
-| ASR | stages قائمة مع word timestamps ومواءمة/diarization عند توفر runtime | Whisper محلي دون حدود Android أو فصل model manager | KEEP_CURRENT | نقل Whisper desktop إلى Android يخالف شرط العزل؛ المرجع لا يحسن contract الحالي. |
-| diarization/ASD/face | وحدات `diarize/` و`camera/` وvendor models | لا يوجد مكافئ متكامل | KEEP_CURRENT | التنفيذ الأساسي أعمق ويخدم auto-framing. |
-| candidates/scoring | candidates، audio events، laughter، rubric، LLM providers، calibration | TF-IDF، hooks، quotes، emotion، LLM fallback | COMBINE CONCEPTS | يُدرس ترتيب hooks والأنماط فقط؛ يبقى scoring الحالي مصدر الحقيقة، مع fallback لا يحول فشل LLM إلى crash. |
-| camera | active-speaker، face tracks، smoothing، zoom، transitions | vertical fit عام دون speaker director مكافئ | KEEP_CURRENT | الكاميرا الحالية متخصصة وموجود لها اختبارات. |
-| captions | word timing، ASS، karaoke/emphasis، fonts وفصل نسبي عن render | SRT وburn-in ومولد subtitles | IMPROVE_CURRENT | نستفيد من بساطة قوالب المرجع، دون إعادة transcription أو ربط caption state بواجهة Android. |
-| render | renderer/stage، artifact validation، FFmpeg capability | clipper/video editor ومؤثرات مباشرة | KEEP_CURRENT + ADD_REFERENCE | نحتفظ بالرندر الخادمي ونجعل خيارات edit قابلة للتمرير كـrender options. |
-| library/results | Room ومشروع/مقطع وcache محلي في Android | JSON library ومجلدات clips_output | KEEP_CURRENT | Room وapp-private storage أقوى لإعادة التشغيل وAndroid process death. |
-| sequential splitting | `candidates/windows.py` ومسار pipeline الحالي | `sequential_splitter.py` كتقسيم كامل متتابع | ADD_REFERENCE بعد قياس | فكرة مفيدة كـmode اختياري، لكنها لا تدخل production قبل regression tests وbenchmark. |
-| downloader | `ingest/ytdlp.py` خلف Gateway | `media_management/downloader.py` | KEEP_CURRENT | تنزيل URL يجب أن يبقى في الخادم مع SSRF validation وعزل الشبكة. |
-| social/publishing | وظائف اختيارية في Gateway | YouTube uploader وواجهات ويب | IGNORE_REFERENCE | النشر ليس شرطًا لمسار Android الشخصي الحالي. |
-| pattern learning | calibration وpersonal taste وanalytics موجودة جزئيًا | `pattern_learning/trainer.py` | MANUAL_REVIEW | يحتاج تعريفًا واضحًا للبيانات والخصوصية ولا يسبق استقرار processing. |
+| Android structure | تطبيق Kotlin مستقل داخل `android/` مع Compose وRoom وWorkManager | تطبيق ويب وموارد Tauri/iOS في SupoClip، وعينة Java/JNI محلية في whisper.cpp | KEEP_CURRENT | الهدف يملك APK native وعقد Gateway؛ عينة whisper.cpp ليست بديلًا عن التطبيق الكامل. |
+| File/video picker | وصول Android إلى URI محلي ثم نسخ آمن إلى `filesDir` | اختيار ملف عبر المتصفح | KEEP_CURRENT | `content://` وقيود Android لا يمكن تمثيلها باستدعاء متصفح عام. |
+| Networking | عميل Gateway ورفع واستطلاع واستئناف | REST/WebSocket وARQ للويب | IMPROVE_CURRENT | يمكن استعارة فكرة progress stream، لكن العقد الحالي يجب أن يبقى المصدر الوحيد للـAPK. |
+| Background processing | WorkManager وforeground notification وRoom state | ARQ/Redis worker | KEEP_CURRENT | WorkManager مناسب لاستمرار العميل؛ Redis ليس ضرورة لمالك واحد وGateway خاص. |
+| Job persistence | SQLite/Room وcheckpoints وtransition history | DB/ARQ jobs | COMBINE | تبقى durable state في Gateway، ويُحسن Android عرضها بعد restart. |
+| Upload | Gateway upload sessions وchecksum | رفع API يديره Backend | KEEP_CURRENT | session/resume وSHA-256 أهم لمسار فيديو كبير من one-shot upload. |
+| ASR | Python/WhisperX في runtime خاص | SupoClip يعتمد مزودات خارجية؛ whisper.cpp يقدم JNI/Whisper محليًا | KEEP_CURRENT | لا يجوز نقل نموذج desktop إلى APK أو إعادة transcription دون سبب؛ يُدرس native ASR فقط كمسار اختياري بعد benchmark. |
+| Diarization/events | مراحل مستقلة في Pipeline | مرحلة تحليل ضمن worker | KEEP_CURRENT | الفصل الحالي أفضل للـcheckpoints والاختبارات والتشخيص. |
+| Candidate generation | candidates/scoring موجودان في Pipeline | LLM يختار 3–7 مقاطع مع virality rubric | IMPROVE_CURRENT | يمكن إضافة rubric versioned كمدخل scoring، دون حذف scoring الحالي أو جعل فشل LLM قاتلًا. |
+| Camera/framing | `camera/` مع tracking/director/stage | face-centered crop | KEEP_CURRENT | الهدف يملك تركيبة أوسع؛ المرجع لا يثبت benchmark يتفوق عليه. |
+| Captions | word timestamps وASS/render integration | قوالب وword-synced subtitles | IMPROVE_CURRENT | فصل caption state عن render logic، وإضافة presets فقط عبر contract. |
+| Rendering/media | FFmpeg/ffprobe، validation، cleanup، artifacts | FFmpeg transitions/B-roll | COMBINE | تستمر media runtime الحالية؛ B-roll/transitions اختيارية ولا تدخل APK أو تزيد dependencies بلا قياس. |
+| Preview/edit | Android results/cache ومسار تحرير مبدئي | محرر ويب trim/split/merge | ADD_REFERENCE | تُستخلص UX rules فقط؛ لا تُنقل واجهة الويب حرفيًا. |
+| Provider management | Gateway provider registry وsecret vault | Gemini/OpenAI/Claude/Ollama في Backend | KEEP_CURRENT | الأسرار تبقى server-side، مع diagnostics واضحة وfallback آمن. |
+| API/auth | Private token/device binding و`/v1` | user accounts/API keys وbilling routes | IGNORE_REFERENCE | خارج نطاق تطبيق شخصي، ويزيد المخاطر والسطح التشغيلي. |
+| Social publishing | optional routes في الهدف والمرجع | Instagram/analytics/email integrations | IGNORE_REFERENCE | ليست شرطًا لإنشاء clip؛ تُبقى منفصلة حتى استقرار processing. |
+| Deployment | Gateway خاص وDocker Compose volume | Docker Compose مع Redis/DB وخدمات متعددة | KEEP_CURRENT | تصميم أحادي المستخدم أبسط وأقرب للمتطلب؛ التوسع ليس هدف Wave الحالية. |
+| MCP | غير أساسي للمسار Android | MCP server مستقل | IGNORE_REFERENCE | لا يضيف قيمة لمسار APK الشخصي الحالي. |
+| Licensing | target license وvendor notices موجودة | SupoClip AGPL-3.0؛ whisper.cpp وggml تحت MIT-style notices في الأرشيف | MANUAL_REVIEW | لا نسخ للكود المرجعي قبل مراجعة التوافق؛ إعادة التنفيذ المستقل هو الافتراضي، مع حفظ notices إذا أضيفت dependency مستقبلًا. |
 
-## مقارنة تجربة Android المطلوبة
+## التقييم الوزني
 
-> المسار المعتمد هو: **Home → Import → Generate → Processing → Results → Review → Edit → Render → Export**.
+استُخدمت الأوزان المطلوبة في التكليف. الدرجات التالية تقدير هندسي للمفاضلة بين **المسار الحالي** و**نقل بنية المرجع**، وليست benchmark أداءً.
 
-المرجع يقدم dashboard ويب متكاملًا، لكنه ليس تصميمًا مناسبًا للنسخ إلى الهاتف حرفيًا. سيُعاد استخدام الفكرة فقط عندما تقلل عدد القرارات في شاشة الهاتف: اختيار فيديو واضح، حالة رفع منفصلة، progress قابل للاستعادة، ثم قائمة نتائج ومراجعة clip. أما القوائم التسويقية، factory، trend scout، وsocial publishing فتبقى خارج المسار الشخصي.
+| معيار القرار | الوزن | المسار الحالي | نقل بنية المرجع |
+|---|---:|---:|---:|
+| توافق Android | 20% | 5/5 | 2/5 |
+| Correctness | 20% | 4/5 | 3/5 |
+| Stability | 15% | 4/5 | 3/5 |
+| Performance | 15% | 4/5 | 3/5 |
+| Maintainability | 10% | 4/5 | 3/5 |
+| Feature completeness | 10% | 4/5 | 4/5 |
+| Integration cost | 5% | 4/5 | 1/5 |
+| Dependency cost | 5% | 4/5 | 2/5 |
+| **المحصلة التقريبية** | **100%** | **4.15/5** | **2.70/5** |
 
-## تقييم موزون
+## نتيجة التدقيق
 
-استخدمت الأوزان المحددة في طلب التدقيق. الدرجات التالية تقدير هندسي للمقارنة، وليست benchmark أداءً حقيقيًا.
-
-| المكوّن | Android 20% | Correctness 20% | Stability 15% | Performance 15% | Maintainability 10% | Completeness 10% | Integration cost 5% | Dependency cost 5% | الحكم |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| Android native الأساسي | 10 | 9 | 8 | 8 | 8 | 8 | 8 | 8 | KEEP_CURRENT |
-| Gateway/job system الأساسي | 8 | 9 | 8 | 8 | 8 | 9 | 7 | 7 | KEEP_CURRENT |
-| Pipeline engine الأساسي | 4 | 9 | 8 | 8 | 8 | 9 | 8 | 7 | KEEP_CURRENT |
-| Reference Flask web stack | 5 | 6 | 5 | 5 | 6 | 7 | 3 | 4 | IGNORE_REFERENCE |
-| Reference NLP/LLM ideas | 2 | 6 | 5 | 7 | 7 | 5 | 6 | 6 | COMBINE CONCEPTS |
-| Reference sequential splitter | 3 | 7 | 5 | 7 | 7 | 5 | 6 | 6 | ADD_REFERENCE بعد القياس |
-
-## ما لم يُنسخ
-
-لم يتم نسخ أي مجلد أو ملف من الأرشيف إلى المستودع الأساسي. ولم يتم إدخال dependencies المرجعية مثل Flask أو Whisper المحلي أو Groq أو Google SDK أو Edge TTS إلى المسار الأساسي؛ ذلك يحافظ على حدود الخادم ويمنع تضخم APK أو runtime غير الضروري.
-
-## المراجع
-
-[1]: ../reference/video_clipper-main/README.md "Reference project README and feature inventory"
-[2]: ../reference/video_clipper-main/pyproject.toml "Reference project metadata and declared MIT text license"
-[3]: ../pipeline/publikclip_pipeline/engine/contracts.py "Primary engine contract"
-[4]: ../gateway/main.py "Primary Gateway API, jobs, uploads, and artifact handling"
-[5]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Live Android processing worker"
-[6]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Existing Android remote client"
-[7]: ../docs/ARCHITECTURE.md "Canonical architecture decision"
+تم اعتماد `KEEP_CURRENT` للمسار Android → Gateway → Engine → AI/Media Runtime. وتم اعتماد `IMPROVE_CURRENT` للـcaptions وscoring وUX، و`ADD_REFERENCE` لأفكار المحرر والقوالب، و`IGNORE_REFERENCE` للحسابات وbilling وMCP وsocial integrations في هذه المرحلة. لم تُنقل dependencies أو أسرار أو artifacts build من الأرشيف.
 
 ## References
 
-هذه المراجع داخل المستودع نفسه؛ لا يوجد مصدر خارجي مطلوب لإثبات المقارنة المعمارية، لأن المقارنة مبنية على الشيفرة والملفات المرفقة.
+[1]: https://github.com/FujiwaraChoki/supoclip "SupoClip public reference project"
+[2]: ARCHITECTURE.md "Target architecture baseline"
+[3]: CONTRACTS.md "Android/Gateway/Engine contracts"
+[4]: ../gateway/main.py "Private Gateway implementation"
+[5]: ../pipeline/publikclip_pipeline/engine/contracts.py "PublikClip Engine contract"
+[6]: ../android/app/build.gradle.kts "Native Android build configuration"
+[7]: ../VENDORED-LICENSES.md "Target repository vendor notices"
+[8]: ../../upload/whisper.cpp-master.zip "Supplied whisper.cpp reference archive; not committed"
+[9]: https://github.com/ggerganov/whisper.cpp "whisper.cpp upstream reference"
+
+---
+
+**ملاحظة:** لم تُنسخ أي أجزاء من SupoClip أو whisper.cpp إلى المستودع الهدف أثناء هذا التدقيق. القرار الحالي هو الاحتفاظ بالـremote-only Android boundary وإعادة تنفيذ أي أفكار قياس أو UX بشكل مستقل.
+
+## VideoClipper-main المرفق — نتيجة المقارنة الإضافية
+
+يضيف الأرشيف المرفق `VideoClipper-main` مرجعًا مختلفًا عن SupoClip وwhisper.cpp: تطبيق Streamlit أحادي العملية يركز على استخراج الصوت، تحليل Gemini، faster-whisper، إعادة التأطير بالوجه، أنماط letterbox/blurred background/center crop، وcaptions مرسومة عبر Pillow. ملف `LICENSE` في الأرشيف يعلن MIT مع copyright لـKacper. لم تُنسخ منه ملفات source أو assets أو أسرار إلى production.
+
+| فكرة VideoClipper-main | القرار | نتيجة التقييم |
+|---|---|---|
+| Streamlit UI ومعالجة متزامنة داخل الصفحة | IGNORE_REFERENCE | لا يطابق Android lifecycle أو job persistence أو secret boundary. |
+| FFmpeg audio extraction مع MoviePy fallback | COMBINE | نحتفظ بـFFmpeg/Media runtime الحالي ونستفيد من fallback typed فقط؛ لا ننقل MoviePy إلى APK. |
+| faster-whisper وword timestamps | KEEP_CURRENT | تُستخدم timestamps الموجودة في WhisperX/ASR على الخادم، دون transcription ثانٍ على الهاتف. |
+| Gemini cloud audio analysis | ADD_REFERENCE | يُدرس خلف Gateway/provider registry؛ لا يمرر Android API key إلى provider. |
+| RMS audio-energy fallback للفيديو بلا كلام | ADD_REFERENCE | signal deterministic اختياري داخل events/candidates بعد regression fixture. |
+| Face tracking مع EMA/interpolation | COMBINE | تُقارن مع camera director/tracks الحالية بعد benchmark، ولا تُستبدل بلا قياس. |
+| Letterbox وblurred background وPillow captions | ADD_REFERENCE | presets UX/render اختيارية بعد golden tests وبدون تغيير boundary. |
+| JSON-only highlight selection وempty-list error handling | IMPROVE_CURRENT | نحافظ على candidates/scoring وtyped errors/fallback بدل إخفاء فشل LLM. |
+
+المحصلة: المرجع مفيد كمصدر أفكار media UX وfallback، لكنه لا يبرر استبدال Android → Gateway → Engine. القرار يظل **KEEP_CURRENT + COMBINE انتقائي**.
+
+### References إضافية
+
+[10]: ../../references/VideoClipper-main/README.md "Attached VideoClipper feature description"
+[11]: ../../references/VideoClipper-main/ai_utils.py "Attached VideoClipper AI helpers"
+[12]: ../../references/VideoClipper-main/video_utils.py "Attached VideoClipper media helpers"
+[13]: ../../references/VideoClipper-main/LICENSE "Attached VideoClipper MIT license"

@@ -1,66 +1,91 @@
-# عقد API الخاص بتطبيق Android
+# API Reference — Private Processing Gateway
 
-## النطاق
+**الإصدار:** `/v1`.
 
-هذا العقد مخصص لتطبيق Android الشخصي. يستخدم Gateway نفسه كـprivate processing service، لكنه يعرّض مسارات `/jobs/*` مختصرة لا تكشف تفاصيل pipeline الداخلية. أما `/v1/processing/*` فتبقى عقدًا داخلية/legacy للتشغيل والاختبارات desktop.
+**الجمهور:** Android personal client وعميل smoke/E2E، وليس API عامًا متعدد المستخدمين.
 
-## المصادقة
+## الحدود والمصادقة
 
-كل مسار عدا `GET /health` يحتاج `Authorization: Bearer <GATEWAY_TOKEN>`. يجب استخدام HTTPS خارج localhost في الاختبارات، وتخزين الرمز خارج المستودع. لا يضع APK مفتاح Gemini أو مفاتيح مزودي AI.
+يستخدم العميل `Authorization: Bearer <gateway-token>` مع `X-Request-ID` اختياريًا و`X-Device-ID` عند تفعيل device binding. لا تُرسل مفاتيح Gemini أو AssemblyAI أو أي provider إلى Android. يجب تشغيل Gateway خلف HTTPS أو شبكة خاصة؛ قيمة `localhost` مخصصة للاختبار المحلي فقط.
 
-## الموارد
+| المجموعة | المسارات الأساسية | الغرض |
+|---|---|---|
+| Health | `GET /health`, `GET /ready`, `GET /v1/diagnostics` | فحص الخدمة والـruntime والمزودات. |
+| Upload | `POST /v1/sources/uploads`, `PUT /v1/sources/uploads/{id}`, `POST /v1/sources/uploads/{id}/complete` | رفع resumable مع offset وSHA-256. |
+| Processing | `POST /v1/processing/jobs`, `GET /v1/processing/jobs/{id}` | إنشاء job idempotently وقراءة الحالة. |
+| Controls | `POST /v1/processing/jobs/{id}/cancel`, `/retry`, `/resume` | إلغاء، إعادة محاولة، أو استئناف checkpoint صالح. |
+| Results | `GET /v1/processing/jobs/{id}/results`, `GET /v1/processing/jobs/{id}/media/{filename}` | نتائج آمنة وتنزيل artifacts بعد التحقق. |
 
-| الطريقة | المسار | الطلب | الاستجابة |
-|---|---|---|---|
-| GET | `/health` | بلا جسم | readiness مختصر للخدمة والمحرك. |
-| POST | `/jobs` | multipart: `file`, `llm`, `captions`, `mode`, `idempotency_key`؛ أو `source_url` | job id وحالة أولية وprogress. |
-| GET | `/jobs/{id}` | بلا جسم | `job_id`, `state`, `current_stage`, `progress`, `message`, `errors`, `recoverable`. |
-| POST | `/jobs/{id}/cancel` | `{}` | الحالة بعد الإلغاء. |
-| POST | `/jobs/{id}/resume` | `{}` | الحالة بعد جدولة الاستئناف. |
-| GET | `/jobs/{id}/results` | بلا جسم | `clips`, `artifacts`, ونتائج المحرك بعد completion. |
-| GET | `/jobs/{id}/clips/{clip}` | بلا جسم | تفاصيل المقطع والتحليل والتنقيح. |
-| POST | `/jobs/{id}/clips/{clip}/render` | `{}` | artifact المحدث ورابط التنزيل. |
+## إنشاء job
 
-## دورة المهمة
+يرسل العميل مصدرًا مكتملًا وخيارات المعالجة و`idempotency_key`. تعيد الخدمة job id وحالة `QUEUED` أو نتيجة reused عند تكرار المفتاح. القيم الحالية لـ`llm` هي `gemini` و`ollama`، والقيم الحالية لـ`mode` هي `fast`, `balanced`, `quality`, و`maximum`.
 
-الحالات الخارجية هي `QUEUED`, `PREPARING`, مراحل التنفيذ، `COMPLETED`, `FAILED`, `CANCELLED`, و`INTERRUPTED`. لا يعتمد العميل على اسم مرحلة Python لاتخاذ قرار terminal؛ يعتمد على `state`، ويحفظ stage للعرض فقط.
-
-```text
-POST /jobs
-  → GET /jobs/{id}
-  → إذا INTERRUPTED/RETRY_WAIT: POST /jobs/{id}/resume
-  → عند COMPLETED: GET /jobs/{id}/results
-  → GET أو POST render للمقطع عند الحاجة
+```json
+{
+  "source": "upl_01H...",
+  "llm": "gemini",
+  "mode": "balanced",
+  "captions": "classic",
+  "idempotency_key": "android-device-01-upl-01H..."
+}
 ```
 
-## صيغة الخطأ
+## الحالة والنتائج
 
-يرجع الخادم envelope ثابتًا قدر الإمكان:
+الحالة server-side durable، بينما يعرض Android snapshot محليًا عند انقطاع الشبكة. الحالة التوافقية هي `queued`, `running`, `done`, `failed`، مع حالات تفصيلية مثل `CANCELLED`, `INTERRUPTED`, و`RETRY_WAIT`. كل response يجب أن يضم `request_id` و`correlation_id` عندما تكون الخدمة جاهزة لذلك.
+
+```json
+{
+  "job_id": "proc_01H...",
+  "status": "running",
+  "state": "DIARIZING",
+  "stage": "diarize",
+  "fraction": 0.42,
+  "message": "Processing audio",
+  "retry_count": 0,
+  "recoverable": true,
+  "results": null
+}
+```
+
+لا يخرج filesystem path داخلي في response النهائي. يعيد Gateway `media_url` محميًا أو مسارًا نسبيًا يُطلب بنفس Bearer، ويتحقق من وجود الملف، ونوعه، وحجمه، وSHA-256 قبل إتاحته.
+
+## Error envelope
 
 ```json
 {
   "error": {
-    "code": "RESULTS_NOT_READY",
-    "message": "Results are available only after the job is completed.",
-    "retryable": true,
-    "request_id": "req_example"
+    "code": "PIPELINE_UNAVAILABLE",
+    "message": "The processing engine is not ready.",
+    "request_id": "req_01H...",
+    "correlation_id": "cor_01H...",
+    "retryable": true
   }
 }
 ```
 
-يُحافظ Android على `code` و`retryable` في السجل المحلي، ويعرض رسالة آمنة للمستخدم دون stack trace أو مسار ملف داخلي.
+| HTTP | أمثلة code | سلوك Android |
+|---:|---|---|
+| 400/422 | `VALIDATION_ERROR`, `MEDIA_INVALID`, `UNSUPPORTED_FORMAT` | عرض رسالة قابلة للإصلاح دون retry تلقائي. |
+| 401/403 | `UNAUTHORIZED`, `DEVICE_REQUIRED` | إيقاف الطلب وطلب تصحيح إعداد Gateway. |
+| 404 | `JOB_NOT_FOUND`, `MEDIA_NOT_FOUND` | تحديث Room وحذف المرجع غير الصالح. |
+| 409 | `OFFSET_MISMATCH`, `JOB_BUSY`, `JOB_NOT_RESUMABLE` | قراءة الحالة الحالية ثم متابعة المسار المناسب. |
+| 413 | `UPLOAD_TOO_LARGE` | إظهار policy الحد الأقصى. |
+| 429 | `WORKER_BUSY`, `RATE_LIMITED` | احترام backoff و`Retry-After`. |
+| 500–504 | `PIPELINE_FAILED`, `PROVIDER_UNAVAILABLE`, `STORAGE_UNAVAILABLE` | retry/resume فقط عندما يعلن `retryable=true`. |
 
-## idempotency وresume
+### المراجع
 
-يرسل Android مفتاحًا ثابتًا لكل job محلي. عند إعادة تشغيل التطبيق، يقرأ `remoteGatewayJobId` من Room ويستأنف polling بدل إعادة رفع الفيديو أو إنشاء job ثانٍ. إذا كانت المهمة `CANCELLED` نهائيًا، يمسح العميل المعرف البعيد عند اختيار retry المتعمد ويبدأ job جديدًا.
-
-## المراجع
-
-[1]: ../gateway/main.py "Android-facing private routes and canonical v1 routes"
-[2]: ../android/app/src/main/java/com/example/data/remote/PrivateBackendClient.kt "Android private contract client"
-[3]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Live worker integration"
-[4]: ../gateway/tests/test_private_backend.py "Gateway private contract tests"
+[1]: CONTRACTS.md "Detailed contract shapes"
+[2]: ../gateway/main.py "Gateway routes"
+[3]: ../gateway/job_state.py "Durable job state"
+[4]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Android HTTP client"
+[5]: ../docs/FINAL_ACCEPTANCE.md "Acceptance evidence"
 
 ## References
 
-المراجع ملفات محلية داخل المستودع، وهي مصدر تعريف العقد المنفذ حاليًا.
+[1]: CONTRACTS.md "Detailed contract shapes"
+[2]: ../gateway/main.py "Gateway routes"
+[3]: ../gateway/job_state.py "Durable job state"
+[4]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Android HTTP client"
+[5]: FINAL_ACCEPTANCE.md "Acceptance evidence"

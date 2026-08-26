@@ -34,7 +34,7 @@ Errors use this shape:
 
 ## Sources and processing
 
-`POST /v1/sources/upload` accepts a bounded video stream and returns an upload resource. `POST /v1/processing/jobs` accepts:
+The Android canonical path creates a resumable upload with `POST /v1/sources/uploads`, sends `PUT /v1/sources/uploads/{upload_id}` chunks using `X-Upload-Offset` and `Content-Range`, and finalizes with `POST /v1/sources/uploads/{upload_id}/complete`. The legacy `POST /v1/sources/upload` remains only for compatibility clients. After upload completion, `POST /v1/processing/jobs` accepts:
 
 ```json
 {

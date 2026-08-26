@@ -1,37 +1,65 @@
-# سجل التراخيص والمصادر الخارجية
+# Third-Party Licenses
 
-**نطاق المراجعة:** المستودع الأساسي والأرشيف المرفق `video_clipper-main` قبل أي نقل للكود.
+**الغرض:** سجل audit للتراخيص قبل أي دمج من المشروع المرجعي أو إضافة dependency.
 
-## النتيجة
+## نتيجة مراجعة الأرشيفات المرجعية
 
-المستودع الأساسي يعلن **AGPL-3.0-or-later** في `LICENSE` وREADME، ويحتوي على سجل provenance منفصل في `VENDORED-LICENSES.md`. الأرشيف المرجعي لا يحتوي على ملف `LICENSE`, `COPYING`, أو `NOTICE` مستقل في الجذر أو المستوى القريب، لكن `pyproject.toml` يعلن حقلًا نصيًا يقول MIT. هذا الإعلان وحده لا يوفر نص MIT ولا يكفي لتحديد copyright notices أو حالة الملفات المضمنة؛ لذلك صُنّف كـ **LICENSE_UNCLEAR**، ولم يُنسخ منه أي كود.
+### whisper.cpp-master.zip
 
-| المصدر | ما تم فحصه | الحالة | القرار |
+يحتوي الأرشيف المرفق على `LICENSE` بترخيص MIT، مع copyright notice منسوب إلى The ggml authors. توجد أيضًا notices خاصة بأجزاء اختبارية مقتبسة من OpenAI Whisper داخل مجلدات tests، ولذلك لا يُفترض أن كل ملف في المستودع يملك notice واحدًا بمجرد قراءة الترخيص الجذري. عينة Android تعتمد على مصدر whisper.cpp وggml من المستودع الكامل، وعلى CMake/NDK، وتضمّن نموذجًا محليًا داخل assets بحسب README. لم تُنسخ أي ملفات أو نماذج أو binaries إلى المستودع الهدف، فلا يضاف dependency notice تشغيلي إلى APK في هذه الدفعة.
+
+| المصدر | الترخيص المرصود | ما استُخدم من المصدر | القرار |
 |---|---|---|---|
-| publikclip الأساسي | `LICENSE`, `README.md`, `VENDORED-LICENSES.md` | AGPL-3.0-or-later مع سجل مكونات | KEEP_CURRENT؛ الحفاظ على notices والالتزامات. |
-| المشروع المرجعي | `pyproject.toml`, README، tree كامل | إعلان MIT نصي بلا ملف ترخيص مستقل | لا نسخ حرفي؛ إعادة تنفيذ مستقل فقط بعد مراجعة قانونية مناسبة. |
-| Python dependencies المرجعية | `openai-whisper`, Flask، yt-dlp، SDKs، Edge TTS وغيرها في `pyproject.toml` | لا تم تدقيق تراخيص كل نسخة transitive من الأرشيف | لا تُضاف إلى APK أو runtime الأساسي لمجرد وجودها في المرجع. |
-| Android dependencies الحالية | `android/gradle/libs.versions.toml` وGradle build | dependencies خارجية يستخدمها التطبيق | تبقى كما هي؛ يلزم فحص dependency license عند كل release. |
-| Fonts داخل pipeline | `pipeline/.../captions/fonts/OFL-*.txt` | notices موجودة محليًا | KEEP_CURRENT؛ عدم حذف notices. |
+| whisper.cpp root | MIT | قراءة LICENSE وREADME والعينة فقط | لا نسخ؛ إذا أضيفت dependency مستقبلًا يجب حفظ MIT notice. |
+| whisper.cpp `ggml/` | MIT-style notice كما يظهر في الأرشيف | مقارنة CMake/JNI/ASR فقط | لا نسخ؛ يلزم file-level audit قبل أي vendoring. |
+| whisper.cpp test normalizers | OpenAI Whisper MIT notice | لم يُستخدم | لا نسخ ولا dependency. |
+| whisper.cpp Android sample | MIT-covered source plus repository dependencies | fit check معماري فقط | IGNORE_REFERENCE للـAPK الحالي؛ لا نقل مباشر. |
 
-## سجل ما أُخذ من المرجع
+### SupoClip reference
 
-لم يُؤخذ أي ملف أو مقطع كود أو asset من المشروع المرجعي إلى `ISM-dragon/-1`. ما استُخدم هو ملاحظات تصميمية عامة فقط: فصل مراحل واجهة المستخدم، فكرة sequential splitting، قوالب captions، وfallback scoring. هذه الأفكار أعيد تقييمها معماريًا ولم تُعتبر نقلًا لمصدر محمي.
+الأرشيف `supoclip-main.zip` يحتوي على ملف `LICENSE` نصه **GNU Affero General Public License v3.0**، مع copyright notice منسوب إلى Sami Hindi. لذلك فإن أي نسخ أو adaptation من كود SupoClip يحتاج مراجعة قانونية لتوافق AGPL-3.0 مع ترخيص المستودع الهدف، وحفظ notices المناسبة، وتحديد corresponding source عند التوزيع. في هذه الدفعة لم تُنسخ أي ملفات source أو binary أو asset من الأرشيف.
 
-## قواعد الدمج المستقبلية
+| المصدر | الترخيص المرصود | ما استُخدم من المصدر | القرار |
+|---|---|---|---|
+| SupoClip reference ZIP | AGPL-3.0 | مقارنة architecture/UX فقط | لا نسخ؛ الأفكار العامة يعاد تنفيذها مستقلًا. |
+| whisper.cpp reference ZIP | MIT؛ مع notices فرعية داخل tests | مقارنة Android/JNI/ASR فقط | لا نسخ؛ أي استخدام لاحق يحتاج notice وfile-level dependency audit. |
+| Target root | كما هو موثق في `LICENSE` | كود المستودع الحالي | يبقى notice الحالي دون تغيير. |
+| Pipeline caption font | notice موجود داخل `pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt` | font asset الحالي | يحتفظ notice المحلي وشروط OFL الخاصة به. |
+| Vendor model/code | notices ومسارات vendor داخل `pipeline/publikclip_pipeline/vendor/` و`VENDORED-LICENSES.md` | الموجود مسبقًا في الهدف | لا تعديل للـnotice؛ أي تحديث يحتاج مراجعة مستقلة. |
+| Android/Gradle/npm dependencies | تراخيص upstream غير منسوخة إلى source | dependencies build-time/runtime | يجب توليد/مراجعة dependency notice عند التوزيع النهائي. |
 
-قبل إدخال أي component من مصدر خارجي يجب حفظ رابط commit أو archive، اسم صاحب copyright، نص الترخيص، الملفات المتأثرة، compatibility مع AGPL-3.0، dependencies المنقولة، وموضع عرض notice للمستخدم. إذا بقي الترخيص غير واضح، يكون القرار `IGNORE_REFERENCE` أو `MANUAL_REVIEW`، ولا يُستخدم النسخ واللصق كحل مؤقت.
+## قواعد الدمج
 
-هذه الوثيقة ليست رأيًا قانونيًا. أي توزيع تجاري أو نشر عام لـAPK أو خدمة الشبكة يجب أن يمر بمراجعة قانونية للتراخيص وحقوق نماذج الذكاء الاصطناعي وFFmpeg ومصادر الوسائط.
+قبل إدخال dependency أو file من مشروع آخر يجب تحديد license على مستوى repository وfile، وفحص dependency transitive ذات الصلة، وتسجيل copyright/notice، والتحقق من compatibility. إذا كان الترخيص غير واضح أو غير متوافق، لا يُنسخ الكود؛ تُكتب implementation مستقلة مبنية على السلوك العام فقط. لا تُقبل build outputs أو secrets أو model artifacts من مشاريع مرجعية.
 
-## المراجع
+## فحص المستودع
 
-[1]: ../LICENSE "Primary repository AGPL license"
-[2]: ../VENDORED-LICENSES.md "Primary repository third-party provenance"
-[3]: ../reference/video_clipper-main/pyproject.toml "Reference declared metadata and text license"
-[4]: ../reference/video_clipper-main/README.md "Reference project documentation"
-[5]: ../android/gradle/libs.versions.toml "Android dependency catalog"
+تم التفريق بين source المتعقب وملفات build/cache. لا يُعتد بملفات `node_modules` أو Gradle caches كمرجع ترخيص للمشروع، ولا تُضاف إلى Git. يظل `VENDORED-LICENSES.md` وnotices المحلية مصدر المراجعة للمواد الموجودة بالفعل.
+
+> هذا سجل هندسي وليس رأيًا قانونيًا. يلزم counsel review قبل توزيع APK أو Gateway مشتق إذا أُضيف كود AGPL أو dependency ذات copyleft متعارض.
 
 ## References
 
-تم بناء السجل من الملفات المحلية المذكورة أعلاه؛ لا يُفهم الإعلان النصي في `pyproject.toml` على أنه بديل عن ملف ترخيص كامل.
+[1]: https://github.com/FujiwaraChoki/supoclip "Reference project represented by supplied archive"
+[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
+[3]: ../LICENSE "Target license"
+[4]: ../VENDORED-LICENSES.md "Existing vendor notices"
+[5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"
+[6]: ../../upload/whisper.cpp-master.zip "Supplied whisper.cpp archive; not committed"
+[7]: https://github.com/ggerganov/whisper.cpp/blob/master/LICENSE "whisper.cpp MIT license"
+
+### VideoClipper-main المرفق
+
+يحتوي `VideoClipper-main/LICENSE` على **MIT License** مع `Copyright (c) 2026 Kacper`. فُحصت الملفات `ai_utils.py`, `video_utils.py`, و`app.py` على مستوى المكوّنات، ولم يُنسخ أي منها إلى production. استُخدمت أفكار عامة فقط في المقارنة: audio-energy fallback، face EMA/interpolation، crop presets، وcaption styling. لا توجد إشعارات تشغيلية جديدة مطلوبة ما دام الدمج إعادة تنفيذ مستقلة.
+
+| المصدر | الترخيص المرصود | ما استُخدم | القرار |
+|---|---|---|---|
+| `VideoClipper-main/app.py` | MIT ضمن repository | مقارنة Streamlit UX فقط | لا نسخ؛ IGNORE_REFERENCE للـAPK/Gateway |
+| `VideoClipper-main/ai_utils.py` | MIT ضمن repository | مقارنة ASR/Gemini/fallback فقط | لا نسخ؛ provider secrets تبقى server-side |
+| `VideoClipper-main/video_utils.py` | MIT ضمن repository | مقارنة crop/caption/RMS فقط | لا نسخ؛ إعادة تنفيذ مستقلة عند الحاجة |
+| `VideoClipper-main/LICENSE` | MIT، copyright Kacper | license audit | يُحفظ النص إذا حدث نسخ فعلي مستقبلًا |
+
+[8]: ../../references/VideoClipper-main/LICENSE "Attached VideoClipper MIT license"
+[9]: ../../references/VideoClipper-main/README.md "Attached VideoClipper README"
+[10]: ../../references/VideoClipper-main/ai_utils.py "Attached VideoClipper AI helpers"
+[11]: ../../references/VideoClipper-main/video_utils.py "Attached VideoClipper media helpers"

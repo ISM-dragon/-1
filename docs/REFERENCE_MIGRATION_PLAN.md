@@ -1,60 +1,51 @@
-# خطة ترحيل ومقارنة المشروع المرجعي
+# خطة ترحيل الأفكار المرجعية
 
-**الهدف:** الوصول إلى APK Android شخصي يعمل عبر private processing service، مع إبقاء PublikClip Engine ومراحل AI/media على الخادم.
+**الحالة:** معتمدة للتنفيذ التدريجي، وليست تصريحًا بنسخ أي مشروع مرجعي. أضيف إلى نطاق التدقيق في 2026-08-26 أرشيف `whisper.cpp-master.zip` كمرجع Android/JNI/ASR فقط.
 
-## مبدأ التنفيذ
+## المبدأ
 
-تُنفذ الخطة على موجات، ولا تبدأ موجة لاحقة إذا كانت الواجهة السابقة غير مستقرة. المشروع المرجعي يستخدم لفهم أفكار محددة فقط؛ أي component يُعاد تنفيذه مستقلًا داخل بنية publikclip بعد تعريف contract واختبار regression. لا يُسمح بنسخ كود من الأرشيف في ظل غياب ملف ترخيص مستقل واضح.
+المسار المستهدف هو Android APK شخصي يتصل بـPrivate Gateway. ستُرحّل الأفكار التي تخدم هذا المسار فقط، وبحدود عقود واضحة. كل تغيير cross-component يبدأ بتثبيت contract واختبار regression، ثم يُدمج على دفعة صغيرة يمكن التراجع عنها. لا يُسمح بإعادة بناء المشروع من الصفر، ولا بإدخال user accounts أو billing أو Redis أو مزودات جديدة لمجرد مطابقة المرجع.
 
 ## الموجات
 
-| الموجة | النطاق | المخرجات | بوابة الانتقال |
+| الموجة | النطاق | مخرجاتها | بوابة الانتقال |
 |---|---|---|---|
-| Wave 1 | Audit + architecture + comparison | هذه الوثيقة، المقارنة، القرارات، licenses، architecture | اكتمال الجرد وعدم وجود قرار نسخ غير موثق |
-| Wave 2 | Engine + AI/media + backend foundations | Engine facade، lifecycle، checkpoint، media errors، provider fallback | unit tests وcontract tests خضراء، وCLI قابل للتشغيل على host مجهز |
-| Wave 3 | Android core/UI/build | عميل remote، URI handling، WorkManager، notifications، results/export | Android unit tests، lint، release assembly |
-| Wave 4 | Integration | Android ↔ Gateway ↔ Engine، upload/retry/resume/cancel، artifact download | gateway contract + smoke test على خدمة محلية |
-| Wave 5 | E2E + QA + release | اختبار فيديو حقيقي، restart/network loss، APK signed externally | وجود evidence؛ لا يكفي compile |
+| Wave 1 — Audit | مقارنة الكود والميزات والتراخيص | هذه المقارنة، قرارات الدمج، وثائق architecture/contracts | لا production replacement قبل اكتمال الوثائق. |
+| Wave 2 — Engine/Runtime | تثبيت Engine facade، lifecycle، media errors، model diagnostics | عقود v1، checkpoints، failure envelope، اختبارات restart/cancel/resume | جميع اختبارات Python الحالية تمر، مع evidence لاختبار failure paths. |
+| Wave 3 — Android Core | upload sessions، Room state، WorkManager، notifications، secure config | APK client لا يعرف Python ولا الأسرار | unit/lint/build، ثم device test على جهاز فعلي. |
+| Wave 4 — Integration | ربط APK بـGateway خاص، تنزيل النتائج، preview/edit/export | E2E من URI إلى artifact | job ID، stage evidence، hashes، وعدم وجود mock في المسار الأساسي. |
+| Wave 5 — Release QA | توقيع، device matrix، network loss، process death، restart/recovery | release APK وrelease evidence | لا تغلق blockers دون دليل تشغيل فعلي. |
 
-## الأولويات المحددة
+## ترتيب التغييرات
 
-### أولوية P0: تثبيت boundary والعميل الفعلي
+أولًا، يجب تثبيت `/v1` وعقد `ProcessingEngine` بحيث تظل مراحل `ingest → asr → diarize → events → candidates → score → camera → render` خلف facade واحدة. ثانيًا، تم تحسين upload/session في العميل canonical دون تغيير one-shot compatibility route. ثالثًا، يجب استكمال Android UX على شكل Home → Import → Generate → Processing → Results → Review → Edit → Render → Export، مع تخزين حالة job في Room واستخدام WorkManager للاستمرار.
 
-المسار الذي يطلقه `VideoUploadScreen` يستخدم `OpusRepository.enqueueVideoProcessing` ثم `VideoProcessingWorker`. لذلك لا يكفي وجود `remote/*` كمسار غير مستخدم. يجب أن يستعمل العامل الفعلي عقد Gateway أو private backend المعتمد، وأن تكون مفاتيح المصادقة وDevice ID خارج الكود المصدر.
+بعد ذلك فقط تُضاف أفكار المرجع ذات القيمة المحدودة: presets للـcaptions، بيانات rubric واضحة للـscoring، وعمليات trim/split/merge في شاشة التحرير، ومبدأ تسجيل benchmark/system-info المستقل. هذه الإضافات يجب أن تعمل فوق artifacts والعقود الحالية؛ لا يجوز أن تجعل Android يعيد transcription أو يشغل FFmpeg محليًا. وبالنسبة إلى whisper.cpp، لا يُنقل JNI/CMake أو نموذج GGML إلى APK في هذه الموجة؛ أي مسار ASR محلي مستقبلي يحتاج عقد `LocalAsrProvider` منفصلًا، إدارة model/checksum، قياسًا على أجهزة فعلية، ومقارنة accuracy/latency/RAM مع WhisperX قبل تفعيله. أما B-roll، النشر الاجتماعي، MCP، الحسابات، billing، والـmulti-user فخارج هذه الخطة.
 
-### أولوية P0: توافق العقد
+## ضوابط الترحيل
 
-يجب أن يدعم العميل المسارات التي يوفرها الخادم المختار فقط. Gateway الحالي يوفر `/v1/sources/upload` و`/v1/processing/jobs/*`، بينما backend البديل يوفر `/uploads` و`/jobs/*`. لا يجوز خلط المسارين في عميل واحد دون adapter صريح. القرار المرحلي هو إبقاء Gateway control plane canonical لأن Android الحالي، الوثائق، والاختبارات تستخدم عقده؛ ويُعامل `backend/` كـalternative stack حتى يثبت دمجه في قرار مستقل.
+| الخطر | الضابط |
+|---|---|
+| كسر checkpoints القديمة | قراءة legacy envelopes، وكتابة versioned envelopes، واختبار resume من كل stage. |
+| اختلاف نتائج scoring | إطلاق rubric versioned وتسجيله في job metadata، ثم مقارنة النتائج قبل تغيير default. |
+| تضخم APK | فحص APK archive يمنع Python/uv/Node/Rust/FFmpeg وWhisper/GGML models والنماذج والأسرار. |
+| فقد upload عند انقطاع الشبكة | offset + SHA-256 + idempotency key، واختبار interruption/resume. |
+| تسرب الأسرار | provider keys في Gateway فقط، وAndroid لا يستقبل إلا capability/result آمنًا. |
+| التباس بين Android native وTauri Android | artifact واحد وapplication ID واحد للمسار الشخصي؛ Tauri يبقى مسارًا منفصلًا. |
+| نسخ ترخيص غير واضح | إعادة التنفيذ المستقل عند أي غموض، وإضافة سجل إلى `THIRD_PARTY_LICENSES.md` قبل الدمج؛ whisper.cpp MIT-style لا يعني نسخ source بلا حفظ notice. |
 
-### أولوية P1: upload resumability
+## بوابة whisper.cpp المستقبلية
 
-عميل Android الحالي يرفع one-shot، رغم أن Gateway يوفر جلسات resumable مع offset وSHA-256. يُضاف adapter resumable بعد تثبيت contract، مع fallback one-shot فقط للخوادم التي تعلن capability صراحة. هذا يمنع إعادة رفع ملف كبير كاملًا بعد network interruption.
+لا تُفتح تذكرة دمج native ASR إلا إذا توفرت عينة صوت وفيديو ممثلة، baseline موثق لـWhisperX، ومقارنة قابلة لإعادة الإنتاج لزمن ASR، الذاكرة، الدقة، حجم APK، واستهلاك البطارية. يجب أن يكون التشغيل opt-in ولا يغير المسار remote الافتراضي، وأن تعالج العملية النماذج القابلة للتنزيل والتحقق والحذف دون وضعها داخل Git.
 
-### أولوية P1: state restoration
+## معايير التراجع
 
-يجب حفظ local job وremote job ID وprogress وstage وartifact paths بطريقة durable، ثم إعادة enqueue بعد process death. `Room` يبقى مصدر الحالة لمسار التطبيق الرئيسي، مع عدم إنشاء store متوازٍ غير مستخدم إلا إذا أُعيد توصيله بالواجهة.
-
-### أولوية P1: error taxonomy
-
-تُوحّد أخطاء media وmodel وnetwork في أكواد قابلة للعرض وإعادة المحاولة: `MEDIA_INVALID`, `FFMPEG_MISSING`, `FFMPEG_FAILED`, `MODEL_MISSING`, `MODEL_INVALID`, `INSUFFICIENT_DISK`, `UNSUPPORTED_FORMAT`, `AUTH_REQUIRED`, `NETWORK_UNAVAILABLE`, و`JOB_NOT_RESUMABLE`.
-
-### أولوية P2: تحسينات المرجع
-
-تُعاد دراسة sequential splitting، قوالب captions الأبسط، وواجهة clip review بعد استقرار المسار الأساسي. أي إضافة يجب أن تأتي مع benchmark أو regression test، وألا تُدخل Flask/Whisper desktop أو SDKs غير لازمة إلى APK.
-
-## معايير القبول
-
-لا تُعلن المهمة مكتملة إلا بعد إثبات: اختيار فيديو حقيقي، رفعه، إنشاء job، polling، تنفيذ stages، إرجاع clip metadata، تنزيل MP4، preview/edit/render/export، ثم إغلاق Android وإعادة فتحه واستعادة job، مع اجتياز cancel/retry/resume/network interruption وfailure handling. نتائج كل اختبار تحفظ في `evidence/` وتذكر في `MANUS_HANDOFF.md`.
-
-## المراجع
-
-[1]: ../docs/ARCHITECTURE.md "Canonical architecture"
-[2]: ../gateway/main.py "Gateway v1 routes and persistent workers"
-[3]: ../backend/app.py "Alternative private backend API"
-[4]: ../android/app/src/main/java/com/example/ui/screens/VideoUploadScreen.kt "Main Android import and enqueue flow"
-[5]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Main Android worker"
-[6]: ../reference/video_clipper-main/README.md "Reference feature inventory"
+يُلغى التغيير إذا أدى إلى فشل في build أو regression suite، أو زاد زمن المعالجة/الذاكرة دون evidence، أو غيّر output السابق دون versioning، أو احتاج dependency غير متوافقة مع Android/ترخيص المشروع، أو جعل failure في LLM أو FFmpeg يسبب crash بدل error قابل للفحص.
 
 ## References
 
-المراجع أعلاه ملفات محلية في نفس المستودع وتمثل source of truth للقرارات المرحلية.
+[1]: REFERENCE_COMPARISON.md "Comparison and decisions"
+[2]: ARCHITECTURE.md "Canonical topology and ownership"
+[3]: CONTRACTS.md "Public API and engine contracts"
+[4]: FINAL_ACCEPTANCE.md "Evidence-based acceptance matrix"
+[5]: REFERENCE_COMPARISON.md "SupoClip and whisper.cpp comparison"

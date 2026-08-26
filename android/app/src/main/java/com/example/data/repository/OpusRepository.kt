@@ -42,7 +42,7 @@ import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
-import com.example.data.remote.PrivateBackendClient
+import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.remote.SpeechToTextService
 import com.example.data.remote.SocialGatewayClient
 import com.example.data.video.CaptionSidecarWriter
@@ -721,7 +721,7 @@ class OpusRepository(context: Context) {
         durationMinutes: Int,
         targetPlatform: String,
         captionTheme: String,
-        clips: List<PrivateBackendClient.RemoteClip>,
+        clips: List<ProcessingGatewayClient.RemoteClip>,
         exportedPaths: Map<String, String>
     ): Long = withContext(Dispatchers.IO) {
         require(clips.isNotEmpty()) { "Gateway لم يُرجع مقاطع صالحة." }
@@ -763,7 +763,7 @@ class OpusRepository(context: Context) {
         val existing = processingJobDao.get(jobId)
         val config = _gatewayConfig.value
         val remoteMessage = if (!existing?.remoteGatewayJobId.isNullOrBlank() && config.baseUrl.isNotBlank()) {
-            PrivateBackendClient(appContext.contentResolver).cancel(config, requireNotNull(existing?.remoteGatewayJobId))
+            ProcessingGatewayClient(appContext.contentResolver).cancel(config, requireNotNull(existing?.remoteGatewayJobId))
                 .fold({ "تم إلغاء المهمة على Gateway." }, { "تعذر تأكيد الإلغاء على Gateway: ${it.message.orEmpty()}" })
         } else {
             "لا يوجد job بعيد محفوظ؛ تم إلغاء العمل المحلي."

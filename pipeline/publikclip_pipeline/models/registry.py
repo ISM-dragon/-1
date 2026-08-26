@@ -27,6 +27,10 @@ class ModelSpec:
     url: str
     sha256: str | None = None
     approx_mb: int = 0
+    version: str = "unversioned"
+    size_bytes: int | None = None
+    source: str | None = None
+    managed: bool = True
 
 
 REGISTRY: dict[str, ModelSpec] = {}

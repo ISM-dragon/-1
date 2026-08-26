@@ -109,7 +109,7 @@ MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1
 MEDIA_UPLOAD_TTL_SECONDS = max(300, int(os.getenv("ISM_MEDIA_UPLOAD_TTL_SECONDS", str(24 * 60 * 60))))
 MEDIA_UPLOAD_CHUNK_BYTES = max(1, int(os.getenv("ISM_MEDIA_UPLOAD_CHUNK_BYTES", str(16 * 1024 * 1024))))
 
-app = FastAPI(title="ISM Social Gateway", version="0.11.0")
+app = FastAPI(title="ISM Social Gateway", version="0.12.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
@@ -1223,6 +1223,29 @@ def _ffmpeg_capability() -> dict[str, Any]:
         return {"ready": False, "captions": False, "message": "FFmpeg capability could not be checked."}
 
 
+def _runtime_capability() -> dict[str, Any]:
+    """Report runtime readiness without importing heavy AI modules at startup."""
+    try:
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        from publikclip_pipeline.runtime import MediaManager, ModelManager
+
+        media_manager = MediaManager()
+        media = media_manager.check()
+        models = ModelManager().status()
+        model_items = models if isinstance(models, list) else []
+        missing = [item["key"] for item in model_items if item.get("state") in {"missing", "partial"}]
+        invalid = [item["key"] for item in model_items if item.get("state") == "corrupted"]
+        return {
+            "hardware": media_manager.hardware.to_dict(),
+            "media": media,
+            "models": {"declared": len(model_items), "missing": missing, "invalid": invalid, "ready": not missing and not invalid},
+            "ready": bool(media.get("valid")) and not missing and not invalid,
+        }
+    except Exception as error:  # noqa: BLE001 - diagnostics must not crash the API
+        return {"ready": False, "error_code": "RUNTIME_CHECK_FAILED", "error": str(error)}
+
+
 def _gemini_diagnostic_sync() -> dict[str, Any]:
     key = read_server_gemini_key()
     if not key:
@@ -1282,8 +1305,22 @@ async def auth_session(request: Request) -> dict[str, Any]:
 async def processing_capabilities() -> dict[str, Any]:
     checks = pipeline_checks()
     ffmpeg = _ffmpeg_capability()
+    runtime = _runtime_capability()
     gemini_configured = bool(read_server_gemini_key())
-    return {**checks, "gateway": True, "pipeline": bool(checks["pipeline"]), "gemini": gemini_configured, "ffmpeg": bool(ffmpeg["ready"]), "details": {"pipeline": {"ready": bool(checks["pipeline"]), "message": "Pipeline CLI is present; runtime dependencies are checked when the worker starts."}, "gemini": {"configured": gemini_configured, "provider": "gemini", "status": "configured" if gemini_configured else "not_configured"}, "ffmpeg": ffmpeg}}
+    return {
+        **checks,
+        "gateway": True,
+        "pipeline": bool(checks["pipeline"]),
+        "gemini": gemini_configured,
+        "ffmpeg": bool(ffmpeg["ready"]),
+        "runtime_ready": bool(runtime.get("ready")),
+        "details": {
+            "pipeline": {"ready": bool(checks["pipeline"]), "message": "Pipeline CLI is present; runtime dependencies are checked when the worker starts."},
+            "gemini": {"configured": gemini_configured, "provider": "gemini", "status": "configured" if gemini_configured else "not_configured"},
+            "ffmpeg": ffmpeg,
+            "runtime": runtime,
+        },
+    }
 
 
 @app.get("/v1/diagnostics/gemini", dependencies=[Depends(auth)])

@@ -25,6 +25,16 @@ from .contracts import (
 )
 
 _INTERNAL_TO_PUBLIC_STAGE = {"diarize": "diarization", "score": "scoring"}
+_STAGE_SCHEMA_VERSIONS = {
+    "ingest": 1,
+    "asr": 1,
+    "diarize": 2,
+    "events": 2,
+    "candidates": 1,
+    "score": 1,
+    "camera": 1,
+    "render": 1,
+}
 
 
 def _public_stage(name: str) -> str:
@@ -47,13 +57,9 @@ def _settings_json(settings: Mapping[str, Any] | Any | None) -> str:
 
 
 def _read_envelope(job: queue.Job, stage: str) -> dict[str, Any] | None:
-    path = queue.checkpoint_path(job, stage)
-    try:
-        payload = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    data = payload.get("data")
-    return data if isinstance(data, dict) else None
+    """Read only a checkpoint matching the stage's current schema contract."""
+    schema_version = _STAGE_SCHEMA_VERSIONS.get(stage, 1)
+    return queue.read_checkpoint(job, stage, schema_version)
 
 
 class PipelineEngine(ProcessingEngine):

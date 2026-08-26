@@ -1,29 +1,44 @@
 # AI Runtime
 
-## الحدود
+**المكان:** Private Gateway/AI host فقط.
 
-تعمل نماذج ASR وdiarization وaudio events وface/active-speaker detection على private processing host. لا يحمل APK Python أو PyTorch أو WhisperX أو server-side provider keys. Android يرسل options ويستقبل metadata وartifacts فقط.
+لا يحتوي APK على Python أو WhisperX أو PyTorch أو provider keys أو model weights. يحتفظ الخادم الخاص بسجل المزودات، وmodel cache، وdiagnostics، ويعرض للعميل readiness وerrors آمنة فقط.
 
-## Model Manager
+## نموذج السجل
 
-لكل نموذج يجب تسجيل الاسم، الإصدار، الحجم، checksum، المصدر، local path، installed state، وhealth. العمليات المطلوبة هي `check`, `download`, `resume`, `verify`, `load`, `unload`, و`delete`. model cache يعيش خارج مساحة Android.
+| الحقل | الغرض |
+|---|---|
+| `name` | الاسم المنطقي للنموذج أو المزود. |
+| `version` | تثبيت reproducible للنتائج. |
+| `size_bytes` | التحقق من disk budget. |
+| `sha256` | منع model corruption أو substitution. |
+| `source` | مصدر التنزيل أو artifact registry. |
+| `local_path` | مسار خاص بالخادم، ولا يخرج إلى العميل. |
+| `installed` | هل الملفات كاملة ومتحقق منها؟ |
+| `health` | `ready`, `missing`, `invalid`, أو `unavailable`. |
 
-## المزودات وfallback
+## الحدود التشغيلية
 
-يستخدم scoring الحالي مزودات configurable ويدعم Gemini/Ollama وفق إعدادات الخادم. فشل LLM لا يجب أن يسقط الوظيفة إذا كانت قواعد scoring المحلية قادرة على إنتاج نتيجة؛ يسجل النظام `LLM_UNAVAILABLE` أو `LLM_INVALID_RESPONSE` ويستمر بدرجة confidence مخفضة. لا تُرسل ملفات الفيديو كاملة إلى مزود خارجي ضمن المسار المحلي إلا بقرار صريح.
+تبدأ الخدمة بفحص FFmpeg/ffprobe، مساحة التخزين، قابلية كتابة job directory، ووجود ASR/diarization models. عند اختيار Gemini أو Ollama يجب أن تعيد diagnostics سببًا قابلًا للفهم. لا يبدأ job جديد إذا كان provider المطلوب غير جاهز، ولا يحوّل هذا الوضع إلى 500 غامض أو crash.
 
-## التوافق مع المرجع
+يجب أن يكون model download قابلًا للاستئناف والتحقق والحذف الآمن. تحميل النموذج أو provider client يكون lazy ومخزنًا في cache لتجنب reload لكل job. تُقاس أزمنة ASR وdiarization وscoring واستهلاك RAM/VRAM قبل أي optimization.
 
-المشروع المرجعي يعتمد Whisper المحلي وLLM fallback من Groq/Gemini/NVIDIA. هذه أفكار تشغيلية فقط؛ لم تُنقل dependencies أو SDKs إلى APK. يحتفظ publikclip بمساره الحالي لأنه يضم diarization وevents وcamera وscoring قابلًا للتدقيق.
+## Scoring وfallback
 
-## المراجع
+يبقى scoring الحالي هو الأساس. يمكن للـLLM أن يضيف hook/value/shareability signals أو تفسيرًا، لكنه لا يحتكر صحة النتيجة. عند network/provider failure، يستخدم المحرك fallback rubric أو signal-based scoring عندما يكون متاحًا، ويسجل `provider_status`, `rubric_version`, و`confidence` في metadata. لا تُرسل transcript أو media إلى provider إلا وفق إعداد مالك Gateway.
 
-[1]: ../pipeline/publikclip_pipeline/models/registry.py "Model registry"
-[2]: ../pipeline/publikclip_pipeline/models/specs.py "Model specifications"
-[3]: ../pipeline/publikclip_pipeline/scoring/llm.py "LLM scoring integration"
-[4]: ../pipeline/publikclip_pipeline/scoring/stage.py "Scoring stage"
-[5]: ../reference/video_clipper-main/pyproject.toml "Reference AI dependencies"
+### المراجع
+
+[1]: ../gateway/provider_registry.py "Provider registry and health"
+[2]: ../gateway/secret_vault.py "Gateway-owned secrets"
+[3]: ../pipeline/publikclip_pipeline/insights/ "Scoring and calibration"
+[4]: ../pipeline/publikclip_pipeline/asr/ "ASR runtime"
+[5]: ../docs/FINAL_ACCEPTANCE.md "Observed readiness blockers"
 
 ## References
 
-المراجع ملفات محلية في المستودع.
+[1]: ../gateway/provider_registry.py "Provider registry and health"
+[2]: ../gateway/secret_vault.py "Gateway-owned secrets"
+[3]: ../pipeline/publikclip_pipeline/insights/ "Scoring and calibration"
+[4]: ../pipeline/publikclip_pipeline/asr/ "ASR runtime"
+[5]: FINAL_ACCEPTANCE.md "Observed readiness blockers"

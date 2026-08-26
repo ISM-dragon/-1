@@ -1,35 +1,44 @@
-# مصفوفة الاختبار
+# Test Matrix
 
-| الحالة | الطبقة | الاختبار | الدليل المطلوب | الحالة الحالية |
-|---|---|---|---|---|
-| فيديو MP4 بصوت | pipeline/Gateway | ingest → render → artifact validation | pytest + smoke video | يحتاج host runtime فعلي |
-| فيديو طويل | pipeline | checkpoints وعدم إعادة ASR | checkpoint trace ووقت المراحل | مخطط، يحتاج benchmark |
-| ملف كبير | Android/Gateway | upload progress وresume | request offsets وSHA-256 | client main path one-shot؛ التحسين المستقبلي |
-| بلا صوت | pipeline | ASR error مصنف ولا crash غامض | error code + regression | تغطية جزئية |
-| media تالف | Gateway | `MEDIA_INVALID` | API error envelope | تغطية worker جزئية |
-| متحدثون متعددون | pipeline | diarization/camera | score/render evidence | يحتاج models |
-| كلام سريع | pipeline | timestamps وcaptions | caption regression | unit coverage موجودة |
-| model مفقود | AI runtime | `MODEL_MISSING` وretry | diagnostics + log | يحتاج host setup |
-| FFmpeg مفقود | media runtime | `FFMPEG_MISSING` | readiness response | Gateway diagnostics موجود |
-| LLM غير متاح | scoring | fallback محلي وعدم crash | scoring output مع confidence | unit coverage جزئية |
-| cancellation | Android/Gateway | cancel durable وnotification | Room + Gateway transition | code path موجود |
-| resume | Android/Gateway | remote ID محفوظ وresume checkpoint | restart test | client regression مضاف |
-| backend restart | Gateway | worker/state recovery | SQLite + worker evidence | موجود كاختبارات Gateway |
-| network interruption | Android | WorkManager backoff | log + final state | يحتاج جهاز/خدمة مستقرة |
-| Android process death | Android | reopen واستعادة job | device/emulator evidence | غير مثبت في sandbox |
-| rendering failure | pipeline/Gateway | `FFMPEG_FAILED` أو render error | artifact absence + state | يحتاج media fixture |
-| release APK | Android | lint، unit، assemble، signing/zip | build logs وSHA-256 | SDK غير موجود في sandbox الحالي |
+**قاعدة القبول:** compilation وحده لا يثبت اكتمال feature. يجب ربط كل PASS بدليل قابل لإعادة الفحص، ولا تُحتسب mocks كدليل production.
 
-لا تعتبر compilation وحدها قبولًا. كل فشل يجب أن يتبع: reproduce → fix → regression test → verify، مع حفظ السجل في `evidence/` وتحديث `MANUS_HANDOFF.md`.
+| الفئة | السيناريو | الاختبار/الدليل الحالي | الحالة |
+|---|---|---|---:|
+| Build | Frontend typecheck وVite build | `npm run build` | PASS |
+| Python | Gateway + pipeline regression | `python3 -m pytest -q` | PASS: 164، skipped: 1 |
+| Engine | lifecycle/checkpoints/progress | `pipeline/tests/test_engine.py`, `test_queue.py` | PASS |
+| Media | invalid/corrupt source | `gateway/tests/test_media_lifecycle.py`, smoke evidence | PASS |
+| Upload | SHA-256 session/chunk/offset/complete | `ProcessingGatewayClient.uploadResumable`, Gateway `/v1/sources/uploads` contract | STATIC PASS؛ interruption E2E مطلوب على جهاز/Gateway فعلي |
+| Failure | missing provider/model/FFmpeg/render | targeted failure suite | PASS للـclassification، لا يثبت production readiness |
+| Resilience | Gateway restart | `evidence/gateway_restart_recovery.json` | PASS جزئيًا على Gateway |
+| Resilience | network loss/recovery | `evidence/network_loss_observation.json` و`network_loss_recovery.json` | PASS جزئيًا على Gateway |
+| Control | active cancel | `evidence/active_cancel.json` | PASS على Gateway |
+| Control | retry/resume | retry evidence وcontract tests | PASS جزئيًا؛ لا يثبت E2E من Android |
+| Upload recovery | network interruption during chunk upload | Gateway session dedupe by `(bytes, sha256)` + WorkManager retry | NOT RUN: يحتاج Gateway وجهاز فعلي |
+| Android | unit tests | `:app:testDebugUnitTest` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Android | lint | `:app:lint` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Android | release assembly | `:app:assembleRelease` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Device | install/open/picker/preview/export | ADB device + screenshots/logcat | BLOCKED: لا جهاز متصل |
+| E2E | APK → upload → full pipeline → export | job ID + stages + artifact hashes | BLOCKED: provider/device readiness |
+| Release | signing verification | `apksigner verify --verbose` | BLOCKED حتى توفير release keystore |
+| Large media | 100MB/500MB/1GB+ | `RUN_LARGE_MEDIA_TESTS=1` | SKIPPED عمدًا بسبب الموارد |
 
-## المراجع
+## سيناريوهات يجب إغلاقها قبل release
 
-[1]: ../evidence/ "Existing repository test evidence"
-[2]: ../gateway/tests/ "Gateway lifecycle and safety tests"
-[3]: ../pipeline/tests/ "Pipeline unit and regression tests"
-[4]: ../android/app/src/test/ "Android unit and contract tests"
-[5]: ../docs/FINAL-ACCEPTANCE.md "Existing acceptance criteria"
+يجب تشغيل فيديو عادي وطويل وكبير، ومصدر بلا audio، وmedia فاسدة، وmulti-speaker، وfast speech، وmissing model، وmissing FFmpeg، وLLM unavailable، وcancellation، وresume، وbackend restart، وnetwork interruption، وAndroid process death، وrender failure. لكل failure يجب حفظ reproduction ثم fix ثم regression test ثم verification.
+
+### المراجع
+
+[1]: ../evidence/ "Verification evidence"
+[2]: FINAL_ACCEPTANCE.md "Acceptance decision"
+[3]: RELEASE_BLOCKERS.md "Open blockers"
+[4]: ../.github/workflows/quality-gate.yml "CI quality gate"
+[5]: ../.github/workflows/android-build.yml "Android CI"
 
 ## References
 
-المراجع محلية في المستودع.
+[1]: ../evidence/ "Verification evidence"
+[2]: FINAL_ACCEPTANCE.md "Acceptance decision"
+[3]: RELEASE_BLOCKERS.md "Open blockers"
+[4]: ../.github/workflows/quality-gate.yml "CI quality gate"
+[5]: ../.github/workflows/android-build.yml "Android CI"

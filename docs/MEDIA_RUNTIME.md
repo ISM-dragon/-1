@@ -1,48 +1,47 @@
 # Media Runtime
 
-## المسؤولية
-
-تجري probing وvalidation وaudio extraction وframe extraction وCFR/transcoding وrender وcleanup على الخادم الخاص. Android يثبت URI ويعرض preview خفيفًا، لكنه لا يعتمد على desktop FFmpeg أو Python runtime.
+**المكان:** Private backend وPublikClip Engine.
 
 ## دورة الوسائط
 
-```text
-source bytes/URL
- → validation + ffprobe
- → normalized working media
- → audio/frames
- → analysis artifacts
- → candidate/render outputs
- → MP4 validation + checksum
- → authenticated download
- → cleanup حسب retention policy
-```
+تبدأ كل وظيفة بـprobe وvalidation قبل تشغيل AI. يُحفظ المصدر في job-private directory، وتُستخرج نسخة audio عند الحاجة، وتُستخدم frame extraction وCFR/transcoding حسب متطلبات stages. بعد render يتحقق النظام من وجود MP4 غير صفري، وقابلية القراءة، والحجم، والـchecksum، ثم ينشر artifact عبر Gateway المحمي. تُحذف الملفات المؤقتة فقط بعد نجاح النشر أو وفق retention policy تشخيصية.
 
-## تصنيف الأخطاء
+| العملية | شرط النجاح |
+|---|---|
+| Probe | وجود container/streams وduration قابلة للقراءة. |
+| Validate | صيغة وحجم وcodec ضمن policy، مع رفض الملف الفاسد قبل pipeline. |
+| Audio extraction | ملف audio قابل للقراءة ومعدل عينة مناسب للـASR. |
+| Frame extraction | timestamps منتظمة لاستخدام face/speaker analysis. |
+| CFR/transcode | مصدر متوافق مع render دون drift أو variable-rate مفاجئ. |
+| Render | خروج clip يطابق 9:16 وإعدادات captions/camera المطلوبة. |
+| Cleanup | إزالة temp files دون حذف checkpoints أو outputs المنشورة. |
 
-| الرمز | المعنى | قابلية إعادة المحاولة |
-|---|---|---|
-| `MEDIA_INVALID` | الملف تالف أو لا يمكن قراءته | لا، إلا بعد اختيار ملف آخر |
-| `UNSUPPORTED_FORMAT` | container/codec غير مدعوم | لا، بعد transcoding أو ملف آخر |
-| `FFMPEG_MISSING` | binary غير متاح على الخادم | نعم بعد إصلاح البيئة |
-| `FFMPEG_FAILED` | فشل أمر FFmpeg | يعتمد على الرسالة والـartifact |
-| `MODEL_MISSING` | النموذج لم يُثبت | نعم بعد التنزيل |
-| `MODEL_INVALID` | checksum أو loading غير صالح | نعم بعد إعادة التحقق |
-| `INSUFFICIENT_DISK` | المساحة أقل من الحد | نعم بعد التنظيف/التوسعة |
-| `CLIP_FILE_NOT_FOUND` | artifact غير موجود | نعم إذا كان checkpoint سليمًا |
+## الأخطاء المستقرة
 
-## الأمن والتنظيف
+| code | المعنى | قابلية retry |
+|---|---|---:|
+| `MEDIA_INVALID` | الملف غير قابل للفحص أو فاسد | لا |
+| `FFMPEG_MISSING` | الأدوات غير مثبتة أو غير قابلة للتشغيل | بعد إصلاح الخادم فقط |
+| `FFMPEG_FAILED` | فشل أمر FFmpeg بعد validation | حسب السبب |
+| `MODEL_MISSING` | نموذج مطلوب غير موجود | بعد التثبيت |
+| `MODEL_INVALID` | checksum أو metadata غير صالح | بعد إعادة التنزيل |
+| `INSUFFICIENT_DISK` | المساحة غير كافية للمصدر/intermediates/output | بعد التنظيف أو زيادة المساحة |
+| `UNSUPPORTED_FORMAT` | container/codec خارج policy | لا |
 
-كل مسار artifact يُحل داخل job root قبل تقديمه. تُحذف الملفات المؤقتة عند الفشل، وتُحفظ outputs وcheckpoints فقط وفق retention policy. يجب أن يفرض endpoint download المصادقة وmedia type المتوقع وألا يكشف مسارات filesystem.
+لا يضمّن Gateway command lines كاملة أو مسارات host أو secrets في response للعميل. تُحفظ التفاصيل محليًا في logs مرتبطة بـ`correlation_id`.
 
-## المراجع
+### المراجع
 
-[1]: ../pipeline/publikclip_pipeline/ingest/normalize.py "Media normalization"
-[2]: ../pipeline/publikclip_pipeline/render/ffmpeg_bin.py "FFmpeg discovery"
-[3]: ../pipeline/publikclip_pipeline/render/renderer.py "Rendering"
-[4]: ../gateway/worker_queue.py "Artifact validation and disk safety"
-[5]: ../gateway/main.py "Upload and media endpoints"
+[1]: ../pipeline/publikclip_pipeline/media/ "Media pipeline modules"
+[2]: ../pipeline/publikclip_pipeline/render/ "Rendering and FFmpeg resolution"
+[3]: ../gateway/main.py "Upload validation and media delivery"
+[4]: ../gateway/processing_service.py "Processing bridge"
+[5]: ../evidence/gateway_smoke.json "Observed invalid-media behavior"
 
 ## References
 
-المراجع محلية داخل المستودع.
+[1]: ../pipeline/publikclip_pipeline/media/ "Media pipeline modules"
+[2]: ../pipeline/publikclip_pipeline/render/ "Rendering and FFmpeg resolution"
+[3]: ../gateway/main.py "Upload validation and media delivery"
+[4]: ../gateway/processing_service.py "Processing bridge"
+[5]: ../evidence/gateway_smoke.json "Observed invalid-media behavior"

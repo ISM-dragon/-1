@@ -1,37 +1,45 @@
-# Android UI ومسؤوليات العميل
+# Android UI وClient Responsibilities
 
-## المسار الأساسي
+**الهدف:** APK شخصي خفيف أمام Gateway خاص.
 
-يبدأ التطبيق من Home، ثم يفتح Import لاختيار فيديو عبر Photo Picker أو GetContent. بعد قراءة metadata وتثبيت URI في app-private storage، يطلق Generate مهمة WorkManager. شاشة Processing تعرض progress وstage ورسالة آمنة ويمكن إغلاق التطبيق خلالها. عند completion تظهر Results، ثم Clip Review وEdit وRender وExport.
+## المسار الرئيسي
 
-## ما يفعله Android
+```text
+Home → Import → Generate → Processing → Results
+     → Clip Review → Edit → Render → Export
+```
 
-| المسؤولية | التنفيذ |
+تختار شاشة Import فيديو من Photo Picker أو URI مدعوم، وتنسخه إلى app-private storage قبل جدولة الرفع. شاشة Generate تجمع خيارات آمنة مثل mode وcaption preset؛ لا تعرض provider secrets. شاشة Processing تعرض state وstage وfraction من Gateway مع حالة offline/reconnecting، وتسمح بالإلغاء عندما يكون job قابلًا لذلك. Results وClip Review تعرضان metadata والـpreview، ثم تحفظ شاشة Edit تغييرات trim/caption/framing كطلب render جديد أو update مقيد. Export ينزل artifact ويتحقق من bytes قبل عرضه عبر Android media/share APIs.
+
+| مسؤولية Android | ما يجب ألا يفعله |
 |---|---|
-| اختيار الفيديو | Photo Picker/GetContent وURI permissions. |
-| metadata وpreview | MediaMetadataRetriever وpreview خفيف قبل الرفع. |
-| background work | CoroutineWorker/WorkManager مع network constraint وforeground notification. |
-| الحالة | Room `ProcessingJobEntity` مع remote job ID وprogress وstage. |
-| الشبكة | private-backend client، Bearer token، HTTPS خارج localhost، retry/resume. |
-| النتائج | تنزيل MP4 إلى `filesDir/gateway_exports` واستيرادها إلى Room Project/Clip. |
-| التحرير | تمرير خيارات edit إلى endpoint render؛ لا يُنقل pipeline إلى الهاتف. |
+| اختيار الفيديو والوصول إلى URI | تمرير `content://` إلى الخادم باعتباره filesystem path. |
+| نسخ المصدر والتحقق من الحجم | الاحتفاظ بمصدر أو نتيجة في public storage بلا حاجة. |
+| upload/poll/control عبر Gateway | استيراد Python internal modules أو تشغيل FFmpeg server binary. |
+| Room job state وWorkManager | افتراض أن Activity أو process سيبقى حيًا أثناء المعالجة. |
+| foreground notification وطلب `POST_NOTIFICATIONS` | إنشاء progress وهمي أو إعلان completion قبل server state. |
+| preview/cache/export | عرض path داخلي أو URL غير محمي. |
 
-## مبادئ UX
+## الاستمرار والـprocess death
 
-لا تُعرض مفاتيح server أو stack traces أو filesystem paths. تُعرض رسائل عربية مفهومة مع code داخلي عند الحاجة. لا يعتمد screen state على بقاء Activity؛ عند العودة يقرأ التطبيق Room ويعيد مراقبة المهمة. لا تُجعل social publishing أو dashboard شرطًا لإنشاء clip شخصي.
+يحتفظ Room بـ`remoteGatewayJobId` وupload offset وstate وlast error. يستخدم WorkManager unique work، وnetwork constraint، وbackoff. عند إغلاق التطبيق يعاد إنشاء observer من Room، ثم يقرأ الحالة من Gateway؛ لا تبدأ مهمة ثانية إذا بقي `idempotency_key` نفسه. عند فشل الشبكة يحتفظ العميل بآخر snapshot ويعرض reconnecting، ثم يستأنف upload أو polling من offset/status.
 
-## ملاحظة بنيوية
+## الهوية والصلاحيات
 
-يحتوي المستودع على مسار Compose رئيسي (`MainActivity` + `OpusRepository`) ومسار contract مستقل (`ContractApp`/`remote`). التعديل الحالي جعل العامل الفعلي في المسار الرئيسي يستخدم private-backend client؛ يبقى توحيد الواجهتين قرارًا لاحقًا حتى لا تحدث إعادة كتابة UI غير لازمة.
+الـapplication ID الحالي هو `com.aistudio.opuspro.apk`. يُطلب أقل قدر من الصلاحيات، مع foreground service type `dataSync` للمهام الطويلة و`POST_NOTIFICATIONS` على Android 13+. يُخزّن Gateway token في secure storage خارج Room plain text. لا يُستخدم Tauri-generated Android runtime كبديل صامت للمشروع native.
 
-## المراجع
+### المراجع
 
-[1]: ../android/app/src/main/java/com/example/MainActivity.kt "Main Android entry point"
-[2]: ../android/app/src/main/java/com/example/ui/screens/VideoUploadScreen.kt "Import and generate UX"
-[3]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Background processing"
-[4]: ../android/app/src/main/java/com/example/data/remote/PrivateBackendClient.kt "Private backend client"
-[5]: ../android/app/src/main/java/com/example/data/repository/OpusRepository.kt "Room and project integration"
+[1]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Background work"
+[2]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Gateway client"
+[3]: ../android/app/src/main/java/com/example/data/repository/OpusRepository.kt "Room/repository flow"
+[4]: ../android/app/src/main/AndroidManifest.xml "Permissions and service declaration"
+[5]: ../android/app/src/main/java/com/example/MainActivity.kt "Android entry point"
 
 ## References
 
-المراجع محلية في المستودع.
+[1]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Background work"
+[2]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Gateway client"
+[3]: ../android/app/src/main/java/com/example/data/repository/OpusRepository.kt "Room/repository flow"
+[4]: ../android/app/src/main/AndroidManifest.xml "Permissions and service declaration"
+[5]: ../android/app/src/main/java/com/example/MainActivity.kt "Android entry point"
