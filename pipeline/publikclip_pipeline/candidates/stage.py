@@ -30,6 +30,10 @@ class CandidatesStage(Stage):
     name = "candidates"
     schema_version = 1
 
+    def artifacts_ok(self, ctx: StageContext, data: dict) -> bool:
+        sidecars = (ctx.job_dir / "scenes.json", ctx.job_dir / "interest_curve.json")
+        return all(path.is_file() and path.stat().st_size > 0 for path in sidecars)
+
     def run(self, ctx: StageContext) -> dict:
         import numpy as np
 
@@ -50,7 +54,12 @@ class CandidatesStage(Stage):
         curves_path = Path(events["curves_path"])
         if not curves_path.exists():
             raise StageError("curves.json missing — re-run events.")
-        curves = json.loads(curves_path.read_text())
+        try:
+            curves = json.loads(curves_path.read_text())
+        except (OSError, json.JSONDecodeError) as err:
+            raise StageError("curves.json is missing or invalid — re-run events.", "ARTIFACT_INVALID") from err
+        if not isinstance(curves, dict) or "dynamics" not in curves or "grid_sec" not in curves:
+            raise StageError("curves.json is missing required fields — re-run events.", "ARTIFACT_INVALID")
 
         ctx.emit(-1, "Detecting scene changes…")
         try:

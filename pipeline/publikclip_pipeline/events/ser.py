@@ -102,7 +102,9 @@ def arousal_curve_dsp(dynamics: list[float], dynamics_grid_sec: float) -> np.nda
     if len(arr) == 0:
         return np.zeros(0)
     factor = max(1, int(round(GRID_SEC / dynamics_grid_sec)))
-    trimmed = arr[: (len(arr) // factor) * factor]
-    coarse = trimmed.reshape(-1, factor).mean(axis=1) if len(trimmed) else arr
+    coarse = np.asarray(
+        [arr[start : min(start + factor, len(arr))].mean() for start in range(0, len(arr), factor)],
+        dtype=float,
+    )
     top = np.percentile(coarse, 95) or 1.0
     return np.clip(coarse / top, 0.0, 1.0)
