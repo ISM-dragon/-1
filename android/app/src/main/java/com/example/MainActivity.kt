@@ -35,6 +35,7 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ProjectsScreen
 import com.example.ui.screens.SocialGatewayScreen
 import com.example.ui.screens.UsageDashboardScreen
+import com.example.ui.screens.ToolsScreen
 import com.example.ui.screens.VideoUploadScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.OpusDarkCanvas
@@ -194,7 +195,14 @@ fun OpusProApp(repository: OpusRepository) {
                         OpusNavTab.SETTINGS -> {
                             ApiManagementSettingsScreen(
                                 repository = repository,
-                                onBack = { currentTab = OpusNavTab.HOME }
+                                onBack = { currentTab = OpusNavTab.TOOLS }
+                            )
+                        }
+                        OpusNavTab.TOOLS -> {
+                            ToolsScreen(
+                                onOpenDashboard = { currentTab = OpusNavTab.DASHBOARD },
+                                onOpenBenchmark = { currentTab = OpusNavTab.BENCHMARK },
+                                onOpenSettings = { currentTab = OpusNavTab.SETTINGS }
                             )
                         }
                     }

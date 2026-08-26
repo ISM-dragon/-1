@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.data.db.OpusDatabase
+import com.example.data.engine.ProcessingEngine
 import com.example.data.model.GatewayConfig
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.Project
@@ -31,6 +32,7 @@ class VideoProcessingWorker(
 
     private val database = OpusDatabase.getDatabase(appContext)
     private val jobs = database.processingJobDao()
+    private val processingEngine = ProcessingEngine()
 
     override suspend fun doWork(): Result {
         var jobId = inputData.getString(KEY_JOB_ID).orEmpty()
@@ -89,7 +91,8 @@ class VideoProcessingWorker(
         return try {
             val repository = OpusRepository(applicationContext)
             val gatewayConfig = loadGatewayConfig()
-            if (gatewayConfig.baseUrl.isNotBlank()) {
+            val enginePlan = processingEngine.plan(sourceUri, gatewayConfig).getOrThrow()
+            if (enginePlan.route == ProcessingEngine.Route.REMOTE_GATEWAY) {
                 val remoteProjectId = runRemoteGateway(
                     repository = repository,
                     config = gatewayConfig,

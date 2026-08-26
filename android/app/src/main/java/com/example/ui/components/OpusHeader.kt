@@ -89,7 +89,7 @@ fun OpusHeader(
                 ) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Flow Engine Logo",
+                        contentDescription = "شعار محرك ISM",
                         tint = Color.White,
                         modifier = Modifier.size(22.dp)
                     )
@@ -100,7 +100,7 @@ fun OpusHeader(
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "OPUS",
+                            text = "ISM",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 1.1.sp,
@@ -109,7 +109,7 @@ fun OpusHeader(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "FLOW",
+                            text = "STUDIO",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 1.1.sp,
@@ -125,7 +125,7 @@ fun OpusHeader(
                                 .padding(horizontal = 5.dp, vertical = 1.5.dp)
                         ) {
                             Text(
-                                text = "Google Flow",
+                                text = "AI ENGINE",
                                 color = OpusVioletGlow,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
@@ -133,7 +133,7 @@ fun OpusHeader(
                         }
                     }
                     Text(
-                        text = "Auto-Failover Multi-Provider Engine",
+                        text = "محرك قص ذكي متعدد المزوّدين",
                         style = MaterialTheme.typography.labelSmall.copy(
                             color = OpusTextSecondary,
                             fontSize = 10.sp
@@ -171,7 +171,7 @@ fun OpusHeader(
                     Spacer(modifier = Modifier.width(5.dp))
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = "${remainingCreditsMinutes}m Credit",
+                            text = "${remainingCreditsMinutes} دقيقة",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 color = if (remainingCreditsMinutes > 30) OpusViralEmerald else OpusHotPink,
                                 fontWeight = FontWeight.Black,

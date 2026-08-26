@@ -215,7 +215,7 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Google Flow GenAI Repurposing Engine",
+                            text = "ISM Personal Clip Engine",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = OpusElectricCyan
@@ -237,7 +237,7 @@ fun HomeScreen(
                 )
 
                 Text(
-                    text = "توليد تلقائي للمقاطع الفيروسية، واستخراج الهوك القوي، والترجمة الحركية المتحركة عبر Google Flow AI ومفتاح API الخاص بك.",
+                    text = "محرك شخصي يحوّل الفيديو الطويل إلى مقاطع قصيرة، يستخرج الهوك الأقوى، ويصنع ترجمة حركية جاهزة للنشر.",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         color = OpusTextSecondary,
                         textAlign = TextAlign.Center,
@@ -306,7 +306,7 @@ fun HomeScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Google Flow & AI Engine",
+                                text = "ISM AI Engine",
                                 style = MaterialTheme.typography.titleSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = OpusTextPrimary
@@ -334,7 +334,7 @@ fun HomeScreen(
                             text = if (aiProviders.any { it.isEnabled && it.apiKey.isNotBlank() })
                                 "نظام التبديل التلقائي نشط (${aiProviders.count { it.isEnabled && it.apiKey.isNotBlank() }} مزودين) — تبديل ذكي فوري عند نفاذ الرصيد"
                             else
-                                "رصيد Google Flow: ${googleFlowCredits.remainingCreditsMinutes} دقيقة — اضغط لإدارة المفاتيح والمزودين الاحتياطيين",
+                                "الرصيد: ${googleFlowCredits.remainingCreditsMinutes} دقيقة — اضغط لإدارة المفاتيح والمزودين الاحتياطيين",
                             fontSize = 11.sp,
                             color = OpusTextSecondary,
                             maxLines = 2,
@@ -397,7 +397,7 @@ fun HomeScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "🎨 ملف صانع المحتوى (Creator Profile)",
+                                text = "ملف صانع المحتوى",
                                 style = MaterialTheme.typography.titleSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = OpusTextPrimary
@@ -488,7 +488,7 @@ fun HomeScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "⚡ خاصية النشر التلقائي",
+                                text = "النشر التلقائي",
                                 style = MaterialTheme.typography.titleSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = OpusTextPrimary
