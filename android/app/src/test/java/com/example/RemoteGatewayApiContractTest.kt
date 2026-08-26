@@ -38,13 +38,14 @@ class RemoteGatewayApiContractTest {
     @Test
     fun connectionChecksHealthCapabilitiesAndSession() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("{\"ok\":true,\"status\":\"ok\"}"))
-        server.enqueue(MockResponse().setResponseCode(200).setBody("{\"gateway\":true,\"pipeline\":true,\"ffmpeg\":true}"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{\"gateway\":true,\"pipeline\":true,\"ffmpeg\":true,\"runtime_ready\":false}"))
         server.enqueue(MockResponse().setResponseCode(200).setBody("{\"authenticated\":true,\"product\":\"ISM\",\"api_version\":\"v1\"}"))
 
         val result = kotlinx.coroutines.runBlocking { client.checkConnection(config) }.getOrThrow()
 
         assertTrue(result.ok)
         assertTrue(result.authenticated)
+        assertEquals(false, result.runtimeReady)
         assertEquals(3, server.requestCount)
         assertEquals("Bearer test-session-token", server.takeRequest().getHeader("Authorization"))
     }

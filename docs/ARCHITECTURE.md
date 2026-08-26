@@ -99,6 +99,10 @@ local URI
 
 يعد المسار جاهزًا للتجربة الشخصية عندما ينجح: health/readiness، pipeline importability، FFmpeg/ffprobe، storage write، Gemini diagnostic عند اختيار Gemini، upload مع checksum، job completion، تنزيل MP4، وإعادة تشغيل/resume. نجاح build وحده لا يثبت نجاح هذه السلسلة. كما أن نجاح Android unit tests لا يثبت وجود APK قابل للتثبيت أو وصول الهاتف إلى Gateway.
 
+## 8. Runtime readiness boundary
+
+يضيف `pipeline/publikclip_pipeline/runtime` طبقة خفيفة لا تستورد نماذج الذكاء الثقيلة عند بدء Gateway. `HardwareInfo` يصف موارد المضيف، و`MediaManager` يحقق من FFmpeg/ffprobe وينفذ عمليات الوسائط المصنفة، و`ModelManager` يدير حالة النماذج والتحقق من checksum والتنزيل القابل للاستئناف والتحميل/التفريغ. يعرض Gateway هذه المعلومات في `GET /v1/processing/capabilities` تحت `details.runtime` مع إبقاء الحقول السابقة متوافقة.
+
 ### المراجع
 
 [1]: ../README.md "Repository README and current desktop/pipeline status"

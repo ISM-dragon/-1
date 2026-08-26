@@ -71,3 +71,28 @@ export KEY_PASSWORD='***'
 ## مراجع التسليم
 
 التفاصيل التشغيلية، مصفوفة الصلاحيات، بصمة APK، وقيود اختبار الجهاز موجودة في [`docs/RELEASE.md`](docs/RELEASE.md). يجب أن يكون أي backend مستخدم في الإنتاج خاصاً ومحمياً بـ HTTPS وGateway token، ويجب عدم نقل محرك Python أو أسراره إلى تطبيق Android.
+
+## تحديث 2026-08-26
+
+أُنجز تدقيق المشروع المرجعي `supoclip-main` دون نسخ source code، وسُجلت المقارنة والقرارات وخطة الهجرة في `docs/REFERENCE_COMPARISON.md` و`docs/REFERENCE_MIGRATION_PLAN.md` و`docs/MIGRATION_DECISIONS.md` و`docs/THIRD_PARTY_LICENSES.md`. أضيفت كذلك وثائق API وEngine وAI runtime وMedia runtime وAndroid UI وTest Matrix وPerformance وSecurity.
+
+أضيفت طبقة `pipeline/publikclip_pipeline/runtime/` المستقلة: `HardwareInfo` لاكتشاف موارد المضيف، و`MediaManager` لفحص FFmpeg/ffprobe وتنفيذ probe/validation/audio/frame/transcode/render/cleanup بأخطاء مصنفة، و`ModelManager` لتتبع الإصدار والحجم وchecksum والمصدر والمسار وحالة التثبيت والتنزيل القابل للاستئناف والتحميل والتفريغ والحذف. عُرضت هذه الجاهزية في `GET /v1/processing/capabilities` تحت `details.runtime` مع الحفاظ على الحقول القديمة.
+
+أضيفت اختبارات regression للوسائط والنماذج وعقد Gateway. نتائج التحقق الحالية: `123 passed` لاختبارات pipeline و`48 passed, 1 skipped` لاختبارات Gateway، و`npm run typecheck` و`npm run build` نجحا. فحص compileall نجح. لم يُنفذ Android Gradle build محليًا لأن Android SDK غير موجود في بيئة التنفيذ؛ CI أصبح يبني debug وunsigned release APK ويرفعهما دون أي مفاتيح سرية.
+
+## الملفات الجديدة/المعدلة في هذه المرحلة
+
+| الملف | التغيير |
+|---|---|
+| `pipeline/publikclip_pipeline/runtime/*` | Runtime managers مستقلون للعتاد والوسائط والنماذج. |
+| `pipeline/publikclip_pipeline/models/registry.py` | Metadata اختيارية متوافقة لخدمة lifecycle. |
+| `pipeline/tests/test_ai_media_runtime.py` | اختبارات regression للـruntime. |
+| `gateway/main.py` | إضافة runtime readiness إلى capabilities. |
+| `gateway/tests/test_web_processing_contract.py` | اختبار contract لحقول readiness. |
+| `.github/workflows/android-build.yml` | إضافة unsigned release assembly وartifact. |
+| `docs/*` | وثائق المقارنة، الحدود، التشغيل، الأمان، الأداء، والاختبارات. |
+| `MANUS_HANDOFF.md` | هذا التحديث. |
+
+## المتبقي قبل النشر الشخصي
+
+يلزم تشغيل Gateway فعليًا مع Python dependencies والنماذج وFFmpeg، ثم تنفيذ E2E حقيقي من Android إلى upload/job/poll/render/download على جهاز أو محاكي مستقر. يلزم كذلك keystore مملوك للمستخدم إذا كان APK سيُوزع خارج بيئة التطوير. لا توجد ادعاءات بأن social publishing أو Android-local ML أصبحا production-ready ضمن هذا التغيير.

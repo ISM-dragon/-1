@@ -22,7 +22,7 @@
 ./gradlew :app:assembleRelease
 ```
 
-لإخراج APK قابل للتثبيت يجب تمرير `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD` إلى Gradle. الناتج هو `app/build/outputs/apk/release/app-release.apk`. لا تُحفظ مفاتيح التوقيع في المستودع.
+لإخراج APK قابل للتثبيت يجب تمرير `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD` إلى Gradle. الناتج هو `app/build/outputs/apk/release/app-release.apk`. لا تُحفظ مفاتيح التوقيع في المستودع. يقوم CI كذلك ببناء `app-release-unsigned.apk` ورفعه كأثر غير موقّع؛ أما التوزيع الفعلي فيتطلب مفاتيح خارج المستودع.
 
 ## الصلاحيات والتخزين
 
@@ -40,8 +40,8 @@
 
 ## العلاقة مع المستودع
 
-المشروع الأصلي في الجذر هو تطبيق سطح المكتب وطبقة Gateway وPython Pipeline. يبقى تطبيق Android هنا كعميل مستقل يستخدم عقد Gateway المشترك عند تفعيله.
+المشروع الأصلي في الجذر هو تطبيق سطح المكتب وطبقة Gateway وPython Pipeline. يبقى تطبيق Android هنا كعميل مستقل يستخدم عقد Gateway المشترك، وتبقى المعالجة الثقيلة عن بُعد على Gateway بدل تضمين Python أو FFmpeg أو النماذج داخل APK.
 
 ## الترخيص
 
-المشروع مرخّص وفق AGPL-3.0-or-later. راجع `../LICENSE` و`../VENDORED-LICENSES.md`.
+المشروع مرخّص وفق AGPL-3.0-or-later. راجع `../LICENSE` و`../docs/THIRD_PARTY_LICENSES.md`.

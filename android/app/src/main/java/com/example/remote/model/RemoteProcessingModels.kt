@@ -38,7 +38,8 @@ data class GatewayHealth(
     val gatewayReady: Boolean,
     val pipelineReady: Boolean,
     val ffmpegReady: Boolean,
-    val message: String
+    val message: String,
+    val runtimeReady: Boolean = false
 )
 
 data class UploadedSource(

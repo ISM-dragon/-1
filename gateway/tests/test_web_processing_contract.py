@@ -77,5 +77,21 @@ class WebProcessingContractTests(unittest.TestCase):
             self.assertIn("transitions", current)
 
 
+class RuntimeCapabilityContractTests(unittest.TestCase):
+    def test_processing_capabilities_exposes_runtime_readiness(self):
+        with (
+            patch.object(main, "pipeline_checks", return_value={"pipeline": True, "storage": True}),
+            patch.object(main, "_ffmpeg_capability", return_value={"ready": True, "captions": True}),
+            patch.object(main, "_runtime_capability", return_value={"ready": True, "models": {"declared": 2, "missing": [], "invalid": []}}),
+            patch.object(main, "read_server_gemini_key", return_value=""),
+        ):
+            response = asyncio.run(main.processing_capabilities())
+        self.assertTrue(response["gateway"])
+        self.assertTrue(response["runtime_ready"])
+        self.assertTrue(response["details"]["runtime"]["ready"])
+        self.assertIn("pipeline", response)
+        self.assertIn("ffmpeg", response)
+
+
 if __name__ == "__main__":
     unittest.main()

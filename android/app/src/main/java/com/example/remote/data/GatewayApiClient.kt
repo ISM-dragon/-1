@@ -22,13 +22,17 @@ class GatewayApiClient(private val contentResolver: ContentResolver) {
             val health = requestJson("$baseUrl/health", config.token, "GET")
             val capabilities = requestJson("$baseUrl/v1/processing/capabilities", config.token, "GET")
             val session = requestJson("$baseUrl/v1/auth/session", config.token, "GET")
+            val pipelineReady = capabilities.optBoolean("pipeline", false)
+            val ffmpegReady = capabilities.optBoolean("ffmpeg", false)
+            val runtimeReady = capabilities.optBoolean("runtime_ready", pipelineReady && ffmpegReady)
             GatewayHealth(
                 ok = health.optBoolean("ok", health.optString("status") == "ok"),
                 authenticated = session.optBoolean("authenticated", true),
                 gatewayReady = capabilities.optBoolean("gateway", true),
-                pipelineReady = capabilities.optBoolean("pipeline", false),
-                ffmpegReady = capabilities.optBoolean("ffmpeg", false),
-                message = if (capabilities.optBoolean("pipeline", false) && capabilities.optBoolean("ffmpeg", false)) {
+                pipelineReady = pipelineReady,
+                ffmpegReady = ffmpegReady,
+                runtimeReady = runtimeReady,
+                message = if (pipelineReady && ffmpegReady && runtimeReady) {
                     "Gateway متصل وجاهز لاستقبال الوظائف."
                 } else {
                     "Gateway متصل، لكن بعض القدرات غير جاهزة."
