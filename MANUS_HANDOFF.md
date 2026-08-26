@@ -151,3 +151,10 @@ export KEY_PASSWORD='***'
 نتائج التحقق الأخيرة: `python3 -m compileall -q pipeline/publikclip_pipeline backend gateway` نجح؛ pipeline tests `117 passed`؛ Gateway tests `39 passed, 1 skipped`؛ backend tests `6 passed`؛ وAndroid `:app:compileDebugKotlin :app:assembleDebug` نجح باستخدام JDK 21 وAndroid API 36. نجح subset من Android unit tests. full Android unit-test task وصل إلى runtime لكنه فشل في `RemoteGatewayApiContractTest` بسبب TLS أثناء تنزيل artifact Robolectric عبر `MavenArtifactFetcher`، وليس بسبب compiler error؛ يلزم CI أو بيئة Maven مستقرة لإثبات اختبار HTTP الكامل. لم يُعتمد device/emulator smoke.
 
 الـreference الإضافي في هذه الجولة هو `VideoClipper-main` المرفق بترخيص MIT؛ تمت إضافة تفاصيله إلى `docs/REFERENCE_COMPARISON.md` و`docs/THIRD_PARTY_LICENSES.md`، ولم تُنسخ منه ملفات إلى production.
+
+
+## Post-merge verification — 2026-08-26
+
+تم دمج تغييرات العمل المتوازي بعد فحص divergence بدل الكتابة فوقها. بعد الدمج نجح `bash scripts/verify.sh` في Python regression بمحصلة `172 passed, 1 skipped, 5 warnings` ونجح frontend production build. كما نجح `:app:compileDebugKotlin :app:assembleDebug` باستخدام JDK 21 وAndroid SDK API 36. ظهر تحذير packaging معروف بأن مكتبات native محددة لم تُجرَ لها strip فتم تضمينها كما هي؛ لم يمنع ذلك نجاح البناء.
+
+يظل `scripts/verify.sh` يتخطى Android إذا لم تُمرر متغيرات SDK، لذلك لا يُستنتج من تشغيله المختصر قبول الجهاز. لم يُثبت device E2E أو release signing أو provider/model readiness أو large-media run. تم حفظ السجلين الأخيرين في `evidence/current_run/merged_verify.log` و`evidence/current_run/merged_android_verify.log`.
