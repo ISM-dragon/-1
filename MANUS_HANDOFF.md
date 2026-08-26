@@ -4,6 +4,7 @@
 **المستودع:** `ISM-dragon/-1`
 **تاريخ التسليم:** 2026-08-26
 **الحالة:** **FINAL ACCEPTANCE BLOCKED — evidence and build artifacts committed for internal QA only**
+**آخر commit مرفوع:** `2e7d5fa` — `test(android): pin robolectric sdk for api contract`
 
 ## القرار المعماري
 
@@ -42,11 +43,14 @@
 | Final release assembly | PASS | `evidence/final_android_release_build.log` |
 | APK metadata/ZIP | PASS | `evidence/final_release_apk_badging.txt`, `evidence/final_release_apk_zip_test.txt` |
 | APK signing | BLOCKED | `evidence/release_apk_signing_check.txt` — unsigned |
+| Embedded Android CI | PASS | Run `32954274421` على commit `2e7d5fa`: 35 unit tests، Lint، `assembleDebug`، ورفع artifact مرّت |
 
 **APK الناتج:** `android/app/build/outputs/apk/release/app-release-unsigned.apk`
 **SHA-256:** `f0ae2936f6dc10242c864460081151395fc9f621270d742639a67cb1159dc9ab`
 **Application ID:** `com.aistudio.opuspro.apk`
 **Version:** `0.10.1` / versionCode `5`
+
+**Debug APK artifact المرفوع من CI:** `app-debug.apk`، الحجم `69,488,254` bytes، SHA-256 `9e2a020b8cf8710f1141be49f7a573426bf9d79047acca31dfa8d8e871880c1c`. يمكن تنزيله من artifact `ISM-Android-embedded-2e7d5fa48de5a8e8ba8f3e15d35ee4f9b4cb3ade` في تشغيل `32954274421`.
 
 ## Evidence تشغيلي فعلي
 
@@ -81,6 +85,19 @@
 ## كيفية إعادة التحقق
 
 لإغلاق القبول، استخدم APK موقّعًا على جهاز Android حقيقي متصل مع USB debugging، واضبط Gateway خاصًا عبر HTTPS مع token، ثم نفّذ diagnostics قبل إنشاء job. يجب أن تكون pipeline وFFmpeg/storage وASR/diarization وLLM جاهزة. بعد ذلك أعد سيناريو `docs/FINAL_ACCEPTANCE.md` كاملًا، واجمع screenshots/logcat/job IDs/transition history وSHA-256 لكل artifact، ثم حدّث الحكم إلى PASS فقط بعد تحقق export وrender again من التطبيق نفسه.
+
+## إصلاحات هذه الجلسة وملفاتها
+
+| الملف | التعديل |
+|---|---|
+| `.github/workflows/quality-gate.yml` | تثبيت `gateway/requirements.txt` و`httpx` وFFmpeg قبل اختبارات Gateway وpipeline. |
+| `gateway/test_processing_bridge.py` | جعل قاعدة SQLite ووسائط upload في الاختبار مكتملة ومطابقة للحجم وSHA-256. |
+| `gateway/tests/test_gateway_safety.py` | جعل رفض الوسائط الفاسدة مستقلًا عن وجود FFprobe عبر mock deterministic. |
+| `pipeline/tests/test_asr_errors.py` | عزل اختبار runtime غير المتاح عبر fake `torch`/`whisperx` والتحقق من `ASR_MODEL_UNAVAILABLE`. |
+| `android/app/src/test/java/com/example/ApiContractClientTest.kt` | تثبيت Robolectric على SDK 34 لتجنب اختيار SDK غير متوفر في CI. |
+| `MANUS_HANDOFF.md` | تحديث الأدلة، أرقام التشغيلات، الـblockers، وartifact الأخير. |
+
+**Commits المرفوعة:** `0262537`, `3be5cd0`, `57aca4c`, `fe71b18`, `8e4825d`, `8596bed`, `2e7d5fa`. تم rebase آمن فوق تحديثات `origin/main` دون force push، والفرع المحلي متطابق مع `origin/main`.
 
 ## ملاحظة عن الوثائق
 
