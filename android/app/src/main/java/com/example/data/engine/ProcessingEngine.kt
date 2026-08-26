@@ -1,6 +1,6 @@
 package com.example.data.engine
 
-import android.net.Uri
+import java.net.URI
 import com.example.data.model.GatewayConfig
 
 /**
@@ -29,9 +29,10 @@ class ProcessingEngine {
             return Result.failure(IllegalArgumentException("مصدر الفيديو مطلوب."))
         }
 
-        val scheme = runCatching { Uri.parse(trimmedSource).scheme?.lowercase() }.getOrNull()
+        val parsedSource = runCatching { URI(trimmedSource) }.getOrNull()
+        val scheme = parsedSource?.scheme?.lowercase()
         val isLocalSource = scheme in setOf("content", "file")
-        val isRemoteSource = scheme in setOf("http", "https")
+        val isRemoteSource = scheme in setOf("http", "https") && !parsedSource?.host.isNullOrBlank()
         if (!isLocalSource && !isRemoteSource) {
             return Result.failure(
                 IllegalArgumentException("مصدر الفيديو يجب أن يكون content:// أو file:// محليًا، أو HTTP/HTTPS عند استخدام Gateway.")
@@ -54,9 +55,9 @@ class ProcessingEngine {
             )
         }
 
-        val parsedGateway = runCatching { Uri.parse(baseUrl) }.getOrNull()
+        val parsedGateway = runCatching { URI(baseUrl) }.getOrNull()
         val gatewayScheme = parsedGateway?.scheme?.lowercase()
-        if (gatewayScheme == null || gatewayScheme !in setOf("http", "https") || parsedGateway?.host.isNullOrBlank()) {
+        if (gatewayScheme == null || gatewayScheme !in setOf("http", "https") || parsedGateway.host.isNullOrBlank()) {
             return Result.failure(
                 IllegalArgumentException("عنوان Gateway غير صالح. استخدم عنوان HTTP أو HTTPS كاملًا.")
             )

@@ -6,6 +6,7 @@ import importlib.util
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -105,6 +106,8 @@ GEMINI_KEY_FILE = Path(os.getenv("ISM_GEMINI_KEY_FILE", str(ROOT / "secrets" / "
 AI_SECRET_FILE = Path(os.getenv("ISM_AI_SECRET_FILE", str(ROOT / "secrets" / "ai-vault.json")))
 AI_VAULT = SecretVault(AI_SECRET_FILE)
 MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
+MEDIA_UPLOAD_TTL_SECONDS = max(300, int(os.getenv("ISM_MEDIA_UPLOAD_TTL_SECONDS", str(24 * 60 * 60))))
+MEDIA_UPLOAD_CHUNK_BYTES = max(1, int(os.getenv("ISM_MEDIA_UPLOAD_CHUNK_BYTES", str(16 * 1024 * 1024))))
 
 app = FastAPI(title="ISM Social Gateway", version="0.10.1")
 app.add_middleware(
@@ -131,6 +134,8 @@ _source_workers = PersistentWorkerQueue("sources", SOURCE_ROOT, MAX_ACTIVE_SOURC
 _processing_cancel_events: dict[str, threading.Event] = {}
 _processing_processes: dict[str, subprocess.Popen[str]] = {}
 _processing_runtime_lock = threading.Lock()
+_media_upload_locks: dict[str, asyncio.Lock] = {}
+_media_upload_locks_guard = threading.Lock()
 
 
 class PolicyDeferred(Exception):
@@ -317,6 +322,22 @@ def init_db() -> None:
                 FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_analytics_account_date ON analytics_snapshots(account_id, metric_date);
+            CREATE TABLE IF NOT EXISTS media_uploads (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                expected_bytes INTEGER NOT NULL,
+                expected_sha256 TEXT NOT NULL,
+                received_bytes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'uploading',
+                temp_path TEXT NOT NULL,
+                media_path TEXT,
+                source_job_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_media_upload_completed_hash ON media_uploads(expected_sha256, expected_bytes, status);
+            CREATE INDEX IF NOT EXISTS idx_media_upload_cleanup ON media_uploads(status, updated_at);
             """
         )
         migrations = [
@@ -371,6 +392,12 @@ class ProcessingPayload(BaseModel):
 class SourcePayload(BaseModel):
     source: HttpUrl
     max_items: int = Field(default=0, ge=0, le=1000)
+
+
+class MediaUploadInitPayload(BaseModel):
+    filename: str = Field(default="source.mp4", min_length=1, max_length=180)
+    bytes: int = Field(ge=1, le=MAX_UPLOAD_BYTES)
+    sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-fA-F]{64}$")
 
 
 class AIModelPayload(BaseModel):
@@ -579,6 +606,12 @@ def update_source_job(job_id: str, **values: Any) -> None:
         connection.commit()
 
 
+def update_media_upload_offset(upload_id: str, received_bytes: int) -> None:
+    with closing(db()) as connection:
+        connection.execute("UPDATE media_uploads SET received_bytes=?, updated_at=? WHERE id=? AND status='uploading'", (received_bytes, now_iso(), upload_id))
+        connection.commit()
+
+
 def run_source_download(job_id: str, source: str, max_items: int) -> None:
     target_dir = (SOURCE_ROOT / job_id).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -758,6 +791,9 @@ def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]
             if key not in item and key in source_clip:
                 item[key] = source_clip[key]
         item["path"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{external_id}/media/{filename}"
+        item["bytes"] = raw_path.stat().st_size
+        item["sha256"] = _sha256_file(raw_path)
+        item["integrity"] = {"algorithm": "sha256", "bytes": item["bytes"], "sha256": item["sha256"]}
         outputs.append(item)
     return {
         "job_id": external_id,
@@ -846,7 +882,13 @@ def uploaded_source_path(source: str) -> str | None:
         return None
     candidate = (SOURCE_ROOT / job_id / filename).resolve()
     root = SOURCE_ROOT.resolve()
-    return str(candidate) if root in candidate.parents and candidate.is_file() else None
+    if root not in candidate.parents or not candidate.is_file():
+        return None
+    with closing(db()) as connection:
+        upload = connection.execute("SELECT expected_bytes, expected_sha256, status FROM media_uploads WHERE id=?", (job_id,)).fetchone()
+    if not upload or upload["status"] != "completed" or candidate.stat().st_size != upload["expected_bytes"] or _sha256_file(candidate).lower() != upload["expected_sha256"].lower():
+        return None
+    return str(candidate)
 
 
 def run_processing_job(external_id: str, source: str | None = None, llm: str | None = None, captions: str | None = None, mode: str | None = None) -> None:
@@ -1139,6 +1181,7 @@ async def scheduler_loop() -> None:
 async def startup() -> None:
     global _scheduler_task
     init_db()
+    cleanup_media_uploads()
     with closing(db()) as connection:
         timestamp = now_iso()
         interrupted = connection.execute("SELECT id FROM processing_jobs WHERE state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED') AND cancel_requested=0").fetchall()
@@ -1355,18 +1398,226 @@ async def inspect_source(payload: SourcePayload) -> dict[str, Any]:
     return {"source": source, "count": len(items), "items": items}
 
 
+def _media_uploads_root() -> Path:
+    root = (SOURCE_ROOT / ".uploads").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    return root
+
+
+def _media_upload_temp_path(upload_id: str) -> Path:
+    if not re.fullmatch(r"upl_[A-Za-z0-9_-]{8,80}", upload_id):
+        raise HTTPException(status_code=404, detail="Media upload not found")
+    return _media_uploads_root() / f"{upload_id}.part"
+
+
+def _media_upload_lock(upload_id: str) -> asyncio.Lock:
+    with _media_upload_locks_guard:
+        return _media_upload_locks.setdefault(upload_id, asyncio.Lock())
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(MEDIA_UPLOAD_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_media_filename(filename: str) -> str:
+    name = Path(filename).name.strip()
+    if not name or name in {".", ".."} or len(name) > 180:
+        raise HTTPException(status_code=422, detail="A safe media filename is required.")
+    if Path(name).suffix.lower() not in {".mp4", ".mov", ".webm", ".mkv"}:
+        raise HTTPException(status_code=422, detail="Only supported video containers can be uploaded.")
+    return name
+
+
+def _media_upload_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["progress"] = round(min(1.0, result["received_bytes"] / result["expected_bytes"]) if result["expected_bytes"] else 0.0, 6)
+    result["offset"] = result["received_bytes"]
+    result["source"] = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{result['source_job_id']}/media/source.mp4" if result.get("source_job_id") else None
+    result.pop("temp_path", None)
+    result.pop("media_path", None)
+    return result
+
+
+def _find_media_upload(upload_id: str) -> sqlite3.Row:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM media_uploads WHERE id=?", (upload_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Media upload not found")
+    return row
+
+
+def _parse_upload_range(request: Request, current: int, expected: int) -> tuple[int, int | None]:
+    raw = request.headers.get("content-range", "").strip()
+    offset_header = request.headers.get("x-upload-offset")
+    if raw:
+        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", raw)
+        if not match:
+            raise HTTPException(status_code=400, detail="Content-Range must use bytes start-end/total.")
+        start, end, total = (int(value) for value in match.groups())
+        if total != expected or start > end or end >= expected:
+            raise HTTPException(status_code=416, detail="Upload range does not match the declared file size.")
+        if offset_header is not None and int(offset_header) != start:
+            raise HTTPException(status_code=409, detail="Upload offset conflicts with Content-Range.")
+        return start, end
+    if offset_header is None:
+        raise HTTPException(status_code=400, detail="Send X-Upload-Offset or Content-Range for resumable uploads.")
+    try:
+        start = int(offset_header)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="X-Upload-Offset must be an integer.") from error
+    if start < 0 or start > expected:
+        raise HTTPException(status_code=416, detail="Upload offset is outside the declared file size.")
+    return start, None
+
+
+def cleanup_media_uploads() -> int:
+    """Delete abandoned partial uploads without touching finalized source artifacts."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=MEDIA_UPLOAD_TTL_SECONDS)
+    cutoff_iso = cutoff.isoformat()
+    removed = 0
+    with closing(db()) as connection:
+        rows = connection.execute("SELECT id, temp_path FROM media_uploads WHERE status IN ('uploading', 'corrupt', 'failed') AND source_job_id IS NULL AND updated_at < ?", (cutoff_iso,)).fetchall()
+        for row in rows:
+            Path(row["temp_path"]).unlink(missing_ok=True)
+            connection.execute("DELETE FROM media_uploads WHERE id=?", (row["id"],))
+            removed += 1
+        connection.commit()
+    uploads_root = _media_uploads_root()
+    for path in uploads_root.glob("*.part"):
+        try:
+            if path.stat().st_mtime < cutoff.timestamp():
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+    return removed
+
+
+def _finalize_media_upload(upload_id: str) -> dict[str, Any]:
+    row = _find_media_upload(upload_id)
+    if row["status"] == "completed":
+        return _media_upload_dict(row)
+    temp_path = Path(row["temp_path"]).resolve()
+    if not temp_path.is_file():
+        with closing(db()) as connection:
+            connection.execute("UPDATE media_uploads SET status='failed', updated_at=? WHERE id=?", (now_iso(), upload_id))
+            connection.commit()
+        raise HTTPException(status_code=409, detail="Temporary upload data is missing; restart the upload.")
+    actual_size = temp_path.stat().st_size
+    if actual_size != row["expected_bytes"] or row["received_bytes"] != row["expected_bytes"]:
+        raise HTTPException(status_code=409, detail=f"Upload is incomplete; resume at byte {min(actual_size, row['expected_bytes'])}.")
+    actual_sha256 = _sha256_file(temp_path)
+    if actual_sha256.lower() != row["expected_sha256"].lower():
+        temp_path.unlink(missing_ok=True)
+        with closing(db()) as connection:
+            connection.execute("UPDATE media_uploads SET status='corrupt', updated_at=? WHERE id=?", (now_iso(), upload_id))
+            connection.commit()
+        raise HTTPException(status_code=422, detail="MEDIA_CHECKSUM_MISMATCH: uploaded bytes failed SHA-256 validation.")
+    target_dir = (SOURCE_ROOT / upload_id).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(target_dir, 0o700)
+    target = target_dir / "source.mp4"
+    os.replace(temp_path, target)
+    timestamp = now_iso()
+    source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/source.mp4"
+    items = [{"index": 0, "title": row["filename"], "url": source_url, "media_url": source_url, "filename": "source.mp4", "bytes": actual_size, "sha256": actual_sha256}]
+    with closing(db()) as connection:
+        connection.execute("UPDATE media_uploads SET status='completed', received_bytes=?, media_path=?, source_job_id=?, completed_at=?, updated_at=? WHERE id=?", (actual_size, str(target), upload_id, timestamp, timestamp, upload_id))
+        connection.execute("INSERT OR REPLACE INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, COALESCE((SELECT created_at FROM source_jobs WHERE id=?), ?), ?)", (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), upload_id, timestamp, timestamp))
+        connection.commit()
+        completed = connection.execute("SELECT * FROM media_uploads WHERE id=?", (upload_id,)).fetchone()
+    return _media_upload_dict(completed)
+
+
+@app.post("/v1/sources/uploads", dependencies=[Depends(auth)])
+async def init_media_upload(payload: MediaUploadInitPayload) -> dict[str, Any]:
+    filename = _safe_media_filename(payload.filename)
+    with closing(db()) as connection:
+        duplicate = connection.execute("SELECT * FROM media_uploads WHERE expected_sha256=? AND expected_bytes=? AND status IN ('uploading', 'completed') ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1", (payload.sha256.lower(), payload.bytes)).fetchone()
+        if duplicate:
+            return {**_media_upload_dict(duplicate), "reused": True}
+        upload_id = f"upl_{secrets.token_urlsafe(12)}"
+        timestamp = now_iso()
+        temp_path = _media_upload_temp_path(upload_id)
+        temp_path.unlink(missing_ok=True)
+        connection.execute("INSERT INTO media_uploads (id, filename, expected_bytes, expected_sha256, temp_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (upload_id, filename, payload.bytes, payload.sha256.lower(), str(temp_path), timestamp, timestamp))
+        connection.commit()
+    return {"id": upload_id, "status": "uploading", "offset": 0, "progress": 0.0, "expected_bytes": payload.bytes, "expected_sha256": payload.sha256.lower(), "chunk_bytes": MEDIA_UPLOAD_CHUNK_BYTES, "expires_in_seconds": MEDIA_UPLOAD_TTL_SECONDS}
+
+
+@app.get("/v1/sources/uploads/{upload_id}", dependencies=[Depends(auth)])
+async def media_upload_status(upload_id: str) -> dict[str, Any]:
+    return _media_upload_dict(_find_media_upload(upload_id))
+
+
+@app.put("/v1/sources/uploads/{upload_id}", dependencies=[Depends(auth)])
+async def write_media_upload(upload_id: str, request: Request) -> dict[str, Any]:
+    async with _media_upload_lock(upload_id):
+        row = _find_media_upload(upload_id)
+        if row["status"] == "completed":
+            return _media_upload_dict(row)
+        if row["status"] != "uploading":
+            raise HTTPException(status_code=409, detail=f"Upload is not writable: {row['status']}.")
+        current = int(row["received_bytes"])
+        start, declared_end = _parse_upload_range(request, current, int(row["expected_bytes"]))
+        if start != current:
+            raise HTTPException(status_code=409, detail=f"Upload offset mismatch; resume at byte {current}.")
+        temp_path = Path(row["temp_path"]).resolve()
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        disk_offset = temp_path.stat().st_size if temp_path.exists() else 0
+        if disk_offset < current:
+            raise HTTPException(status_code=409, detail="Temporary upload is shorter than its persisted offset; restart the upload.")
+        if disk_offset > current:
+            with temp_path.open("r+b") as repair:
+                repair.truncate(current)
+                repair.flush()
+                os.fsync(repair.fileno())
+        with temp_path.open("ab") as output:
+            received = current
+            checkpoint = current
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if received > int(row["expected_bytes"]) or (declared_end is not None and received > declared_end + 1):
+                    raise HTTPException(status_code=413, detail="Uploaded chunk exceeds the declared range.")
+                output.write(chunk)
+                if received - checkpoint >= MEDIA_UPLOAD_CHUNK_BYTES:
+                    output.flush()
+                    os.fsync(output.fileno())
+                    update_media_upload_offset(upload_id, received)
+                    checkpoint = received
+            output.flush()
+            os.fsync(output.fileno())
+        if declared_end is not None and received != declared_end + 1:
+            raise HTTPException(status_code=400, detail="Content-Range end does not match the received body.")
+        update_media_upload_offset(upload_id, received)
+        return _media_upload_dict(_find_media_upload(upload_id))
+
+
+@app.post("/v1/sources/uploads/{upload_id}/complete", dependencies=[Depends(auth)])
+async def complete_media_upload(upload_id: str) -> dict[str, Any]:
+    async with _media_upload_lock(upload_id):
+        result = _finalize_media_upload(upload_id)
+    return {**result, "status": "done", "source": result["source"], "integrity": {"algorithm": "sha256", "sha256": _find_media_upload(upload_id)["expected_sha256"], "bytes": result["expected_bytes"]}}
+
+
 @app.post("/v1/sources/upload", dependencies=[Depends(auth)])
 async def upload_source(request: Request) -> dict[str, Any]:
+    """Legacy one-shot endpoint; resumable clients should use /v1/sources/uploads."""
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
     upload_id = f"upl_{secrets.token_urlsafe(12)}"
-    directory = (SOURCE_ROOT / upload_id).resolve()
-    directory.mkdir(parents=True, exist_ok=False)
-    target = directory / "source.mp4"
+    temp_path = _media_upload_temp_path(upload_id)
     size = 0
+    digest = hashlib.sha256()
     try:
-        with target.open("wb") as output:
+        with temp_path.open("wb") as output:
             async for chunk in request.stream():
                 if not chunk:
                     continue
@@ -1374,25 +1625,27 @@ async def upload_source(request: Request) -> dict[str, Any]:
                 if size > MAX_UPLOAD_BYTES:
                     raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
                 output.write(chunk)
+                digest.update(chunk)
+            output.flush()
+            os.fsync(output.fileno())
         if size == 0:
             raise HTTPException(status_code=400, detail="Uploaded video is empty.")
-        timestamp = now_iso()
-        source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/source.mp4"
-        items = [{"index": 0, "title": "Uploaded video", "url": source_url, "filename": "source.mp4", "bytes": size}]
+        checksum = digest.hexdigest()
         with closing(db()) as connection:
-            connection.execute(
-                "INSERT INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, ?, ?)",
-                (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), timestamp, timestamp),
-            )
+            duplicate = connection.execute("SELECT * FROM media_uploads WHERE expected_sha256=? AND expected_bytes=? AND status='completed' ORDER BY completed_at DESC LIMIT 1", (checksum, size)).fetchone()
+            if duplicate:
+                temp_path.unlink(missing_ok=True)
+                return {"id": duplicate["id"], "status": "done", "source": f"{PUBLIC_BASE_URL}/v1/sources/jobs/{duplicate['source_job_id']}/media/source.mp4", "filename": "source.mp4", "bytes": size, "sha256": checksum, "reused": True}
+            timestamp = now_iso()
+            connection.execute("INSERT INTO media_uploads (id, filename, expected_bytes, expected_sha256, received_bytes, status, temp_path, created_at, updated_at) VALUES (?, 'source.mp4', ?, ?, ?, 'uploading', ?, ?, ?)", (upload_id, size, checksum, size, str(temp_path), timestamp, timestamp))
             connection.commit()
-        return {"id": upload_id, "status": "done", "source": source_url, "filename": "source.mp4", "bytes": size}
+        result = _finalize_media_upload(upload_id)
+        return {"id": upload_id, "status": "done", "source": result["source"], "filename": "source.mp4", "bytes": size, "sha256": checksum}
     except HTTPException:
-        target.unlink(missing_ok=True)
-        shutil.rmtree(directory, ignore_errors=True)
+        temp_path.unlink(missing_ok=True)
         raise
     except Exception as error:
-        target.unlink(missing_ok=True)
-        shutil.rmtree(directory, ignore_errors=True)
+        temp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Video upload failed: {error}") from error
 
 

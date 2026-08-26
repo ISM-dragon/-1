@@ -1,7 +1,7 @@
 # ISM Android Audit
 
-**تاريخ التدقيق:** 26 أغسطس 2026  
-**المستودع:** `ISM-dragon/-1`  
+**تاريخ التدقيق:** 26 أغسطس 2026
+**المستودع:** `ISM-dragon/-1`
 **نقطة التدقيق الأساسية:** `e21f891` (`feat(android): refresh personal mobile studio and engine routing`)
 **حالة ما بعد التدقيق:** أُضيف patch محدود في هذه الجلسة لإصلاح remote URL routing ونتائج metadata؛ لم تُنفذ إعادة بناء كبيرة.
 
@@ -242,8 +242,8 @@ Python processing plane
 
 | الأمر | النتيجة |
 |---|---|
-| `python3 -m pytest gateway -q` | **36 passed**, مع 4 deprecation warnings من FastAPI `on_event` |
-| `cd pipeline && python3 -m pytest tests -q` | **91 passed** |
+| `python3 -m pytest gateway -q` | **38 passed, 1 skipped** لاختبار الأحجام الكبيرة، مع 4 deprecation warnings من FastAPI `on_event` |
+| `cd pipeline && python3 -m pytest tests -q` | **97 passed** |
 | `cd app && npm run typecheck` | **نجح** |
 | `cd app && npm run build` | **نجح**؛ Vite أنتج bundle production |
 | `cd android && ./gradlew :app:testDebugUnitTest --no-daemon` | **لم يبدأ الاختبار**؛ Gradle نجح في تنزيل نفسه لكنه توقف لأن Android SDK غير موجود (`SDK location not found`) |

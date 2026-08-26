@@ -22,8 +22,11 @@ class WebProcessingContractTests(unittest.TestCase):
             root = Path(directory)
             job_dir = root / "jobs" / "pipeline_01"
             job_dir.mkdir(parents=True)
+            output_path = job_dir / "clips" / "clip_00.mp4"
+            output_path.parent.mkdir()
+            output_path.write_bytes(b"valid-test-artifact")
             (job_dir / "render.json").write_text(json.dumps({
-                "data": {"outputs": [{"clip": 0, "path": str(job_dir / "clips" / "clip_00.mp4"), "duration": 31.0}]}
+                "data": {"outputs": [{"clip": 0, "path": str(output_path), "duration": 31.0}]}
             }))
             (job_dir / "score.json").write_text(json.dumps({
                 "data": {"clips": [{"start": 12.5, "end": 43.5, "title": "Hook", "transcript": "A real hook", "score": 88}]}

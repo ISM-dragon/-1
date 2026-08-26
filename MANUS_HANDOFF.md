@@ -1,54 +1,56 @@
-# MANUS HANDOFF — ISM Android Audit
+# MANUS HANDOFF — ISM Android / Backend
 
-**Session date:** 2026-08-26  
-**Repository:** `ISM-dragon/-1`  
-**Audit baseline:** `e21f891`
-**Current work:** limited implementation patch based on the audit; no large rebuild started.
+**المشروع:** ISM
+**المستودع:** `ISM-dragon/-1`
+**الحالة:** تم دمج تغييرات remote الحديثة مع patch Android/Gateway محدود؛ لم يبدأ rebuild كبير.
 
-## Decision summary
+## ما تم دمجه وتنفيذه
 
-The repository currently contains two Android surfaces:
+تم تصحيح عقد source في Native Android. يقبل `ProcessingEngine` الآن `content://` و`file://` للمعالجة المحلية، ويقبل `http://` و`https://` عندما يكون Gateway مضبوطًا. كما أن `VideoProcessingWorker` لم يعد يرفض URL قبل اختيار المسار، و`ProcessingGatewayClient` يرفع المصادر المحلية فقط ويرسل URL البعيد مباشرة إلى `/v1/processing/jobs`.
 
-| Surface | Actual role | Current processing reality |
-|---|---|---|
-| `app/src-tauri/gen/android` | Tauri-generated React shell | Does not spawn Python/uv/FFmpeg on Android; React uses remote Gateway HTTP processing |
-| `android/` | Separate Kotlin/Compose application | Has local simplified processing and remote processing; remote HTTP/HTTPS routing is now accepted when Gateway is configured |
+تم إصلاح نتائج Gateway بحيث تُستكمل metadata الخاصة بكل output من score checkpoint، بما في ذلك `start` و`end` و`title` و`transcript` عندما لا تكون موجودة في render output. أضيفت regression tests لهذا العقد ولسلوك remote URL routing.
 
-The recommended short path is to select the Tauri Android shell as the first official remote-processing APK. Keep Python, model loading, FFmpeg, scoring, captions, rendering, and durable jobs on the Gateway. Do not port the desktop pipeline into Android in the first delivery.
+تم دمج طبقة `PipelineEngine` العامة في `pipeline/publikclip_pipeline/engine/`، مع عقود lifecycle للـ jobs والنتائج والأخطاء والتقدم، مع إبقاء CLI JSONL كطبقة توافق. كما تم دمج تحسينات media lifecycle في Gateway، بما يشمل resumable uploads وoffset/checksum validation وatomic finalize وcleanup وoutput integrity metadata.
 
-## Confirmed working areas
+## المعمارية المعتمدة مؤقتًا
 
-`Gateway` has FastAPI routes for health/capabilities, source upload/download, processing jobs, polling, cancellation, retry, resume, artifact serving, and restart recovery. It persists job state and transition history in SQLite and executes the Python pipeline as a subprocess.
+| المكوّن | المسؤولية |
+|---|---|
+| Android client | إدخال local URI أو remote URL، حفظ Gateway job ID، WorkManager، polling، تنزيل النتائج والكاش |
+| Gateway | auth، SQLite state، resumable media boundary، queue، retry/cancel/resume، provider secrets، artifact serving |
+| Pipeline Engine | public lifecycle adapter فوق stage graph الحالي دون نقل algorithms إلى Android |
+| Python pipeline | ingest، ASR، diarization، events، candidates، scoring، camera، captions، FFmpeg rendering |
+| Social providers | تبقى منفصلة؛ live publishing غير جاهز خارج mock mode |
 
-The Python pipeline has an ordered stage graph from ingest through ASR, diarization, events, candidates, scoring, camera, and rendering. Checkpoints are atomic JSON files with schema validation and artifact checks. The renderer produces verified 9:16 H.264/AAC MP4s and can burn ASS captions when a caption-capable FFmpeg is available.
+المسار الموصى به لمعالجة YouTube على Android هو تشغيل Python/FFmpeg والنماذج في Gateway، وليس داخل APK. Tauri Android لا يشغّل desktop runtime المحلي، وNative Android لا يملك parity كاملة مع WhisperX أو diarization أو active-speaker أو ASS/libass rendering.
 
-React typecheck and Vite production build succeeded. Gateway tests passed 36 tests after the patch, and pipeline tests passed 91 tests. Windows CI contains a stronger desktop validation path for `uv`, FFmpeg, pipeline tests, NSIS packaging, silent install, and launch. Android CI currently validates only unit tests, lint, and debug APK assembly.
+## الاختبارات
 
-## Critical blockers
+| الفحص | النتيجة |
+|---|---|
+| `python3 -m pytest gateway -q` | **38 passed, 1 skipped** لاختبار الأحجام الكبيرة، مع تحذيرات FastAPI deprecation |
+| `cd pipeline && python3 -m pytest tests -q` | **97 passed** |
+| `python3 -m compileall -q gateway pipeline/publikclip_pipeline` | نجح |
+| `python3 scripts/check_identity.py` | نجح |
+| `git diff --check` | نجح قبل الدمج |
+| `cd android && ./gradlew :app:testDebugUnitTest --no-daemon` | متوقف قبل الاختبارات بسبب غياب Android SDK |
 
-1. The Android APK → Gateway → real processing job → MP4 E2E path is still unverified. The previous URL-routing mismatch was corrected in this patch.
-2. Tauri Android intentionally cannot run the desktop Python/uv runtime locally; Native Android does not implement desktop-equivalent WhisperX, diarization, active-speaker, ASS/libass rendering, or the full scoring graph.
-3. Gateway live social adapters and OAuth are not implemented outside `PROVIDER_MODE=mock`; Instagram/Gateway publishing is not production-ready.
-4. Android CI produces only debug APKs. Release signing is conditional on local/CI keystore variables and is not validated by the workflow.
-5. Gateway capability checks can report structural pipeline readiness while heavy runtime imports/models may still fail when a real worker starts.
-6. Native Android and Tauri Android have different package identities and different processing contracts. One official Android surface must be selected before substantial implementation.
+بعد الدمج أُعيد تشغيل Gateway وpipeline suites بنجاح. المتبقي هو تشغيل Android tests في بيئة تحتوي Android SDK 36.
 
-## Patch applied in this session
+## العوائق المتبقية
 
-The minimal Native Compose contract correction is implemented: `ProcessingEngine` and `VideoProcessingWorker` accept HTTP/HTTPS when a Gateway is configured; `ProcessingGatewayClient` sends remote URLs directly while retaining upload for `content://`/`file://`; and Gateway result metadata now carries start/end/title/transcript from score outputs. Regression coverage was added for URL routing and result enrichment.
+أهم عائق متبقٍ هو عدم وجود تشغيل E2E موثق من APK إلى Gateway إلى job حقيقي إلى MP4 قابل للتشغيل. كذلك ما زال Android CI يبني debug APK فقط، ولا يغطي release signing أو device/instrumentation tests.
 
-## Next execution step
+Gateway live social adapters وOAuth ما زالت غير منفذة خارج `PROVIDER_MODE=mock`. كما أن readiness probe يحتاج لاحقًا إلى فصل structural readiness عن runtime ML/model readiness.
 
-Choose one official Android surface, preferably the Tauri Android shell for the first remote-processing APK, provision the Gateway with Python 3.12, pipeline dependencies, FFmpeg/ffprobe, model cache policy, writable storage, `PUBLIC_BASE_URL`, gateway auth, and server-side Gemini key, then run a short real YouTube job. Do not copy the Python pipeline into Android.
+يجب اختيار Android surface رسمي واحد بين Tauri-generated APK وNative Compose APK قبل الاستثمار في parity أو publishing. الهوية الحالية مختلفة بينهما، كما تختلف عقود source وrendering.
 
-## Files produced by this audit
+## الخطوة التالية
 
-- `docs/ANDROID_AUDIT.md` — full evidence-based audit, proposed architecture, blockers, minimal path, and phased execution plan.
-- `MANUS_HANDOFF.md` — this short handoff, updated with the implementation patch.
-- Android/Gateway source and regression test files — limited routing and metadata fixes.
+1. تثبيت Android SDK 36 وJava/Gradle المطلوبة وتشغيل unit tests وlint و`assembleDebug`.
+2. تشغيل Gateway حقيقي مع Python 3.12 وFFmpeg/ffprobe وmodel cache وGemini server key.
+3. اختبار Native remote URL وlocal upload مع cancel/retry/resume.
+4. اختيار package/application ID الرسمي وإضافة release signing وE2E smoke test.
+5. إبقاء Instagram publishing خارج نطاق الإصلاح الحالي حتى تُنفذ adapters وOAuth والإدارة الآمنة للأسرار.
 
-## Verification notes
-
-The local Android test command was attempted with `cd android && ./gradlew :app:testDebugUnitTest --no-daemon`. Gradle downloaded successfully, but execution stopped before tests because the environment had no Android SDK (`SDK location not found`). Gateway tests passed 36 tests after the patch, and Python pipeline tests passed 91 tests. Temporary build/cache outputs were removed before committing.
-
-See `docs/ANDROID_AUDIT.md` for repository-file references and the complete test matrix.
+الوثيقة التفصيلية موجودة في [`docs/ANDROID_AUDIT.md`](docs/ANDROID_AUDIT.md).
