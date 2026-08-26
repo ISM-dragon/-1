@@ -161,9 +161,17 @@ class PipelineEngine(ProcessingEngine):
             stages={_public_stage(name): status for name, status in queue.stage_statuses(job_id).items()},
         )
 
-    def status(self, job_id: str) -> JobStatus:
-        """Direct-name alias for callers that use the lifecycle contract."""
+    def get_status(self, job_id: str) -> JobStatus:
+        """Public lifecycle name used by Backend adapters."""
         return self.get_job_status(job_id)
+
+    def status(self, job_id: str) -> JobStatus:
+        """Compatibility alias for callers using the shorter lifecycle name."""
+        return self.get_status(job_id)
+
+    def get_progress(self, job_id: str) -> Mapping[str, Any]:
+        """Public durable-progress name used by Backend adapters."""
+        return self.progress(job_id)
 
     def progress(self, job_id: str) -> Mapping[str, Any]:
         """Return the latest durable event and normalized overall progress."""
@@ -227,9 +235,13 @@ class PipelineEngine(ProcessingEngine):
             artifacts=artifacts,
         )
 
-    def results(self, job_id: str) -> JobResults:
-        """Direct-name alias for checkpoint-backed result reads."""
+    def get_results(self, job_id: str) -> JobResults:
+        """Public checkpoint-backed result name used by Backend adapters."""
         return self.get_job_results(job_id)
+
+    def results(self, job_id: str) -> JobResults:
+        """Compatibility alias for checkpoint-backed result reads."""
+        return self.get_results(job_id)
 
     def get_clip(self, job_id: str, clip_index: int) -> ClipResult:
         if clip_index < 0:

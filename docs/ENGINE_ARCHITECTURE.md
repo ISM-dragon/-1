@@ -28,10 +28,11 @@ engine = PipelineEngine()
 |---|---|---|
 | إنشاء job | `create_job(source, settings=None, *, source_type=None)` | `JobRef` بهوية ثابتة |
 | بدء job | `start_job(job_id, on_progress=None)` | `JobResults` عند الاكتمال |
-| حالة job | `get_job_status(job_id)` | `JobStatus` durable projection |
+| حالة job | `get_status(job_id)` | `JobStatus` durable projection |
+| التقدم | `get_progress(job_id)` | mapping لآخر progress محفوظ |
 | إلغاء job | `cancel_job(job_id)` | `JobStatus` بعد تثبيت طلب الإلغاء |
 | استئناف job | `resume_job(job_id, settings=None, on_progress=None)` | `JobResults` بعد إعادة تشغيل المراحل الناقصة |
-| نتائج job | `get_job_results(job_id)` | `JobResults` من checkpoints |
+| نتائج job | `get_results(job_id)` | `JobResults` من checkpoints |
 | قراءة clip | `get_clip(job_id, clip_index)` | `ClipResult` |
 | إعادة render | `render_clip(job_id, clip_index, on_progress=None)` | artifact entry للمقطع |
 

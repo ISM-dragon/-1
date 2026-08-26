@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 from .db import Store
@@ -89,29 +88,11 @@ class JobManager:
             self.store.transition(job_id, message=event.message[-500:])
 
     def _collect_result(self, job_id: str, engine_job_id: str | None, final: dict[str, Any]) -> dict[str, Any]:
+        """Normalize the adapter result without inspecting pipeline internals."""
         result = final.get("results") if isinstance(final.get("results"), dict) else dict(final)
         result["engine_job_id"] = engine_job_id or final.get("job_id")
         clips = result.get("clips")
-        if not isinstance(clips, list):
-            clips = []
-        # The existing engine writes stage checkpoints. Read them as data only;
-        # no scoring or editing logic is duplicated here.
-        if engine_job_id:
-            engine_dir = self.storage.jobs / engine_job_id
-            render_file = engine_dir / "render.json"
-            if render_file.is_file():
-                try:
-                    render = json.loads(render_file.read_text(encoding="utf-8")).get("data", {})
-                    outputs = render.get("outputs", []) if isinstance(render, dict) else []
-                    for index, output in enumerate(outputs):
-                        if not isinstance(output, dict):
-                            continue
-                        raw = Path(str(output.get("path", "")))
-                        if raw.is_file() and raw.suffix.lower() == ".mp4":
-                            clips.append({"clip": output.get("clip", index), "filename": raw.name, "bytes": raw.stat().st_size, "download_ready": True, **{k: v for k, v in output.items() if k != "path"}})
-                except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                    pass
-        result["clips"] = clips
+        result["clips"] = list(clips) if isinstance(clips, list) else []
         result["job_id"] = job_id
         return result
 

@@ -1,63 +1,63 @@
 # PUBLIKCLIP ENGINE Handoff
 
-## ملخص التسليم
+## نطاق التسليم
 
-أحدث remote يتضمن refactor مستقلًا لطبقة المحرك داخل `pipeline/publikclip_pipeline/engine/`. نقطة الاستدعاء العامة هي `PipelineEngine`، والعقد القابل للاستهلاك هو `ProcessingEngine`. هذا النطاق يحافظ على خوارزميات ASR وdiarization وevents وcandidates وscoring وcamera وrender الموجودة؛ المحرك مسؤول عن composition وlifecycle وcheckpoint access فقط.
+تم تحويل نقطة الاستدعاء الافتراضية من Backend إلى `PipelineFacadeEngine` الذي يستدعي `publikclip_pipeline.engine.PipelineEngine` العام. بقيت خوارزميات `ingest` وASR وdiarization وevents وcandidates وscoring وcamera وrender كما هي؛ التغيير محصور في facade، translation، lifecycle wiring، الاختبارات، والتوثيق.
 
-لم تُعدّل هذه الجلسة Android UI أو Android project أو Gateway API أو التصميم المرئي. كما لم تُدمج تغييرات الجلسة الأخرى في commit جديد؛ تم العمل فوق `origin/main` الأحدث وإضافة progress aliases والتوثيق المطلوب فقط.
+لم تُعدّل Android أو UI. لم تُضف FastAPI أو OAuth أو provider logic إلى pipeline.
 
-## عقد Backend
+## Boundary المعتمد
 
-يُنشئ Backend instance من `PipelineEngine` داخل worker process أو worker thread، ثم يستخدم الدوال التالية. النتائج هي dataclasses immutable، وتتحول إلى JSON عبر `.to_dict()`؛ أحداث التقدم هي `ProgressEvent` وتتحول عبر `.to_dict()`.
-
-| حاجة Backend | الاستدعاء | النتيجة |
-|---|---|---|
-| إنشاء job | `engine.create_job(source, settings, source_type=...)` | `JobRef` يحوي `id` و`job_id` وsource و`contract_version`. |
-| بدء job | `engine.start_job(job_id, on_progress)` | `JobResults` بعد التشغيل أو بعد الاستفادة من checkpoints. الاستدعاء synchronous ويجب وضعه داخل worker. |
-| الحالة | `engine.status(job_id)` أو `engine.get_job_status(job_id)` | `JobStatus` يحوي status وstage وprogress وmessage وحالات المراحل. |
-| التقدم | `engine.progress(job_id)` | mapping يحوي `fraction` و`progress` وstage وmessage وstages؛ التقدم الأخير محفوظ في SQLite. |
-| إلغاء | `engine.cancel_job(job_id)` | `JobStatus`؛ طلب الإلغاء دائم، وتلتقطه queue عند أقرب stage boundary آمن. |
-| الاستئناف | `engine.resume_job(job_id, settings, on_progress)` | `JobResults` لنفس `job_id` مع إعادة استخدام checkpoints الصحيحة. |
-| النتائج | `engine.results(job_id)` أو `engine.get_job_results(job_id)` | `JobResults` checkpoint-backed، ويمكن أن يكون جزئيًا قبل اكتمال job. |
-| full render | `engine.render(job_id, on_progress=...)` | يشغّل المسار العادي checkpoint-aware ويعيد `JobResults`. |
-| edited clip | `engine.render(job_id, clip_index, on_progress=...)` أو `engine.render_clip(...)` | mapping لنتيجة clip بعد استدعاء renderer الموجود وتحديث `render.json`. |
-
-يتعين على Backend تحويل `JobRef.to_dict()` و`JobStatus.to_dict()` و`JobResults.to_dict()` إلى schema النقل الخاص به. لا ينبغي كشف tracebacks أو الاستثناءات الخام أو مسارات filesystem الداخلية في API العام.
-
-## إعداد runtime
-
-يجب أن يمرر Backend قيمة `PUBLIKCLIP_HOME` إلى processing root معزول، وأن يضمّن مجلد `pipeline/` في `PYTHONPATH` أو يثبت الحزمة من `pipeline/pyproject.toml`. لا يحتاج إنشاء job أو status أو قراءة checkpoints إلى تحميل نماذج ASR الثقيلة؛ أما التشغيل الفعلي فيحتاج dependencies المعلنة وffmpeg بحسب المراحل.
-
-## حالات وأخطاء
-
-يحافظ المحرك على stable error codes عبر `EngineError`. فشل مرحلة ما يُحفظ في queue ثم يُحوّل إلى خطأ آمن عند boundary المحرك. الخطأ القابل للاستئناف يملك `recoverable=True` حيث ينطبق، بينما `JOB_CANCELLED` ليس نجاحًا ولا ينبغي عرضه كـ done.
-
-| الكود | المعنى |
-|---|---|
-| `JOB_NOT_FOUND` | job ID غير موجود. |
-| `INVALID_SOURCE` أو `INVALID_JOB_SETTINGS` | input أو settings غير صالحين. |
-| `JOB_BUSY` | محاولة تشغيل أو resume لـ job يعمل حاليًا. |
-| `JOB_CANCELLED` | طلب إلغاء محفوظ أو إلغاء التقطته queue. |
-| `JOB_NOT_CANCELLABLE` | محاولة إلغاء job مكتمل. |
-| `CLIP_NOT_FOUND` | clip index غير صالح أو غير موجود في score checkpoint. |
-| `CLIP_RENDER_FAILED` | فشل رندر clip. |
-| `ENGINE_FAILED` | فشل تنفيذ غير مصنف عند boundary المحرك. |
-
-## ما يحتاجه Android
-
-لا يحتاج Android إلى Python runtime أو أسماء modules الداخلية. عليه حفظ `job_id` قبل بدء polling، وعرض status وprogress اللذين يعيدهما Backend، وعدم تصنيع progress محلي أو حذف checkpoints. يجب أن تكون cancellation وresume عمليتين على Backend مع بقاء job identity ثابتة.
-
-## اعتماديات المسارات الأخرى
-
-يبقى Gateway الحالي متوافقًا مع CLI `publikclip --jsonl`. الترحيل الاختياري إلى الاستدعاء المباشر يحتاج adapter داخل Gateway فقط لتحويل `ProgressEvent` وحالات `JobStatus` ونتائج `JobResults` إلى API schema الموجود، وربط cancellation المستمر بمسار Gateway. لا ينبغي تعديل pipeline لإضافة FastAPI أو OAuth أو client navigation.
-
-## التحقق
-
-توجد اختبارات العقد في [`pipeline/tests/test_engine.py`](pipeline/tests/test_engine.py)، وتبقى اختبارات queue في [`pipeline/tests/test_queue.py`](pipeline/tests/test_queue.py). التشغيل من جذر المستودع:
-
-```bash
-PYTHONPATH=pipeline pytest -q pipeline/tests/test_queue.py pipeline/tests/test_engine.py
-PYTHONPATH=pipeline pytest -q pipeline/tests
+```text
+Backend JobManager
+  → backend.engine.PipelineFacadeEngine
+  → publikclip_pipeline.engine.PipelineEngine
+  → existing pipeline stages
 ```
 
-التوثيق المعماري الموجود من جلسة refactor هو [`docs/ENGINE_ARCHITECTURE.md`](docs/ENGINE_ARCHITECTURE.md)، والواجهة العامة في [`pipeline/publikclip_pipeline/engine/__init__.py`](pipeline/publikclip_pipeline/engine/__init__.py).
+Backend لا يستورد queue أو stages أو renderer ولا يقرأ checkpoint files. المحرك العام يملك stage ordering وSQLite/checkpoints وresume وprogress persistence وrender. Backend يملك auth وHTTP job state وworker scheduling وmapping إلى states الخارجية.
+
+`SubprocessPublikclipEngine` موجود للتوافق، ويُستخدم فقط عند ضبط `PRIVATE_BACKEND_ENGINE_BIN`. عند عدم ضبطه، يستخدم `create_app()` الـ`PipelineFacadeEngine` إذا كان checkout الـpipeline موجودًا.
+
+## Public facade API
+
+| العملية | الاستخدام |
+|---|---|
+| `create_job` | إنشاء job وحفظ settings snapshot |
+| `start_job` | تشغيل المراحل من checkpoint الحالي |
+| `get_status` | قراءة حالة durable |
+| `get_progress` | قراءة آخر progress محفوظ |
+| `cancel_job` | تثبيت cancellation marker |
+| `resume_job` | استئناف نفس job ID وإعادة الناقص فقط |
+| `get_results` | قراءة `JobResults` checkpoint-backed |
+| `render_clip` | إعادة render لمقطع واحد وتحديث artifact |
+
+الأسماء القديمة `get_job_status` و`status` و`progress` و`get_job_results` و`results` بقيت aliases. لم يتغير `ENGINE_CONTRACT_VERSION` لأن الإضافة aliases فقط ولا تغير semantics الحقول أو lifecycle.
+
+## Backend translation
+
+`PipelineFacadeEngine.run()` هو compatibility entry point لـ`JobManager` الحالي، لكنه ينفذ داخليًا `create_job` ثم `start_job` أو `resume_job`. يحول progress إلى `EngineEvent`، و`JobResults` إلى result payload فيه `clips` وmetadata آمنة، ويحوّل public `EngineError` إلى Backend `EngineError` مع الحفاظ على code وrecoverable.
+
+`PipelineFacadeEngine.render_clip()` يعيد metadata مثل `clip` و`filename` و`bytes` و`download_ready` ولا يعيد path المطلق. مسارات artifacts الداخلية تظل تحت `PUBLIKCLIP_HOME/jobs/<engine_job_id>/clips` ويستخدمها Storage boundary للتنزيل.
+
+## Runtime
+
+يمرر Backend `config.storage_root` كـ`PUBLIKCLIP_HOME` للـEngine، لذلك تظهر artifacts في نفس storage boundary التي يستخدمها download route. يلزم تثبيت pipeline dependencies وFFmpeg والنماذج لتشغيل stages الحقيقية. إنشاء job وقراءة الحالة والاختبارات contract لا تتطلب تحميل ASR models.
+
+## Verification performed
+
+| الاختبار | النتيجة |
+|---|---|
+| `PYTHONPATH=pipeline python3 -m pytest -q pipeline/tests/test_engine.py` | **9 passed** |
+| `PYTHONPATH=pipeline python3 -m pytest -q backend/tests/test_backend_engine.py backend/tests/test_api.py` | **11 passed, 1 warning** |
+
+اختبار Backend الجديد يشغل HTTP lifecycle كاملًا عبر `PipelineFacadeEngine` المحقون بواجهة public double، ويتحقق من وصول artifact وتنزيله. هذه اختبارات integration للعقد والحدود وليست تشغيلًا للنماذج أو إنتاج MP4 حقيقي.
+
+## الملفات الأساسية
+
+- [`docs/ENGINE.md`](docs/ENGINE.md): دليل التشغيل والحدود.
+- [`docs/CONTRACTS.md`](docs/CONTRACTS.md): عقد Engine وسبب aliases.
+- [`pipeline/publikclip_pipeline/engine/contracts.py`](pipeline/publikclip_pipeline/engine/contracts.py): public records وProtocol.
+- [`pipeline/publikclip_pipeline/engine/pipeline.py`](pipeline/publikclip_pipeline/engine/pipeline.py): facade orchestration.
+- [`backend/engine.py`](backend/engine.py): adapter والـerror/event translation.
+- [`backend/service.py`](backend/service.py): worker lifecycle دون قراءة pipeline internals.

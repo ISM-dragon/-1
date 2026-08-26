@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .db import Store
-from .engine import Engine, SubprocessPublikclipEngine, UnavailableEngine
+from .engine import Engine, PipelineFacadeEngine, SubprocessPublikclipEngine, UnavailableEngine
 from .service import JobManager
 from .storage import Storage, StorageError
 
@@ -83,7 +83,14 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     config = settings or Settings()
     store = Store(config.db_path)
     storage = Storage(config.storage_root, config.max_upload_bytes)
-    selected_engine = engine or (SubprocessPublikclipEngine(config.pipeline_dir, config.engine_bin) if config.pipeline_dir.exists() else UnavailableEngine())
+    if engine is not None:
+        selected_engine = engine
+    elif config.pipeline_dir.exists() and not config.engine_bin:
+        selected_engine = PipelineFacadeEngine(config.pipeline_dir, config.storage_root)
+    elif config.pipeline_dir.exists():
+        selected_engine = SubprocessPublikclipEngine(config.pipeline_dir, config.engine_bin)
+    else:
+        selected_engine = UnavailableEngine()
     manager = JobManager(store, storage, selected_engine)
 
     @asynccontextmanager

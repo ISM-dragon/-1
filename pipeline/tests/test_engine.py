@@ -154,3 +154,13 @@ def test_status_and_progress_use_public_stage_names():
     assert status.stage == "diarization"
     assert progress["stage"] == "diarization"
     assert progress["fraction"] == 0.0625
+
+
+
+def test_required_facade_method_names_are_supported():
+    engine = PipelineEngine(lambda: [])
+    job = engine.create_job("/tmp/input.mp4")
+
+    assert engine.get_status(job.id) == engine.get_job_status(job.id)
+    assert engine.get_progress(job.id) == engine.progress(job.id)
+    assert engine.get_results(job.id) == engine.get_job_results(job.id)

@@ -138,3 +138,28 @@ def test_cancel_and_resume_require_checkpoint(tmp_path):
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
         assert client.post(f"/jobs/{job_id}/resume").status_code == 409
+
+
+
+def test_private_job_lifecycle_uses_public_pipeline_facade(tmp_path):
+    from backend.engine import PipelineFacadeEngine
+    from backend.tests.test_backend_engine import PublicFacadeDouble
+
+    settings = Settings()
+    settings.db_path = tmp_path / "backend.sqlite3"
+    settings.storage_root = tmp_path / "files"
+    settings.max_upload_bytes = 1024 * 1024
+    adapter = PipelineFacadeEngine(tmp_path / "pipeline", settings.storage_root, facade=PublicFacadeDouble(settings.storage_root))
+
+    with make_client(tmp_path, adapter) as client:
+        created = client.post("/jobs", json={"source": "https://example.com/video.mp4"})
+        assert created.status_code == 202
+        job_id = created.json()["id"]
+        completed = wait_for(client, job_id)
+        assert completed["status"] == "completed"
+        assert completed["results"]["clips"][0]["filename"] == "clip_00.mp4"
+        assert "path" not in completed["results"]["artifacts"][0]
+        assert "path" not in completed["results"]["render"]["outputs"][0]
+        download = client.get(f"/jobs/{job_id}/clips/0/download")
+        assert download.status_code == 200
+        assert download.content == b"direct facade mp4"

@@ -1,6 +1,6 @@
 # Private publikclip Backend
 
-هذا المجلد يحتوي خدمة **Private Backend** شخصية لجهاز Android واحد. لا توجد حسابات مستخدمين أو billing أو subscriptions أو multi-tenancy. الخدمة تحفظ jobs والملفات محليًا، وتستدعي `publikclip` عبر adapter معزول في `backend/engine.py`.
+هذا المجلد يحتوي خدمة **Private Backend** شخصية لجهاز Android واحد. لا توجد حسابات مستخدمين أو billing أو subscriptions أو multi-tenancy. الخدمة تحفظ jobs والملفات محليًا، ويستدعي المسار الافتراضي `PipelineFacadeEngine` من `backend/engine.py` واجهة `publikclip_pipeline.engine` العامة. يبقى subprocess adapter توافقًا اختياريًا فقط.
 
 ## التشغيل
 
@@ -27,7 +27,7 @@ uvicorn backend.app:app --host 0.0.0.0 --port 8788
 | `POST` | `/jobs` | إنشاء job من `upload_id` أو من URL عام؛ يعيد `202`. |
 | `GET` | `/jobs` | قائمة jobs مع `limit` و`status` وcursor زمني اختياري. |
 | `GET` | `/jobs/{id}` | الحالة، المرحلة، progress، الخطأ، والـresume metadata. |
-| `POST` | `/jobs/{id}/cancel` | إلغاء durable وإرسال إشارة إلى worker أو subprocess. |
+| `POST` | `/jobs/{id}/cancel` | إلغاء durable وإرسال إشارة إلى worker والـEngine facade. |
 | `POST` | `/jobs/{id}/resume` | إعادة تشغيل job فاشل/متوقف إذا توفر engine checkpoint. |
 | `GET` | `/jobs/{id}/results` | استرجاع النتائج بعد `completed`. |
 | `GET` | `/jobs/{id}/clips` | قائمة المقاطع مع روابط التنزيل. |
@@ -60,7 +60,7 @@ uvicorn backend.app:app --host 0.0.0.0 --port 8788
 ## الاختبارات
 
 ```bash
-pytest -q backend/tests
+PYTHONPATH=pipeline python3 -m pytest -q backend/tests
 ```
 
-الاختبارات تستخدم Fake Engine ولا تتطلب مفاتيح AI أو تنزيل فيديو خارجي. اختبارات integration الحقيقية مع pipeline تعتمد على تثبيت runtime الخاص بالمحرك ووجود FFmpeg وتهيئة مفاتيح مزود AI خارج هذا المجلد.
+الاختبارات تستخدم Fake Engine أو public facade double ولا تتطلب مفاتيح AI أو تنزيل فيديو خارجي. اختبار integration يمر عبر `PipelineFacadeEngine` ويتحقق من نتيجة clip والتنزيل. تشغيل pipeline الحقيقي يعتمد على تثبيت runtime الخاص بالمحرك ووجود FFmpeg وتهيئة مفاتيح مزود AI خارج هذا المجلد.
