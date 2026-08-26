@@ -71,3 +71,64 @@ export KEY_PASSWORD='***'
 ## مراجع التسليم
 
 التفاصيل التشغيلية، مصفوفة الصلاحيات، بصمة APK، وقيود اختبار الجهاز موجودة في [`docs/RELEASE.md`](docs/RELEASE.md). يجب أن يكون أي backend مستخدم في الإنتاج خاصاً ومحمياً بـ HTTPS وGateway token، ويجب عدم نقل محرك Python أو أسراره إلى تطبيق Android.
+
+
+## موجة التدقيق والمقارنة — 2026-08-26
+
+تمت مراجعة المشروع الأساسي والمرجع المرفق على مستوى البنية، Android، Gateway، Engine، media، AI، scoring، camera، captions، الاختبارات، والتراخيص. لم يتم نسخ شجرة المرجع أو source code أو secrets. القرار التنفيذي هو إبقاء Native Android + Private Gateway + `PipelineEngine` كمسار canonical، مع تحسينات انتقائية لاحقة فقط بعد regression وbenchmark.
+
+### الوثائق المضافة
+
+- `docs/REFERENCE_COMPARISON.md`
+- `docs/REFERENCE_MIGRATION_PLAN.md`
+- `docs/MIGRATION_DECISIONS.md`
+- `docs/THIRD_PARTY_LICENSES.md`
+- `docs/API.md`
+- `docs/ENGINE.md`
+- `docs/AI_RUNTIME.md`
+- `docs/MEDIA_RUNTIME.md`
+- `docs/ANDROID_UI.md`
+- `docs/TEST_MATRIX.md`
+- `docs/PERFORMANCE.md`
+
+### المخاطر المعروفة
+
+المشروع يحتوي أكثر من مسار تشغيل، لكن Native Android/Gateway هو المسار المعتمد للإصدار. ما زال اختبار الجهاز الحقيقي أو emulator مستقرًا مطلوبًا للتحقق من install/launch/file-picker/foreground worker/process-death. كما أن تدقيق تراخيص dependencies النهائي يجب أن يُعاد عند تثبيت نسخ release النهائية.
+
+### القرار التالي
+
+الانتقال إلى تحسينات برمجية صغيرة منخفضة المخاطر، مع عدم استبدال المراحل الحالية أو نقل runtime الثقيل إلى Android. كل تغيير سيصاحبه اختبار regression ثم build كامل.
+
+
+## موجة التنفيذ والتحقق — 2026-08-26
+
+تم إصلاح فشل compilation كان موجودًا في HEAD: commit `02b91d7` حذف ثلاثة ملفات Android ما زالت `OpusRepository` تستوردها، فاستُعيدت من parent commit دون إعادة كتابة السلوك: `SpeechToTextService.kt` و`CaptionSidecarWriter.kt` و`LocalMediaAnalyzer.kt`. كما أضيف `MockWebServer` إلى version catalog لأن `RemoteGatewayApiContractTest` كان يُترجم ضمن source set ويحتاجه.
+
+تم تحسين `ApiContractClient` كي يقرأ أخطاء Gateway عندما يكون `detail` كائنًا يحوي `code/message`، أو عندما توجد قائمة `errors`، مع الاحتفاظ بدعم الرسائل النصية القديمة و`request_id`. أضيف اختبار regression لهذا الشكل.
+
+نتائج التحقق المسجلة:
+
+| المجموعة | النتيجة |
+|---|---|
+| `python3 -m pytest -q` | `164 passed, 1 skipped` |
+| Android `ApiContractClientTest` | نجح بعد إصلاح الملفات والاعتماد |
+| Android `testDebugUnitTest` + `lint` + `assembleRelease` | نجحت في build كامل واحد قبل تنظيف build outputs لإعادة إنتاج artifact النهائي |
+| `git diff --check` | نجح |
+
+تحذيرات Gradle الحالية غير مانعة، وتشمل deprecated Compose icons وعبارة `Unable to strip` لبعض مكتبات native؛ لا تُعد فشلًا في هذا البناء. أُزيلت مجلدات build المحلية غير المتعقبة قبل إعادة البناء، وسيُعاد إنشاء APK النهائي ثم فحص SHA-256 وarchive وmanifest قبل commit.
+
+
+## التحقق النهائي قبل الرفع — 2026-08-26
+
+أُعيد تشغيل البناء من الشجرة الحالية بنجاح باستخدام JDK 21 وAndroid SDK 36. نجحت المهام `:app:testDebugUnitTest`, `:app:lint`, و`:app:assembleRelease`. لأن keystore الإنتاجي غير موجود في بيئة العمل، خرج release كملف unsigned، بينما أُنشئت نسخة Debug موقعة تلقائيًا للاختبار خارج Git:
+
+| artifact | الحالة | SHA-256 |
+|---|---|---|
+| `publikclip-release-unsigned.apk` | Release unsigned، صالح للأرشيف وليس للتثبيت قبل التوقيع | `c1398a3ee0ee07a68fc5371675ce1bea06551dc24042cec51e8e55db392aa2c1` |
+| `publikclip-debug.apk` | Debug signed، تحقق APK Signature Scheme v2 | `a78721c8efb9d7c1f3b1bc8b9ea0485698bfaa6e19c633356689b878c0abe877` |
+
+أكد فحص Debug package الهوية `com.aistudio.opuspro.apk`، الإصدار `0.10.1`، وcompile/target SDK 36، كما لم يظهر في archive أي Python أو Whisper أو PyTorch أو FFmpeg أو Node أو Rust أو key placeholder. فحص ZIP نجح. لا يزال اختبار الجهاز الحقيقي أو emulator مستقرًا مطلوبًا لمسار install/launch/file-picker/process-death.
+
+## حالة الرفع
+
+التغييرات جاهزة للـcommit والرفع إلى `ISM-dragon/-1`. لا تُرفع build directories أو APKs أو keystores؛ تبقى artifacts خارج المستودع ويمكن إعادة إنتاجها بالأوامر الموثقة.
