@@ -146,18 +146,50 @@ class PipelineEngine(ProcessingEngine):
 
     def get_job_status(self, job_id: str) -> JobStatus:
         job = self._job(job_id)
+        current = queue.get_progress(job_id)
+        progress = self.progress(job_id)
         return JobStatus(
             id=job.id,
             status=job.status,
-            stage=None,
-            progress=1.0 if job.status == "done" else 0.0,
-            message=job.message,
+            stage=_public_stage(current["stage"]) if current and current["stage"] else None,
+            progress=float(progress["fraction"]),
+            message=current["message"] if current else job.message,
             error_code=job.error_code,
             error=job.error,
             recoverable=job.status == "failed",
             cancel_requested=job.cancel_requested,
             stages={_public_stage(name): status for name, status in queue.stage_statuses(job_id).items()},
         )
+
+    def status(self, job_id: str) -> JobStatus:
+        """Direct-name alias for callers that use the lifecycle contract."""
+        return self.get_job_status(job_id)
+
+    def progress(self, job_id: str) -> Mapping[str, Any]:
+        """Return the latest durable event and normalized overall progress."""
+        self._job(job_id)
+        current = queue.get_progress(job_id)
+        stages = queue.stage_statuses(job_id)
+        public_stages = {_public_stage(name): status for name, status in stages.items()}
+        expected = {"ingest", "asr", "diarization", "events", "candidates", "scoring", "camera", "render"}
+        total = len(expected) if not (set(public_stages) - expected) else max(1, len(public_stages))
+        done = sum(status == "done" for status in public_stages.values())
+        fraction = 1.0 if self._job(job_id).status == "done" else (done / total if total else 0.0)
+        if current and current["stage"]:
+            current_stage = _public_stage(current["stage"])
+            stage_fraction = float(current["fraction"])
+            if stage_fraction >= 0:
+                completed_before = done - (1 if public_stages.get(current_stage) == "done" else 0)
+                fraction = (completed_before + min(1.0, stage_fraction)) / total
+        return {
+            "job_id": job_id,
+            "stage": _public_stage(current["stage"]) if current and current["stage"] else None,
+            "fraction": max(0.0, min(1.0, round(fraction, 6))),
+            "progress": max(0.0, min(1.0, round(fraction, 6))),
+            "message": current["message"] if current else None,
+            "updated_at": current["updated_at"] if current else None,
+            "stages": public_stages,
+        }
 
     def cancel_job(self, job_id: str) -> JobStatus:
         job = self._job(job_id)
@@ -195,6 +227,10 @@ class PipelineEngine(ProcessingEngine):
             artifacts=artifacts,
         )
 
+    def results(self, job_id: str) -> JobResults:
+        """Direct-name alias for checkpoint-backed result reads."""
+        return self.get_job_results(job_id)
+
     def get_clip(self, job_id: str, clip_index: int) -> ClipResult:
         if clip_index < 0:
             raise EngineError("Clip index must be non-negative.", "INVALID_CLIP_INDEX")
@@ -218,15 +254,10 @@ class PipelineEngine(ProcessingEngine):
         self.get_clip(job_id, clip_index)
 
         def emit(fraction: float, message: str) -> None:
+            normalized = -1.0 if fraction < 0 else max(0.0, min(1.0, float(fraction)))
+            queue.record_progress(job_id, "render", normalized, message)
             if on_progress is not None:
-                on_progress(
-                    ProgressEvent(
-                        job_id,
-                        "render",
-                        -1.0 if fraction < 0 else max(0.0, min(1.0, float(fraction))),
-                        message,
-                    )
-                )
+                on_progress(ProgressEvent(job_id, "render", normalized, message))
 
         try:
             return render_clip_module.render_clip_edit(job.dir, clip_index, emit)
@@ -234,6 +265,17 @@ class PipelineEngine(ProcessingEngine):
             raise EngineError("Clip index is out of range.", "CLIP_NOT_FOUND") from error
         except Exception as error:  # noqa: BLE001 - stable public boundary
             raise EngineError("Clip render failed.", "CLIP_RENDER_FAILED", recoverable=True) from error
+
+    def render(
+        self,
+        job_id: str,
+        clip_index: int | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> JobResults | Mapping[str, Any]:
+        """Render the full pipeline or one edited clip through the existing paths."""
+        if clip_index is None:
+            return self.start_job(job_id, on_progress=on_progress)
+        return self.render_clip(job_id, clip_index, on_progress=on_progress)
 
 
 __all__ = ["PipelineEngine"]
