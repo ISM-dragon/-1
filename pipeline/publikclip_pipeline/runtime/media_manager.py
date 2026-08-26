@@ -1,4 +1,4 @@
-"""Safe, classified FFmpeg operations for the processing host."""
+"""Safe, classified FFmpeg operations for the media runtime."""
 
 from __future__ import annotations
 
@@ -15,21 +15,10 @@ from ..render import ffmpeg_bin
 from .hardware import HardwareInfo, inspect_resources
 
 
-MEDIA_ERROR_CODES = {
-    "MEDIA_INVALID",
-    "FFMPEG_MISSING",
-    "FFMPEG_FAILED",
-    "INSUFFICIENT_DISK",
-    "UNSUPPORTED_FORMAT",
-}
-
-
 class MediaRuntimeError(RuntimeError):
-    """Stable runtime error that can be converted to a user-safe API response."""
+    """A stable error that callers can expose without a raw subprocess crash."""
 
     def __init__(self, code: str, message: str, *, path: Path | None = None):
-        if code not in MEDIA_ERROR_CODES:
-            code = "FFMPEG_FAILED"
         self.code = code
         self.path = str(path) if path else None
         super().__init__(message)
@@ -47,14 +36,20 @@ class MediaProbe:
     has_audio: bool
     format_name: str
 
-    def to_dict(self) -> dict[str, object]:
+    def to_dict(self) -> dict:
         return asdict(self)
 
 
 class MediaManager:
     """Own FFmpeg discovery and bounded media subprocess operations."""
 
-    def __init__(self, *, ffmpeg_path: str | None = None, ffprobe_path: str | None = None, hardware: HardwareInfo | None = None):
+    def __init__(
+        self,
+        *,
+        ffmpeg_path: str | None = None,
+        ffprobe_path: str | None = None,
+        hardware: HardwareInfo | None = None,
+    ) -> None:
         self._ffmpeg_override = ffmpeg_path
         self._ffprobe_override = ffprobe_path
         self._hardware = hardware or inspect_resources(config.home_dir())
@@ -72,26 +67,24 @@ class MediaManager:
             return str(sibling) if sibling.exists() else "ffprobe"
         return ffmpeg_bin.ffprobe()
 
-    @staticmethod
-    def _tail(proc: subprocess.CompletedProcess[str]) -> str:
-        return (proc.stderr or proc.stdout or "")[-1200:].strip()
-
-    def _run(self, args: list[str], *, media_path: Path | None = None, timeout: float) -> subprocess.CompletedProcess[str]:
+    def _run(self, args: list[str], *, media_path: Path | None = None, timeout: float) -> subprocess.CompletedProcess:
         try:
             proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
-        except FileNotFoundError as error:
-            raise MediaRuntimeError("FFMPEG_MISSING", f"Required media executable is not installed: {args[0]}", path=media_path) from error
-        except subprocess.TimeoutExpired as error:
-            raise MediaRuntimeError("FFMPEG_FAILED", f"Media operation timed out after {timeout:.0f}s.", path=media_path) from error
-        except OSError as error:
-            raise MediaRuntimeError("FFMPEG_FAILED", f"Media executable could not start: {error}", path=media_path) from error
+        except FileNotFoundError as err:
+            raise MediaRuntimeError("FFMPEG_MISSING", f"Required executable is not installed: {args[0]}", path=media_path) from err
+        except subprocess.TimeoutExpired as err:
+            raise MediaRuntimeError("FFMPEG_INVALID", f"FFmpeg operation timed out after {timeout:.0f}s.", path=media_path) from err
+        except OSError as err:
+            raise MediaRuntimeError("FFMPEG_INVALID", f"FFmpeg could not start: {err}", path=media_path) from err
         if proc.returncode != 0:
-            code = "MEDIA_INVALID" if media_path is not None and "ffprobe" in Path(args[0]).name else "FFMPEG_FAILED"
-            raise MediaRuntimeError(code, f"Media operation failed: {self._tail(proc) or proc.returncode}", path=media_path)
+            tail = (proc.stderr or proc.stdout or "")[-1200:]
+            code = "MEDIA_INVALID" if media_path is not None else "FFMPEG_INVALID"
+            raise MediaRuntimeError(code, f"FFmpeg operation failed: {tail.strip() or proc.returncode}", path=media_path)
         return proc
 
-    def check(self) -> dict[str, object]:
-        result: dict[str, object] = {
+    def check(self) -> dict:
+        """Return readiness details without raising for missing FFmpeg."""
+        result = {
             "ffmpeg_path": self.ffmpeg_path,
             "ffprobe_path": self.ffprobe_path,
             "valid": False,
@@ -103,42 +96,51 @@ class MediaManager:
             version = self._run([self.ffmpeg_path, "-hide_banner", "-version"], timeout=10)
             filters = self._run([self.ffmpeg_path, "-hide_banner", "-filters"], timeout=10)
             self._run([self.ffprobe_path, "-hide_banner", "-version"], timeout=10)
-            result.update(valid=True, version=(version.stdout.splitlines() or [""])[0], has_subtitles=" subtitles " in filters.stdout)
-        except MediaRuntimeError as error:
-            result.update(error_code=error.code, error=str(error))
+            result["valid"] = True
+            result["version"] = (version.stdout.splitlines() or [""])[0]
+            result["has_subtitles"] = " subtitles " in filters.stdout
+        except MediaRuntimeError as err:
+            result["error_code"] = err.code
+            result["error"] = str(err)
         return result
 
-    status = check
+    def status(self) -> dict:
+        return self.check()
 
-    def _require_tools(self) -> None:
+    def _require_valid_tools(self) -> None:
         state = self.check()
-        if not state["valid"]:
-            raise MediaRuntimeError(str(state.get("error_code", "FFMPEG_FAILED")), str(state.get("error", "Media runtime is not ready.")))
+        if state.get("valid"):
+            return
+        code = state.get("error_code", "FFMPEG_INVALID")
+        raise MediaRuntimeError(code, state.get("error", "FFmpeg runtime is not ready."))
 
-    def _probe_json(self, path: Path) -> dict[str, object]:
+    def _probe_json(self, path: Path) -> dict:
         if not path.is_file() or path.stat().st_size == 0:
             raise MediaRuntimeError("MEDIA_INVALID", "Media file is missing or empty.", path=path)
-        self._require_tools()
-        proc = self._run([self.ffprobe_path, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)], media_path=path, timeout=config.PROBE_TIMEOUT)
+        self._require_valid_tools()
+        proc = self._run(
+            [self.ffprobe_path, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+            media_path=path,
+            timeout=config.PROBE_TIMEOUT,
+        )
         try:
             info = json.loads(proc.stdout)
-        except json.JSONDecodeError as error:
-            raise MediaRuntimeError("MEDIA_INVALID", "ffprobe returned invalid media metadata.", path=path) from error
-        streams = info.get("streams", [])
-        if not isinstance(streams, list) or not any(isinstance(item, dict) and item.get("codec_type") == "video" for item in streams):
+        except json.JSONDecodeError as err:
+            raise MediaRuntimeError("MEDIA_INVALID", "ffprobe returned invalid media metadata.", path=path) from err
+        if not any(s.get("codec_type") == "video" for s in info.get("streams", [])):
             raise MediaRuntimeError("MEDIA_INVALID", "Media has no valid video stream.", path=path)
         return info
 
     @staticmethod
-    def _rate(value: object) -> float:
+    def _rate(value: str | None) -> float:
         if not value or value in {"0/0", "N/A"}:
             return 0.0
         try:
-            left, right = str(value).split("/", 1)
+            left, right = value.split("/", 1)
             return float(left) / float(right)
         except (ValueError, ZeroDivisionError):
             try:
-                return float(str(value))
+                return float(value)
             except ValueError:
                 return 0.0
 
@@ -146,16 +148,25 @@ class MediaManager:
         source = Path(path)
         info = self._probe_json(source)
         streams = info.get("streams", [])
-        video = next(item for item in streams if item.get("codec_type") == "video")
-        audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
+        video = next(s for s in streams if s.get("codec_type") == "video")
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
         fmt = info.get("format", {})
         duration = float(fmt.get("duration") or video.get("duration") or 0.0)
-        width, height = int(video.get("width", 0) or 0), int(video.get("height", 0) or 0)
-        if duration < 0 or width <= 0 or height <= 0:
+        if duration < 0 or video.get("width", 0) <= 0 or video.get("height", 0) <= 0:
             raise MediaRuntimeError("MEDIA_INVALID", "Media metadata is incomplete or invalid.", path=source)
-        return MediaProbe(str(source), duration, width, height, self._rate(video.get("avg_frame_rate")) or self._rate(video.get("r_frame_rate")), str(video.get("codec_name", "")), str(audio.get("codec_name")) if audio else None, audio is not None, str(fmt.get("format_name", "")))
+        return MediaProbe(
+            path=str(source),
+            duration_sec=duration,
+            width=int(video.get("width", 0)),
+            height=int(video.get("height", 0)),
+            fps=self._rate(video.get("avg_frame_rate")) or self._rate(video.get("r_frame_rate")),
+            video_codec=str(video.get("codec_name", "")),
+            audio_codec=str(audio.get("codec_name")) if audio else None,
+            has_audio=audio is not None,
+            format_name=str(fmt.get("format_name", "")),
+        )
 
-    def validate(self, path: str | Path, *, require_audio: bool = False) -> dict[str, object]:
+    def validate(self, path: str | Path, *, require_audio: bool = False) -> dict:
         probe = self.probe(path)
         if require_audio and not probe.has_audio:
             raise MediaRuntimeError("MEDIA_INVALID", "Media has no audio stream.", path=Path(path))
@@ -167,22 +178,26 @@ class MediaManager:
         if not probe.has_audio:
             raise MediaRuntimeError("MEDIA_INVALID", "Cannot extract audio: media has no audio stream.", path=src)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        self._run([self.ffmpeg_path, "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", str(sample_rate), "-c:a", "pcm_s16le", str(dst)], media_path=src, timeout=3600)
+        self._run(
+            [self.ffmpeg_path, "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", str(sample_rate), "-c:a", "pcm_s16le", str(dst)],
+            media_path=src,
+            timeout=3600,
+        )
         if not dst.is_file() or dst.stat().st_size <= 44:
-            raise MediaRuntimeError("FFMPEG_FAILED", "Audio extraction produced an empty artifact.", path=src)
+            raise MediaRuntimeError("MEDIA_INVALID", "Audio extraction produced an empty artifact.", path=src)
         return dst
 
     def extract_frames(self, source: str | Path, destination_dir: str | Path, *, fps: float = 1.0, image_format: str = "jpg") -> list[Path]:
         src, out_dir = Path(source), Path(destination_dir)
         self.probe(src)
         if fps <= 0 or image_format not in {"jpg", "jpeg", "png"}:
-            raise MediaRuntimeError("UNSUPPORTED_FORMAT", "Invalid frame extraction parameters.", path=src)
+            raise MediaRuntimeError("MEDIA_INVALID", "Invalid frame extraction parameters.", path=src)
         out_dir.mkdir(parents=True, exist_ok=True)
         pattern = out_dir / f"frame_%06d.{image_format}"
         self._run([self.ffmpeg_path, "-y", "-i", str(src), "-vf", f"fps={fps}", str(pattern)], media_path=src, timeout=3600)
         frames = sorted(out_dir.glob(f"frame_*.{image_format}"))
         if not frames:
-            raise MediaRuntimeError("FFMPEG_FAILED", "Frame extraction produced no frames.", path=src)
+            raise MediaRuntimeError("MEDIA_INVALID", "Frame extraction produced no frames.", path=src)
         return frames
 
     def transcode(self, source: str | Path, destination: str | Path, *, video_codec: str = "libx264", audio_codec: str = "aac", extra_args: Iterable[str] = ()) -> Path:
@@ -197,7 +212,7 @@ class MediaManager:
         dst.parent.mkdir(parents=True, exist_ok=True)
         self._run([self.ffmpeg_path, "-y", "-i", str(src), "-c:v", video_codec, "-c:a", audio_codec, *list(extra_args), str(dst)], media_path=src, timeout=6 * 3600)
         if not dst.is_file() or dst.stat().st_size == 0:
-            raise MediaRuntimeError("FFMPEG_FAILED", "FFmpeg produced an empty output artifact.", path=dst)
+            raise MediaRuntimeError("MEDIA_INVALID", "FFmpeg produced an empty output artifact.", path=dst)
         self.probe(dst)
         return dst
 
@@ -212,8 +227,8 @@ class MediaManager:
                 elif path.exists():
                     path.unlink()
                     removed += 1
-            except OSError as error:
-                raise MediaRuntimeError("FFMPEG_FAILED", f"Could not clean media artifact: {error}", path=path) from error
+            except OSError as err:
+                raise MediaRuntimeError("MEDIA_INVALID", f"Could not clean media artifact: {err}", path=path) from err
         return removed
 
     @property
@@ -221,4 +236,4 @@ class MediaManager:
         return self._hardware
 
 
-__all__ = ["MEDIA_ERROR_CODES", "MediaManager", "MediaProbe", "MediaRuntimeError"]
+__all__ = ["MediaManager", "MediaProbe", "MediaRuntimeError"]
