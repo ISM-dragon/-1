@@ -10,12 +10,14 @@ import com.example.data.contract.ProcessingRequest
 import com.example.data.contract.toJobResource
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.net.InetSocketAddress
 import java.nio.file.Files
+import java.io.ByteArrayOutputStream
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
 import org.junit.runner.RunWith
@@ -93,6 +95,52 @@ class ApiContractClientTest {
         assertTrue(client.download(config, artifact, target).isFailure)
         assertTrue(!target.exists() || target.length() == 0L)
         target.delete()
+    }
+
+    @Test
+    fun `resumable upload sends ranges and completes the source`() = runBlocking<Unit> {
+        val source = ByteArray(190_000) { (it % 251).toByte() }
+        val sourceFile = Files.createTempFile("ism-source", ".mp4").toFile().apply { writeBytes(source) }
+        val received = ByteArrayOutputStream()
+        val ranges = mutableListOf<String?>()
+        val offsets = mutableListOf<String?>()
+        var expectedOffset = 0L
+        var uploadInitBody = ""
+        server.createContext("/v1/sources/uploads") { exchange ->
+            if (exchange.requestMethod == "POST") {
+                uploadInitBody = exchange.requestBody.bufferedReader().use { it.readText() }
+                respond(exchange, "{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":0,\"chunk_bytes\":65536}")
+            } else {
+                respond(exchange, "{}")
+            }
+        }
+        server.createContext("/v1/sources/uploads/upl_test") { exchange ->
+            ranges += exchange.requestHeaders.getFirst("Content-Range")
+            offsets += exchange.requestHeaders.getFirst("X-Upload-Offset")
+            exchange.requestBody.use { it.copyTo(received) }
+            expectedOffset = received.size().toLong()
+            respond(exchange, "{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":$expectedOffset,\"chunk_bytes\":65536}")
+        }
+        server.createContext("/v1/sources/uploads/upl_test/complete") { exchange ->
+            respond(exchange, "{\"id\":\"upl_test\",\"status\":\"done\",\"source\":\"http://127.0.0.1:${server.address.port}/source.mp4\",\"filename\":\"source.mp4\"}")
+        }
+
+        val uploaded = client.upload(
+            GatewayConfig("http://127.0.0.1:${server.address.port}", "token"),
+            Uri.fromFile(sourceFile)
+        ) { }
+            .getOrThrow()
+        assertEquals("upl_test", uploaded.id)
+        assertEquals(source.size.toLong(), uploaded.bytes)
+        assertEquals(source.size, received.size())
+        assertArrayEquals(source, received.toByteArray())
+        assertEquals(listOf("0", "65536", "131072"), offsets)
+        assertEquals(
+            listOf("bytes 0-65535/${source.size}", "bytes 65536-131071/${source.size}", "bytes 131072-189999/${source.size}"),
+            ranges
+        )
+        assertTrue(uploadInitBody.contains("sha256"))
+        sourceFile.delete()
     }
 
     @Test

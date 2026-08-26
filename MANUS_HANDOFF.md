@@ -2,11 +2,13 @@
 
 ## الحالة الحالية
 
-تم تجهيز تطبيق Android أصلي مستقل داخل `android/` ليكون عميل release خفيفاً أمام private Processing Gateway. لا يوجد `MANUS_HANDOFF.md` في نقطة البداية التي تم استلامها؛ لذلك أُنشئت هذه الوثيقة لتثبيت الحالة الحالية ومتطلبات المتابعة.
+تم تجهيز تطبيق Android أصلي مستقل داخل `android/` ليكون عميل release خفيفًا أمام private Processing Gateway. المسار canonical هو `ContractJobRepository` → `GatewayProcessingWorker` → `ApiContractClient`. أُنشئت هذه الوثيقة لتثبيت الحالة الحالية ومتطلبات المتابعة.
 
 التطبيق لا يشغّل Python أو `uv` أو Node أو Rust أو FFmpeg داخله. `ProcessingEngine` أصبح remote-only، و`VideoProcessingWorker` ينفذ الرفع والاستطلاع والتنزيل عبر Gateway داخل `CoroutineWorker`، بينما تبقى Python pipeline ومفاتيح Gemini وFFmpeg في backend الخاص.
 
 ## Artifact
+
+آخر نسخة مصدرية مستهدفة هي `0.11.0`، `versionCode=6`. لا يُعد APK صالحًا للتوزيع العام قبل بنائه بمفتاح المنتج واختبار الجهاز الحقيقي.
 
 المسار الناتج:
 
@@ -17,13 +19,13 @@ android/app/build/outputs/apk/release/app-release.apk
 | الخاصية | القيمة |
 |---|---|
 | Package | `com.aistudio.opuspro.apk` |
-| Version | `0.10.1` |
-| Version code | `5` |
+| Version | `0.11.0` |
+| Version code | `6` |
 | Min SDK | `24` |
 | Target/Compile SDK | `36` |
-| APK size | `55,596,707` bytes |
-| SHA-256 الحالي | `deceadddb138251acd6da62478f8b8913f7620c3f25140d2e3c108805c5faf5a` |
-| Signature | APK Signature Scheme v2، بمفتاح اختبار خارج المستودع |
+| APK size | `55,690,915` bytes |
+| SHA-256 الحالي | `679389d8f0a9fb4edc4c6b94ddf11fea9b6d92c1a5cdd4586a4e98335259356d` |
+| Signature | unsigned؛ يحتاج keystore المنتج قبل التوزيع |
 
 مفتاح الاختبار ليس مفتاح النشر العام. يجب قبل النشر تمرير keystore مملوك للمنتج عبر `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD`، وعدم تخزينه في Git أو تضمين أسراره في APK.
 
@@ -31,27 +33,29 @@ android/app/build/outputs/apk/release/app-release.apk
 
 يجب ضبط private Gateway بعنوان HTTPS ورمز وصول غير فارغ. في مسار معالجة الفيديو، يرسل Android الفيديو ورمز Gateway فقط؛ Gateway يدير Python pipeline وFFmpeg ومفاتيح Gemini. قد تستخدم بعض أدوات الذكاء الاختيارية مفتاحاً يضيفه المستخدم بنفسه، لكن لا يوجد مفتاح مضمّن في APK. التخزين العام غير مطلوب: Photo Picker يعيد `content://` أو URI محلياً، ثم ينسخ التطبيق المصدر إلى `filesDir/source_media` قبل جدولة العمل. النتائج البعيدة تُنزّل إلى `filesDir/gateway_exports/<jobId>`.
 
-يستخدم التطبيق `WorkManager` مع `CoroutineWorker` و`setForeground()` ونوع خدمة `dataSync` للمهام الطويلة. حالة job محفوظة في Room، ويستخدم العمل الفريد network constraint وexponential backoff؛ كما يدعم الإلغاء وإعادة المحاولة والاستئناف عبر `remoteGatewayJobId`. `POST_NOTIFICATIONS` يُطلب وقت التشغيل على Android 13+، وتوجد قناة تقدم وقناة نتيجة. معالج `OpusApplication` يحفظ آخر crash في `filesDir/last_crash.txt` ثم يعيد تمرير الاستثناء إلى handler السابق.
+يستخدم التطبيق `WorkManager` مع `CoroutineWorker` ونوع خدمة `dataSync` للمهام الطويلة. حالة job محفوظة في Room، ويستخدم العمل الفريد network constraint وexponential backoff؛ كما يدعم الإلغاء وإعادة المحاولة والاستئناف عبر `remoteGatewayJobId`. يثبت `ContractJobRepository` URI المختار داخل `filesDir/source_media` قبل جدولة العمل. يستخدم `ApiContractClient` جلسة رفع resumable مع SHA-256 وoffset و`Content-Range`، ويستأنف العامل المهمة البعيدة الموجودة بدل إنشاء job جديد. `POST_NOTIFICATIONS` يُطلب وقت التشغيل على Android 13+، وتوجد قناة تقدم وقناة نتيجة. معالج `OpusApplication` يحفظ آخر crash في `filesDir/last_crash.txt` ثم يعيد تمرير الاستثناء إلى handler السابق.
 
 ## الملفات الرئيسية التي تغيرت
 
 | الملف | التغيير |
 |---|---|
 | `android/app/src/main/java/com/example/data/engine/ProcessingEngine.kt` | إزالة fallback المحلي وفرض Gateway HTTPS + token. |
-| `android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt` | حذف استدعاء `ProductionVideoPipeline` المحلي، إضافة foreground progress، والإبقاء على remote processing. |
+| `android/app/src/main/java/com/example/data/worker/GatewayProcessingWorker.kt` | العامل canonical: استعادة remote job، polling، auto-resume للحالات interrupted/retry-wait، وتحديث Room/WorkManager. |
+| `android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt` | مسار legacy remote-only محفوظ للتوافق ولم يعد المسار الذي تستخدمه `ContractApp`. |
 | `android/app/src/main/java/com/example/data/repository/OpusRepository.kt` | تحويل `processNewVideo` إلى enqueue وانتظار terminal Room state بدلاً من تنفيذ محرك محلي. |
-| `android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt` | فرض HTTPS للـ Gateway. |
+| `android/app/src/main/java/com/example/data/contract/ApiContractClient.kt` | إضافة resumable upload بالـSHA-256، جلسات upload قابلة لإعادة الاستخدام، وContent-Range مع error mapping. |
 | `android/app/src/main/java/com/example/data/worker/ProcessingNotification.kt` | foreground notification وتحديث progress وقناة النتائج. |
 | `android/app/src/main/java/com/example/MainActivity.kt` | طلب إذن الإشعارات على Android 13+. |
 | `android/app/src/main/java/com/example/OpusApplication.kt` | crash handler يحفظ آخر stack trace. |
 | `android/app/src/main/AndroidManifest.xml` | أقل صلاحيات صريحة، وإضافة foreground service type `dataSync`. |
 | `android/app/build.gradle.kts` | إزالة Firebase/Google Services/Secrets plugin غير المستخدمة من APK. |
 | `android/app/src/test/java/com/example/ProcessingEngineTest.kt` | اختبار Gateway-only ورفض المصدر/العنوان/token غير الصالح. |
+| `android/app/src/test/java/com/example/ApiContractClientTest.kt` | اختبار upload ranges وSHA-256 وإكمال المصدر. |
 | `docs/RELEASE.md` | تقرير الإصدار ومصفوفة التحقق وحدود اختبار الجهاز. |
 
 ## نتائج التحقق
 
-نجحت `:app:testDebugUnitTest` و`:app:lint` و`:app:assembleRelease`. أكد `apksigner` توقيع v2، وأكد `aapt2` package والـ SDK والصلاحيات. فحص أرشيف APK لم يجد Python أو `uv` أو Node أو Rust أو Cargo أو FFmpeg runtime، ولم يجد Gemini API key أو placeholder key مضمّناً في DEX.
+نجح `:app:compileDebugKotlin` و`:app:lint` و`:app:assembleRelease` بعد توفير JDK 21 وAndroid SDK 36؛ الناتج الحالي unsigned. فشل التشغيل الكامل الأول بسبب غياب SDK، ثم فشل compilation واحد بسبب استدعاء SHA-256 غير صحيح وتم إصلاحه. محاولة `testDebugUnitTest` دخلت في انتظار تنزيل artifact خارجي من Robolectric ولم تُعتمد كاختبار ناجح؛ يجب إعادة تشغيل suite كاملة في CI أو بيئة ذات وصول مستقر إلى Maven قبل إصدار APK.
 
 تم إنشاء AVD نظيف Android 15 باسم `clean_api35` ومحاولة تثبيت وتشغيل الـ APK. المحاكي يعمل في بيئة TCG بلا acceleration؛ ظهر online مؤقتاً ثم خرج قبل اكتمال `sys.boot_completed=1`. لذلك لم يتم اعتماد install/launch/restart/file-picker/background على جهاز حقيقي كاختبار ناجح، ويجب إكمالها على هاتف Android أو emulator مستقر مزود بتسريع قبل النشر العام.
 
@@ -155,16 +159,16 @@ export KEY_PASSWORD='***'
 
 ## الإغلاق بعد دمج التحديثات المتزامنة — 2026-08-26
 
-تم دمج `origin/main` دون force-push أو إسقاط تغييرات المتعاونين. التصميم النهائي يحتفظ بـ`ProcessingGatewayClient` كممر Android، ويجمع بين الرفع المتقطع SHA-256/offset وبين حفظ `remoteGatewayJobId` لإعادة polling وresume بدل إنشاء مهمة مكررة. كما أصبح retry للمهمة الملغاة يمسح المعرف البعيد ويبدأ معالجة جديدة، بينما تبقى المهمة interrupted قابلة للاستئناف.
+تم دمج `origin/main` دون force-push أو إسقاط تغييرات المتعاونين. التصميم النهائي يحتفظ بـ`ProcessingGatewayClient` كممر Android، ويجمع بين الرفع المتقطع SHA-256/offset وبين حفظ `remoteGatewayJobId` لإعادة polling وresume بدل إنشاء مهمة مكررة. كما أصبح retry للمهمة الملغاة يمسح المعرف البعيد ويبدأ معالجة جديدة، بينما تبقى المهمة interrupted قابلة للاستئناف. كما أضيفت أدلة runtime الخاصة بإدارة hardware/media/models واختبارات resume العقدية.
 
 | الفحص الأخير | النتيجة |
 |---|---|
-| Python backend | 6 passed |
-| Python Gateway | 47 passed، 1 skipped |
-| Python pipeline | 117 passed |
+| Python regression بعد الدمج | 172 passed، 1 skipped، 5 warnings |
 | Android post-merge `:app:compileDebugKotlin` | PASS |
 | Android post-merge `:app:assembleDebug` | PASS |
-| Android `:app:lint` و`:app:assembleRelease` | PASS قبل دمج التحديثات المتزامنة؛ يجب إعادة تشغيلهما في CI بعد الدمج النهائي |
-| Android full Robolectric suite | لم يُعتمد؛ runner الكامل توقف تحت ضغط الذاكرة، بينما compile وsubset resume نجحا |
+| Android `:app:lint` و`:app:assembleRelease` | PASS في بيئة JDK 21 وAndroid SDK API 36 |
+| Android resume contract test | PASS في التشغيل المحدد |
+| Android full Robolectric suite | لا يُعتمد كاختبار كامل؛ بعض التشغيلات توقفت تحت ضغط الذاكرة/اعتماد Maven، بينما compilation وsubset resume نجحا |
+| Frontend production build | PASS وفق evidence الدمج المتزامن |
 
-لا يوجد APK أو build cache متعمد داخل Git. يبقى اختبار upload الحقيقي، device smoke، وGateway production E2E مطلوبًا قبل إصدار عام. لا توجد أسرار أو keystores في هذه الدفعة.
+ظهر تحذير packaging معروف بأن مكتبات native محددة لم تُجرَ لها strip فتم تضمينها كما هي؛ لم يمنع ذلك نجاح البناء. لا يوجد APK أو build cache متعمد داخل Git. يبقى اختبار upload الحقيقي، device smoke، وGateway production E2E مطلوبًا قبل إصدار عام، كما يلزم release keystore وprovider/model readiness. لا توجد أسرار أو keystores في هذه الدفعة. تحفظ أدلة الدمج في `evidence/current_run/merged_verify.log` و`evidence/current_run/merged_android_verify.log`.

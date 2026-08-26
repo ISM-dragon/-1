@@ -14,6 +14,7 @@ import com.example.data.model.GatewayConfig
 import com.example.data.db.OpusDatabase
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.worker.GatewayProcessingWorker
+import com.example.data.video.MediaUriStabilizer
 import com.example.domain.security.SecureKeyManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -49,8 +50,14 @@ class ContractJobRepository(private val context: Context) {
     }
 
     suspend fun startJob(title: String, sourceUri: Uri, captions: String, mode: String): String = withContext(Dispatchers.IO) {
+        require(sourceUri.scheme == "content" || sourceUri.scheme == "file") { "مصدر الفيديو يجب أن يكون URI محليًا." }
+        val stableSourceUri = runCatching {
+            MediaUriStabilizer.copyForBackground(context, sourceUri, title.ifBlank { "video" })
+        }.getOrElse { error ->
+            throw IllegalStateException("تعذر تثبيت ملف الفيديو قبل جدولة المعالجة: ${error.localizedMessage ?: "مصدر غير قابل للقراءة"}", error)
+        }
         val existing = jobs.observeAll().first().firstOrNull { job ->
-            job.sourceUri == sourceUri.toString() && job.status in ACTIVE_LOCAL_STATES
+            job.sourceUri == stableSourceUri.toString() && job.status in ACTIVE_LOCAL_STATES
         }
         if (existing != null) return@withContext existing.jobId
 
@@ -59,7 +66,7 @@ class ContractJobRepository(private val context: Context) {
             ProcessingJobEntity(
                 jobId = jobId,
                 title = title.ifBlank { "فيديو جديد" },
-                sourceUri = sourceUri.toString(),
+                sourceUri = stableSourceUri.toString(),
                 transcriptOrPrompt = "",
                 durationMinutes = 1,
                 targetPlatform = "mobile",
@@ -69,7 +76,7 @@ class ContractJobRepository(private val context: Context) {
                 currentStage = ApiJobState.QUEUED.name
             )
         )
-        enqueue(jobId, sourceUri.toString(), title, captions, mode)
+        enqueue(jobId, stableSourceUri.toString(), title, captions, mode)
         jobId
     }
 
@@ -86,13 +93,14 @@ class ContractJobRepository(private val context: Context) {
 
     suspend fun retry(jobId: String) = withContext(Dispatchers.IO) {
         val existing = jobs.get(jobId) ?: error("المهمة غير موجودة")
-        require(existing.status == ProcessingJobEntity.STATUS_FAILED || existing.status == ProcessingJobEntity.STATUS_CANCELLED) {
-            "لا يمكن إعادة محاولة هذه المهمة الآن"
+        require(existing.status == ProcessingJobEntity.STATUS_FAILED) {
+            "لا يمكن إعادة محاولة مهمة ملغاة؛ أنشئ مهمة جديدة أو استخدم الاستئناف للمهمة القابلة للاستعادة."
         }
         val remoteId = existing.remoteGatewayJobId
         val config = loadGatewayConfig()
-        if (!remoteId.isNullOrBlank() && config.baseUrl.isNotBlank()) {
-            com.example.data.contract.ApiContractClient(context.contentResolver).retry(config, remoteId)
+        if (!remoteId.isNullOrBlank()) {
+            require(config.baseUrl.isNotBlank()) { "لم يتم ضبط عنوان Gateway" }
+            com.example.data.contract.ApiContractClient(context.contentResolver).retry(config, remoteId).getOrThrow()
         }
         jobs.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, ApiJobState.RETRY_WAIT.name, "إعادة المحاولة مجدولة.")
         enqueue(jobId, existing.sourceUri, existing.title, existing.captionTheme, "balanced")
@@ -103,7 +111,8 @@ class ContractJobRepository(private val context: Context) {
         val remoteId = existing.remoteGatewayJobId
         require(!remoteId.isNullOrBlank()) { "لا توجد مهمة بعيدة قابلة للاستئناف" }
         val config = loadGatewayConfig()
-        com.example.data.contract.ApiContractClient(context.contentResolver).resume(config, remoteId)
+        require(config.baseUrl.isNotBlank()) { "لم يتم ضبط عنوان Gateway" }
+        com.example.data.contract.ApiContractClient(context.contentResolver).resume(config, remoteId).getOrThrow()
         jobs.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, ApiJobState.QUEUED.name, "استئناف المهمة مجدول.")
         enqueue(jobId, existing.sourceUri, existing.title, existing.captionTheme, "balanced")
     }
