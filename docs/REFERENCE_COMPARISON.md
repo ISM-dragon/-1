@@ -1,49 +1,69 @@
-# مقارنة المشروع الأساسي بالمشروع المرجعي
+# مقارنة المشروع المرجعي مع ISM / PublikClip
 
-## النطاق والمنهجية
+**الحالة:** تدقيق موثق قبل أي نسخ أو استبدال واسع.
 
-أُجريت المقارنة بين مستودع `ISM-dragon/-1` وبين المرجع المرفق `clipper-main`. المرجع مشروع Python/FastAPI أحادي المستخدم يركز على رفع فيديو واحد، transcription، اختيار المقاطع، إعادة التأطير، captions، والرندر. المشروع الأساسي أوسع، ويضم مسار Android أصليًا، Gateway خاصًا، محركًا عامًا، pipeline متعددة المراحل، وواجهات سطح مكتب وميزات اجتماعية اختيارية.
+**المصدر المرجعي:** الأرشيف المرفق `supoclip-main.zip`، وهو مشروع SupoClip منشور تحت AGPL-3.0، ويحتوي على واجهة Next.js/React، وBackend FastAPI/ARQ، وMCP server، وخط معالجة يعتمد على مزودات خارجية. لم تُنسخ ملفات من الأرشيف إلى المستودع الهدف.
 
-المرجع استُخدم كمصدر أفكار وتصميمات قابلة للتقييم فقط. لم تُنسخ شجرة المستودع أو ملفات build أو الأسرار أو ملفات النماذج إلى المشروع الأساسي.
+## الخلاصة التنفيذية
 
-## المقارنة
+المشروع المرجعي قوي في تجربة الويب، وإدارة اختيار المقاطع، والتحرير الخفيف، والقوالب، والتكامل مع مزودات الذكاء الاصطناعي. أما المستودع الهدف فهو أقرب إلى المنتج المطلوب فعليًا لأنه يملك Android client، وPrivate Gateway، ومحرك PublikClip ذي checkpoints، واختبارات resilience، وعقودًا بين العميل والخادم. لذلك لا توجد مبررات تقنية لاستبدال بنية الهدف بنسخة المرجع. القرار المعتمد هو **COMBINE بصورة انتقائية**: الاحتفاظ بمسار Android/Gateway/Engine الحالي، واستخدام أفكار المرجع في UX والعقود القابلة للتوسع فقط بعد تحويلها إلى مكونات مستقلة واختبارها.
 
-| المجال | المشروع الأساسي | المشروع المرجعي | القرار | سبب القرار |
+> لا يعتبر وجود implementation أكبر أو أحدث دليلًا كافيًا على صلاحيتها لمسار Android شخصي. معيار الاختيار هنا هو التوافق مع Android، والاستقرار، وكلفة الدمج، وقابلية القياس.
+
+## مصفوفة القرار
+
+| المجال | الموجود في الهدف | الموجود في المرجع | القرار | السبب والحدود |
 |---|---|---|---|---|
-| Android | تطبيق Native مستقل يستخدم Compose وRoom وWorkManager وGateway client | لا يوجد عميل Android canonical | `KEEP_CURRENT` | المسار الحالي يحقق boundary صحيحًا ولا ينقل Python إلى الهاتف. |
-| اختيار الفيديو | URI محلي ونسخ إلى storage خاص ثم رفع | drag-and-drop عبر واجهة ويب | `KEEP_CURRENT` | URI وPhoto Picker أنسب لـAndroid ولا تتطلب صلاحيات تخزين واسعة. |
-| Gateway/API | FastAPI، SQLite، auth، رفع قابل للاستئناف، jobs، polling، cancel/resume | FastAPI محلي، job واحد، رفع مباشر | `KEEP_CURRENT` + `IMPROVE_CURRENT` | عقد Gateway الحالي أقوى للاستخدام عن بعد ويحتاج توثيقًا موحدًا فقط. |
-| Job lifecycle | Queue وSQLite وcheckpoints وrestart recovery | حالة داخل الذاكرة وprogress محلي | `KEEP_CURRENT` | الاستمرارية بعد restart شرط أساسي للمسار المحمول. |
-| Engine facade | `ProcessingEngine` و`PipelineEngine` بعقد JSON-shaped | دوال pipeline مباشرة | `KEEP_CURRENT` | الفصل الحالي يقلل coupling بين Gateway والمراحل. |
-| ASR | مراحل ASR قابلة للتبديل، مع عزل runtime غير المتاح | faster-whisper | `KEEP_CURRENT` | لا يوجد سبب لنقل ASR إلى Android أو استبدال pipeline دون benchmark. |
-| Scoring | candidates + score + fallbackات متعددة | Ollama/Qwen مع تنظيف JSON | `COMBINE` على مستوى guardrails | فكرة clamping وتنظيف مخرجات LLM مفيدة، لكن scoring الحالي لا يُستبدل بلا قياس. |
-| Camera | مراحل camera وface/active-speaker ضمن pipeline | YuNet مع smoothing وlayouts | `IMPROVE_CURRENT` بعد benchmark | يمكن استعارة مبادئ smoothing وfallback، لا نسخ التنفيذ مباشرة. |
-| Captions | word timestamps وrender pipeline | karaoke/boxed/bold وkeyword emphasis | `IMPROVE_CURRENT` | أنماط captions في المرجع مناسبة، بشرط فصل caption state عن render logic. |
-| Media | FFmpeg/ffprobe والتحقق من artifacts داخل Gateway وpipeline | FFmpeg utility وcut spans وtranscoding | `COMBINE` | نحتفظ بحدود الخادم ونضيف تصنيفًا موحدًا للأخطاء عند الحاجة. |
-| B-roll | optional server-side capabilities | Pexels optional مع no-op آمن | `IGNORE_REFERENCE` حاليًا | ليس جزءًا من مسار Android الأول، ويزيد network/licensing surface. |
-| Brand kit | إعدادات موجودة عبر UI/config | `brand.json` محلي | `MANUAL_REVIEW` | يلزم قرار منتجي قبل تثبيت storage contract؛ لا يؤثر على core processing. |
-| Desktop UI | React/Tauri قائم | Vanilla HTML بلا build | `KEEP_CURRENT` | اختلاف الهدف؛ لا تُنقل واجهة سطح المكتب إلى الهاتف. |
-| Licensing | المستودع الأساسي AGPL-3.0 | المرجع MIT | `IGNORE_REFERENCE` للكود | لا نسخ source code؛ تُستفاد الأفكار ويُسجل المرجع فقط. |
+| Android structure | تطبيق Kotlin مستقل داخل `android/` مع Compose وRoom وWorkManager | تطبيق ويب وموارد Tauri/iOS في الأرشيف | KEEP_CURRENT | الهدف الوحيد القابل لبناء APK أصلي مع دورة حياة Android واضحة. |
+| File/video picker | وصول Android إلى URI محلي ثم نسخ آمن إلى `filesDir` | اختيار ملف عبر المتصفح | KEEP_CURRENT | `content://` وقيود Android لا يمكن تمثيلها باستدعاء متصفح عام. |
+| Networking | عميل Gateway ورفع واستطلاع واستئناف | REST/WebSocket وARQ للويب | IMPROVE_CURRENT | يمكن استعارة فكرة progress stream، لكن العقد الحالي يجب أن يبقى المصدر الوحيد للـAPK. |
+| Background processing | WorkManager وforeground notification وRoom state | ARQ/Redis worker | KEEP_CURRENT | WorkManager مناسب لاستمرار العميل؛ Redis ليس ضرورة لمالك واحد وGateway خاص. |
+| Job persistence | SQLite/Room وcheckpoints وtransition history | DB/ARQ jobs | COMBINE | تبقى durable state في Gateway، ويُحسن Android عرضها بعد restart. |
+| Upload | Gateway upload sessions وchecksum | رفع API يديره Backend | KEEP_CURRENT | session/resume وSHA-256 أهم لمسار فيديو كبير من one-shot upload. |
+| ASR | Python/WhisperX في runtime خاص | AssemblyAI ومزودات متعددة | KEEP_CURRENT | لا يجوز نقل نموذج desktop إلى APK أو إعادة transcription دون سبب. |
+| Diarization/events | مراحل مستقلة في Pipeline | مرحلة تحليل ضمن worker | KEEP_CURRENT | الفصل الحالي أفضل للـcheckpoints والاختبارات والتشخيص. |
+| Candidate generation | candidates/scoring موجودان في Pipeline | LLM يختار 3–7 مقاطع مع virality rubric | IMPROVE_CURRENT | يمكن إضافة rubric versioned كمدخل scoring، دون حذف scoring الحالي أو جعل فشل LLM قاتلًا. |
+| Camera/framing | `camera/` مع tracking/director/stage | face-centered crop | KEEP_CURRENT | الهدف يملك تركيبة أوسع؛ المرجع لا يثبت benchmark يتفوق عليه. |
+| Captions | word timestamps وASS/render integration | قوالب وword-synced subtitles | IMPROVE_CURRENT | فصل caption state عن render logic، وإضافة presets فقط عبر contract. |
+| Rendering/media | FFmpeg/ffprobe، validation، cleanup، artifacts | FFmpeg transitions/B-roll | COMBINE | تستمر media runtime الحالية؛ B-roll/transitions اختيارية ولا تدخل APK أو تزيد dependencies بلا قياس. |
+| Preview/edit | Android results/cache ومسار تحرير مبدئي | محرر ويب trim/split/merge | ADD_REFERENCE | تُستخلص UX rules فقط؛ لا تُنقل واجهة الويب حرفيًا. |
+| Provider management | Gateway provider registry وsecret vault | Gemini/OpenAI/Claude/Ollama في Backend | KEEP_CURRENT | الأسرار تبقى server-side، مع diagnostics واضحة وfallback آمن. |
+| API/auth | Private token/device binding و`/v1` | user accounts/API keys وbilling routes | IGNORE_REFERENCE | خارج نطاق تطبيق شخصي، ويزيد المخاطر والسطح التشغيلي. |
+| Social publishing | optional routes في الهدف والمرجع | Instagram/analytics/email integrations | IGNORE_REFERENCE | ليست شرطًا لإنشاء clip؛ تُبقى منفصلة حتى استقرار processing. |
+| Deployment | Gateway خاص وDocker Compose volume | Docker Compose مع Redis/DB وخدمات متعددة | KEEP_CURRENT | تصميم أحادي المستخدم أبسط وأقرب للمتطلب؛ التوسع ليس هدف Wave الحالية. |
+| MCP | غير أساسي للمسار Android | MCP server مستقل | IGNORE_REFERENCE | لا يضيف قيمة لمسار APK الشخصي الحالي. |
+| Licensing | target license وvendor notices موجودة | AGPL-3.0 | MANUAL_REVIEW | لا نسخ للكود المرجعي قبل مراجعة التوافق؛ إعادة التنفيذ المستقل هو الافتراضي عند الغموض. |
 
-## تقييم موزون للخيارات المؤثرة
+## التقييم الوزني
 
-القيم التالية تقديرية هندسية مبنية على قراءة الملفات والاختبارات الحالية، وليست benchmark أداءً ميدانيًا.
+استُخدمت الأوزان المطلوبة في التكليف. الدرجات التالية تقدير هندسي للمفاضلة بين **المسار الحالي** و**نقل بنية المرجع**، وليست benchmark أداءً.
 
-| الخيار | Android 20% | Correctness 20% | Stability 15% | Performance 15% | Maintainability 10% | Completeness 10% | Integration 5% | Dependency 5% | النتيجة / 100 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| إبقاء Gateway + Engine الحاليين | 95 | 90 | 88 | 82 | 88 | 84 | 92 | 90 | **88.9** |
-| نقل المرجع كاملًا إلى Android | 35 | 55 | 42 | 38 | 30 | 65 | 25 | 20 | **40.5** |
-| استبدال المحرك الحالي بمراحل المرجع | 60 | 68 | 55 | 65 | 52 | 72 | 45 | 55 | **60.4** |
-| دمج guardrails وcaption ideas بشكل انتقائي | 82 | 84 | 80 | 78 | 78 | 86 | 72 | 75 | **80.8** |
+| معيار القرار | الوزن | المسار الحالي | نقل بنية المرجع |
+|---|---:|---:|---:|
+| توافق Android | 20% | 5/5 | 2/5 |
+| Correctness | 20% | 4/5 | 3/5 |
+| Stability | 15% | 4/5 | 3/5 |
+| Performance | 15% | 4/5 | 3/5 |
+| Maintainability | 10% | 4/5 | 3/5 |
+| Feature completeness | 10% | 4/5 | 4/5 |
+| Integration cost | 5% | 4/5 | 1/5 |
+| Dependency cost | 5% | 4/5 | 2/5 |
+| **المحصلة التقريبية** | **100%** | **4.15/5** | **2.70/5** |
 
-## الخلاصة
+## نتيجة التدقيق
 
-المسار الأفضل هو **أفضل ما في المشروع الأساسي مع تحسينات انتقائية من المرجع**. يبقى Android عميلًا خفيفًا، ويبقى Gateway نقطة التحكم الوحيدة، ويبقى `PipelineEngine` واجهة المحرك العامة. تُؤجل إعادة تصميم camera/captions إلى تغييرات صغيرة قابلة للاختبار، ويُمنع نسخ كود المرجع ما لم تُراجع تراخيص الملفات والاعتماديات ويُضاف اختبار regression.
+تم اعتماد `KEEP_CURRENT` للمسار Android → Gateway → Engine → AI/Media Runtime. وتم اعتماد `IMPROVE_CURRENT` للـcaptions وscoring وUX، و`ADD_REFERENCE` لأفكار المحرر والقوالب، و`IGNORE_REFERENCE` للحسابات وbilling وMCP وsocial integrations في هذه المرحلة. لم تُنقل dependencies أو أسرار أو artifacts build من الأرشيف.
 
-## مراجع الملفات الداخلية
+## References
 
-- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
-- [`pipeline/publikclip_pipeline/engine/contracts.py`](../pipeline/publikclip_pipeline/engine/contracts.py)
-- [`pipeline/publikclip_pipeline/engine/pipeline.py`](../pipeline/publikclip_pipeline/engine/pipeline.py)
-- [`gateway/main.py`](../gateway/main.py)
-- `reference_zip/clipper-main/ARCHITECTURE.md` في مساحة العمل المحلية، وهو غير منسوخ إلى المستودع.
+[1]: https://github.com/FujiwaraChoki/supoclip "SupoClip public reference project"
+[2]: ARCHITECTURE.md "Target architecture baseline"
+[3]: CONTRACTS.md "Android/Gateway/Engine contracts"
+[4]: ../gateway/main.py "Private Gateway implementation"
+[5]: ../pipeline/publikclip_pipeline/engine/contracts.py "PublikClip Engine contract"
+[6]: ../android/app/build.gradle.kts "Native Android build configuration"
+[7]: ../VENDORED-LICENSES.md "Target repository vendor notices"
+
+---
+
+**ملاحظة:** لم تُنسخ أي أجزاء من SupoClip إلى المستودع الهدف أثناء هذا التدقيق.

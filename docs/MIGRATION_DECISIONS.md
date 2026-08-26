@@ -1,34 +1,40 @@
-# قرارات الترحيل والدمج
+# سجل قرارات الترحيل
 
-## الحالة
+**النطاق:** SupoClip reference ZIP مقابل ISM / PublikClip.
 
-هذه الوثيقة تسجل قرارات موجة التدقيق الأولى. القرار لا يعني أن كل feature مكتملة في الإنتاج؛ بل يحدد المسار المعتمد وما يحتاج إلى benchmark أو مراجعة لاحقة.
+**تاريخ المراجعة:** 2026-08-26.
 
-| المكوّن | القرار | النطاق الحالي | الدليل/الاختبار | المتابعة |
-|---|---|---|---|---|
-| Android runtime boundary | `KEEP_CURRENT` | Android لا يشغل Python أو FFmpeg أو Node أو Rust | اختبارات بنية Android وفحص APK السابق | اختبار install/launch على جهاز مستقر |
-| Gateway API | `KEEP_CURRENT` | `/jobs` و`/jobs/{id}` وresults/cancel/resume/render | `gateway/tests` وعقد Android | توثيق نسخة API وerror envelope |
-| Resumable upload | `KEEP_CURRENT` | chunk offsets وSHA-256 وffprobe validation | اختبارات media lifecycle | اختبار انقطاع الشبكة الحقيقي |
-| Engine facade | `KEEP_CURRENT` | `PipelineEngine` و`ProcessingEngine` وcheckpoints | `pipeline/tests/test_engine.py` | منع استيرادات داخلية جديدة في Gateway |
-| Job persistence | `KEEP_CURRENT` | SQLite + worker queue + pipeline checkpoints | restart/recovery evidence | إضافة lease إذا أصبح هناك أكثر من worker |
-| Media errors | `IMPROVE_CURRENT` | تصنيف أخطاء upload/probe/artifact على حدود Gateway | اختبارات validation الحالية | توحيد الأكواد مع pipeline عند تنفيذ التغيير التالي |
-| Scoring guardrails | `COMBINE` | الاحتفاظ بالscoring الحالي وإضافة أفكار cleaning فقط عند الحاجة | اختبارات rubric/stability | benchmark جودة clips قبل أي تبديل |
-| Camera tracking | `MANUAL_REVIEW` | لا استبدال implementation الحالية | لا يوجد benchmark مرجعي قابل للمقارنة | قياس jitter/render time على dataset ثابت |
-| Captions | `IMPROVE_CURRENT` | الاحتفاظ بword timestamps وتطوير styles تدريجيًا | اختبارات render/caption | فصل state عن renderer قبل feature جديدة |
-| B-roll | `IGNORE_REFERENCE` | خارج canonical Android path | غير مطلوب لمسار النجاح الأول | قرار مستقل بعد استقرار core path |
-| Reference source copy | `IGNORE_REFERENCE` | لا توجد ملفات مصدر من المرجع في المشروع | مراجعة diff وlicense | أي اقتباس مستقبلي חייב license review |
-| Release artifact | `KEEP_CURRENT` | Native Android release APK هو artifact الأساسي | Gradle/lint/APK checks | استخدام keystore إنتاجي خاص قبل التوزيع |
+| القرار | المكوّن أو الفكرة | القرار المطبق | الدليل |
+|---|---|---|---|
+| KEEP_CURRENT | Native Android client | الاحتفاظ بمشروع `android/` كعميل APK canonical | Compose، Room، WorkManager، Media3، وGateway client موجودة في المصدر. |
+| KEEP_CURRENT | Private Gateway | الاحتفاظ بـ`gateway/` كـcontrol plane لمسار Android | يملك auth، upload، SQLite job state، worker، diagnostics، وmedia delivery. |
+| KEEP_CURRENT | PublikClip stages | الاحتفاظ بالـPipeline stages والـcheckpoints | `pipeline/publikclip_pipeline/engine` يعرض contract v1 ويغطي lifecycle والاستئناف. |
+| KEEP_CURRENT | ASR/diarization/media runtime | إبقاء Python/WhisperX/FFmpeg على الخادم الخاص | requirement صريح يمنع تشغيل desktop runtime داخل Android. |
+| IMPROVE_CURRENT | Job lifecycle | توحيد الحالات والتحكم والـtransition history تدريجيًا | يلزم بقاء jobs بعد restart/network loss وعدم إعادة معالجة checkpoint صالح. |
+| IMPROVE_CURRENT | Error handling | جعل error code/retryable/correlation جزءًا من الحدود العامة | يمنع تسرب stack traces ويتيح retry/resume آمنًا. |
+| IMPROVE_CURRENT | Captions | فصل caption state عن render logic وإضافة presets versioned | يحقق karaoke/emphasis/readability دون إعادة transcription. |
+| IMPROVE_CURRENT | Scoring | إضافة rubric أو signals versioned فقط بعد baseline | يحافظ على scoring الحالي ويمنع اعتماد LLM وحيدًا. |
+| ADD_REFERENCE | Editor UX | استعارة trim/split/merge وflow الواضح من الويب كـAndroid UX جديد | لا تُنقل مكونات Next.js أو CSS أو state إلى Kotlin. |
+| ADD_REFERENCE | Caption presets | إضافة أفكار قوالب العرض فقط إذا لم تكسر contract | المرجع غني بالقوالب، لكن التنفيذ يجب أن يظل server/render compatible. |
+| COMBINE | Progress and worker model | Room/WorkManager على Android مع SQLite/worker على Gateway | لكل طرف lifecycle مختلف؛ لا يُستبدل أحدهما بالآخر. |
+| COMBINE | Candidate selection | rubric المرجع كإشارة اختيارية مع scoring الحالي | يسمح بالقياس والرجوع إلى default السابق. |
+| IGNORE_REFERENCE | accounts/billing/subscriptions | عدم نقلها | خارج هدف single-user APK ويزيد attack surface. |
+| IGNORE_REFERENCE | Redis/ARQ topology | عدم إدخالها في Wave الحالية | SQLite + worker واحد كافيان لمستخدم واحد، والتوسع ليس شرطًا حاليًا. |
+| IGNORE_REFERENCE | MCP/social/analytics | إبقاؤها اختيارية ومنفصلة | لا تمنع إنشاء clip ولا ينبغي أن تكون dependency للمسار الأساسي. |
+| MANUAL_REVIEW | Copying code | لا نسخ مباشر من ZIP | المرجع AGPL-3.0؛ أي نقل لاحق يحتاج تحديد file-level notice وتوافق ترخيص. |
+| MANUAL_REVIEW | External model/provider | لا إضافة provider افتراضي جديد | يتطلب مفاتيح، privacy review، cost/performance baseline، وfailure tests. |
+| MANUAL_REVIEW | Tauri generated Android | لا دمج binary أو resources مع native Android | يوجد runtimeان؛ يجب اختيار identity/artifact واحد قبل أي release migration. |
 
-## ملكية الملفات
+## قرارات غير قابلة للتفاوض
 
-| النطاق | الملفات الرئيسية | قاعدة التعديل |
-|---|---|---|
-| Android | `android/` | تعديلات lifecycle/UI/network/background فقط |
-| Gateway | `gateway/` | API/auth/storage/worker boundary فقط |
-| Engine | `pipeline/publikclip_pipeline/engine/` | العقد والتركيب دون UI أو auth |
-| Stages | `pipeline/publikclip_pipeline/{asr,camera,...}` | تغيير algorithm مع regression وbenchmark |
-| Documentation | `docs/` و`MANUS_HANDOFF.md` | تحديث بعد كل موجة رئيسية |
+لا يُنقل secret أو API key أو model artifact أو build output من المرجع. لا يُستبدل implementation حالي لمجرد اختلاف الحجم أو أسلوب التصميم. لا يُغلق أي blocker إنتاجي اعتمادًا على compilation أو mocks فقط. وأي دمج مستقبلـي يجب أن يضيف regression test وقياسًا عند تأثيره على correctness أو الأداء.
 
-## القرار التنفيذي
+## References
 
-التغيير الحالي يجب أن يركز على توثيق الحدود واختبار البناء، وليس على إعادة كتابة المحرك. هذا يقلل migration risk ويحافظ على السلوك الموجود، مع إبقاء نقاط التحسين في media/captions/scoring قابلة للتنفيذ لاحقًا دون كسر عقد Android.
+[1]: REFERENCE_COMPARISON.md "Reference comparison"
+[2]: REFERENCE_MIGRATION_PLAN.md "Migration plan"
+[3]: ARCHITECTURE.md "Architecture baseline"
+[4]: CONTRACTS.md "Contracts"
+[5]: ../android/ "Native Android project"
+[6]: ../gateway/ "Private Gateway"
+[7]: ../pipeline/publikclip_pipeline/engine/ "PublikClip Engine"

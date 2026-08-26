@@ -1,27 +1,34 @@
-# Performance Baseline وقياس الأداء
+# Performance Baseline
 
-## المبدأ
+**الحالة:** القياس جزء من release evidence؛ لا توجد أرقام production جديدة في هذه الجلسة لأن نماذج المعالجة وجهاز Android الفعلي غير متاحين.
 
-لا يُستبدل stage أو model أو encoder لمجرد اختلاف المشروع المرجعي. يجب أولًا تشغيل dataset ثابت وتسجيل baseline قابل للمقارنة، ثم قياس التغيير نفسه على نفس البيئة ونفس الإعدادات.
+## المقاييس المطلوبة
 
-## المقاييس
+| المكوّن | المقياس | طريقة القياس | معيار المقارنة |
+|---|---|---|---|
+| End-to-end | total processing time | timestamps من create إلى artifact verified | حسب مدة/دقة المصدر وmode. |
+| ASR | ASR wall time وRTF | stage timestamps ومدة الفيديو | baseline لكل model/version. |
+| Diarization | stage wall time وRAM peak | process metrics | مقارنة قبل/بعد model cache. |
+| Scoring | زمن signals وLLM | provider latency وfallback count | لا تضحى correctness لخفض latency. |
+| Camera | تحليل frames وcrop smoothing | stage timing وعدد frames | ثبات framing وغياب jitter. |
+| Render | render time وoutput size | FFmpeg logs وartifact metadata | bitrate/resolution/preset ثابت. |
+| Server | CPU/RAM/VRAM/disk | host metrics لكل job | منع OOM وdisk exhaustion. |
+| Android | upload throughput وbattery وcache size | WorkManager/device logs | لا ينهار job عند process death أو network loss. |
 
-| المقياس | طريقة التسجيل | وحدة العرض |
-|---|---|---|
-| الزمن الكلي | من قبول job حتى artifact النهائي | ثانية ودقائق |
-| ASR | زمن مرحلة transcription | ثانية |
-| diarization | زمن clustering/speaker stage | ثانية |
-| scoring | زمن LLM وfallback | ثانية |
-| camera | زمن تحليل وإعادة التأطير | ثانية |
-| render | زمن FFmpeg لكل clip | ثانية |
-| CPU/RAM/VRAM | عينات أثناء job | متوسط وذروة |
-| disk | قبل/بعد intermediate وoutputs | MB/GB |
-| reliability | نسبة jobs المكتملة/المستأنفة/الفاشلة | % وعدد |
+## قواعد benchmark
 
-## معايير المقارنة
+يُستخدم source ثابت ومجموعة إعدادات ثابتة، ويُسجل commit وmodel versions وFFmpeg version وhardware. تُقارن النتيجة مع baseline لا مع انطباع بصري. أي optimization يجب أن تثبت فائدتها في الزمن أو الذاكرة أو الاستقرار، مع إبقاء output correctness وcaption timing وcamera framing ضمن regression checks.
 
-يُقبل optimization إذا حسّن الزمن أو الذاكرة دون خفض سلامة artifact أو جودة مقاطع مقبولة، أو إذا عالج فشلًا تشغيليًا واضحًا. عند فرق صغير، يبقى التنفيذ الحالي لتقليل migration risk. يجب حفظ logs والنسخة والإعدادات والعتاد مع كل benchmark.
+### المراجع
 
-## حدود البيئة
+[1]: ../evidence/environment.md "Environment evidence"
+[2]: ../docs/FINAL_ACCEPTANCE.md "Current acceptance limitations"
+[3]: ../pipeline/publikclip_pipeline/ "Pipeline runtime"
+[4]: ../gateway/processing_service.py "Stage execution bridge"
 
-ASR وdiarization وvision وFFmpeg هي server-side heavy work. Android performance يقاس منفصلًا على upload، polling، استهلاك البطارية/الشبكة، استجابة UI، واستعادة worker بعد process death. لا تُخلط هذه الأرقام مع زمن pipeline الخادمي.
+## References
+
+[1]: ../evidence/environment.md "Environment evidence"
+[2]: FINAL_ACCEPTANCE.md "Current acceptance limitations"
+[3]: ../pipeline/publikclip_pipeline/ "Pipeline runtime"
+[4]: ../gateway/processing_service.py "Stage execution bridge"

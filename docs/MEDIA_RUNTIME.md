@@ -1,26 +1,47 @@
 # Media Runtime
 
-## الحدود
+**المكان:** Private backend وPublikClip Engine.
 
-FFmpeg وffprobe يعملان على الخادم الخاص فقط. Android يرفع bytes ويعرض preview وينزل artifact النهائي؛ ولا يحمل binary FFmpeg أو يعتمد على desktop media runtime.
+## دورة الوسائط
 
-## العمليات
+تبدأ كل وظيفة بـprobe وvalidation قبل تشغيل AI. يُحفظ المصدر في job-private directory، وتُستخرج نسخة audio عند الحاجة، وتُستخدم frame extraction وCFR/transcoding حسب متطلبات stages. بعد render يتحقق النظام من وجود MP4 غير صفري، وقابلية القراءة، والحجم، والـchecksum، ثم ينشر artifact عبر Gateway المحمي. تُحذف الملفات المؤقتة فقط بعد نجاح النشر أو وفق retention policy تشخيصية.
 
-يجب أن تغطي طبقة الوسائط probing، validation، audio extraction، frame extraction، CFR/transcoding، rendering، cleanup، والتحقق من artifact النهائي. كل مسار ملف يجب أن يبقى داخل job/source root المسموح، وكل MP4 نهائي يجب أن يمر بفحص readability قبل إعادته.
+| العملية | شرط النجاح |
+|---|---|
+| Probe | وجود container/streams وduration قابلة للقراءة. |
+| Validate | صيغة وحجم وcodec ضمن policy، مع رفض الملف الفاسد قبل pipeline. |
+| Audio extraction | ملف audio قابل للقراءة ومعدل عينة مناسب للـASR. |
+| Frame extraction | timestamps منتظمة لاستخدام face/speaker analysis. |
+| CFR/transcode | مصدر متوافق مع render دون drift أو variable-rate مفاجئ. |
+| Render | خروج clip يطابق 9:16 وإعدادات captions/camera المطلوبة. |
+| Cleanup | إزالة temp files دون حذف checkpoints أو outputs المنشورة. |
 
-## تصنيف الأخطاء
+## الأخطاء المستقرة
 
-| الكود | المعنى | قابلية الاسترداد |
+| code | المعنى | قابلية retry |
 |---|---|---:|
-| `MEDIA_INVALID` | الملف غير مقروء أو بلا video stream صالح | لا غالبًا |
-| `UNSUPPORTED_FORMAT` | الحاوية أو النوع غير مدعوم | لا |
-| `FFMPEG_MISSING` / `FFMPEG_UNAVAILABLE` | binary غير موجود على الخادم | نعم بعد إصلاح البيئة |
-| `FFMPEG_FAILED` | أمر FFmpeg فشل أثناء المعالجة | حسب السبب |
-| `MODEL_MISSING` / `MODEL_INVALID` | نموذج مطلوب غير مثبت أو checksum غير صحيح | نعم بعد إصلاح النموذج |
-| `INSUFFICIENT_DISK` | لا توجد مساحة كافية للوسائط المؤقتة أو النتائج | نعم بعد التنظيف/التوسعة |
-| `MEDIA_CHECKSUM_MISMATCH` | bytes المرفوعة لا تطابق SHA-256 المتوقع | لا؛ أعد الرفع |
-| `ARTIFACT_INVALID` | الناتج موجود لكنه غير صالح أو خارج الجذر المسموح | نعم بعد إعادة الرندر |
+| `MEDIA_INVALID` | الملف غير قابل للفحص أو فاسد | لا |
+| `FFMPEG_MISSING` | الأدوات غير مثبتة أو غير قابلة للتشغيل | بعد إصلاح الخادم فقط |
+| `FFMPEG_FAILED` | فشل أمر FFmpeg بعد validation | حسب السبب |
+| `MODEL_MISSING` | نموذج مطلوب غير موجود | بعد التثبيت |
+| `MODEL_INVALID` | checksum أو metadata غير صالح | بعد إعادة التنزيل |
+| `INSUFFICIENT_DISK` | المساحة غير كافية للمصدر/intermediates/output | بعد التنظيف أو زيادة المساحة |
+| `UNSUPPORTED_FORMAT` | container/codec خارج policy | لا |
 
-## cleanup
+لا يضمّن Gateway command lines كاملة أو مسارات host أو secrets في response للعميل. تُحفظ التفاصيل محليًا في logs مرتبطة بـ`correlation_id`.
 
-تُحذف partial uploads المنتهية صلاحيتها دون لمس source artifacts النهائية. لا يُحذف checkpoint ما لم يكن artifact المرتبط به غير صالحًا أو يطلب المستخدم تنظيف job. يجب أن تكون عمليات cleanup آمنة عند تكرارها.
+### المراجع
+
+[1]: ../pipeline/publikclip_pipeline/media/ "Media pipeline modules"
+[2]: ../pipeline/publikclip_pipeline/render/ "Rendering and FFmpeg resolution"
+[3]: ../gateway/main.py "Upload validation and media delivery"
+[4]: ../gateway/processing_service.py "Processing bridge"
+[5]: ../evidence/gateway_smoke.json "Observed invalid-media behavior"
+
+## References
+
+[1]: ../pipeline/publikclip_pipeline/media/ "Media pipeline modules"
+[2]: ../pipeline/publikclip_pipeline/render/ "Rendering and FFmpeg resolution"
+[3]: ../gateway/main.py "Upload validation and media delivery"
+[4]: ../gateway/processing_service.py "Processing bridge"
+[5]: ../evidence/gateway_smoke.json "Observed invalid-media behavior"

@@ -1,35 +1,57 @@
 # PublikClip Engine
 
-## الغرض
+**العقد:** `engine_contract_version=1`.
 
-المحرك هو boundary Python مستقل يستقبل مصدرًا وإعدادات ويعيد سجلات JSON-shaped. لا يعرف Android أو Gateway auth أو حسابات النشر. يملك فقط تركيب stages، حالة job، checkpoints، artifacts، progress، cancel، resume، وrender clip.
+**الملكية:** الـEngine مسؤول عن orchestration وخوارزميات clip generation، وليس عن auth أو UI أو provider secrets.
 
 ## الواجهة العامة
 
-| العملية | الوظيفة |
-|---|---|
-| `create_job()` | إنشاء job وحفظ settings snapshot |
-| `start_job()` | تشغيل المراحل بالترتيب مع progress callback |
-| `get_job_status()` / `status()` | قراءة الحالة والتقدم والأخطاء |
-| `progress()` | إسقاط تقدم موحد بين 0 و1 |
-| `cancel_job()` | تسجيل طلب إلغاء قابل للرصد من stage runner |
-| `resume_job()` | مسح cancel state وإعادة تشغيل المراحل غير المكتملة |
-| `get_job_results()` / `results()` | قراءة checkpoints وartifacts |
-| `get_clip()` | قراءة clip واحد من scoring وrender |
-| `render_clip()` | إعادة رندر clip محدد دون إعادة المراحل البطيئة |
+يعتمد Gateway وCLI والاختبارات على facade واحدة بدل استيراد stage modules مباشرة:
 
-## ترتيب المراحل
-
-```text
-ingest → asr → diarization → events → candidates → scoring → camera → render
+```python
+job = engine.create_job(source, settings=None, source_type=None)
+status = engine.get_job_status(job.id)
+result = engine.start_job(job.id, on_progress=callback)
+clip = engine.get_clip(job.id, 0)
+updated = engine.render_clip(job.id, 0, on_progress=callback)
 ```
 
-يُحوّل المحرك الأسماء الداخلية `diarize` و`score` إلى `diarization` و`scoring` في العقد العام. كل stage يكتب checkpoint ذريًا، ويُعد cache صالحًا فقط إذا تطابق `schema_version` وكانت artifacts موجودة وصالحة.
+الأنواع العامة هي `JobRef`, `JobStatus`, `JobResults`, `ClipResult`, `ProgressEvent`, و`EngineError`. كل error يعيد `code`, `safe_message`, و`recoverable` دون stack trace أو secret.
 
-## الاسترداد
+## المراحل
 
-SQLite يسجل الحالة، والملفات على القرص هي مصدر الحقيقة للمخرجات. بعد restart، يقرأ runner checkpoints السليمة ويتجاوزها، ويعيد تشغيل المرحلة التي فقدت checkpoint أو artifact. عند الإلغاء لا تُعامل العملية كنجاح؛ تُحفظ `JOB_CANCELLED` ليستطيع Gateway عرضها واستئناف job إذا كان ذلك مناسبًا.
+```text
+ingest → asr → diarize → events → candidates → score → camera → render
+```
 
-## الأخطاء
+كل مرحلة تكتب envelope قابلًا للقراءة وتعلن progress. عند إعادة التشغيل يُعاد استخدام checkpoint صالح بدل إعادة الفيديو كاملًا. النتيجة النهائية لا تعتبر ناجحة إلا بعد وجود artifacts قابلة للقراءة والتحقق.
 
-يحوّل المحرك استثناءات التنفيذ إلى `EngineError` آمن يحوي `code` و`safe_message` و`recoverable`. لا تُرسل stack traces أو مسارات الخادم إلى Android. يجب أن تعلن stages عن أخطاء قابلة للإجراء مثل `MEDIA_INVALID`, `MODEL_MISSING`, `FFMPEG_FAILED`, و`INSUFFICIENT_DISK` بدل إرجاع خطأ عام كلما أمكن.
+| الوظيفة | الضمان |
+|---|---|
+| `create_job` | إنشاء job directory وmetadata دون بدء معالجة غير idempotent. |
+| `start_job` | تشغيل المراحل بالترتيب مع progress وcheckpoint. |
+| `get_status` | قراءة الحالة الحالية من التخزين. |
+| `cancel_job` | يثبت cancel request ثم يوقف التنفيذ بأمان. |
+| `resume_job` | يمسح marker المؤقت ويكمل من checkpoint صالح إذا كانت الحالة قابلة للاسترداد. |
+| `get_results` | يعيد نتائج آمنة وartifacts المكتملة فقط. |
+| `render_clip` | يعيد render لمقطع محدد بعد التحقق من index والمدخلات. |
+
+## قواعد الفشل
+
+يفصل Engine بين `MEDIA_INVALID`, `FFMPEG_MISSING`, `FFMPEG_FAILED`, `MODEL_MISSING`, `MODEL_INVALID`, `INSUFFICIENT_DISK`, و`UNSUPPORTED_FORMAT`. فشل LLM اختياري لا يجب أن يحول الوظيفة إلى crash إذا كان fallback rubric أو provider بديلًا متاحًا. أما failure غير القابل للاسترداد فيثبت transition واضحًا ويترك artifacts التشخيصية.
+
+### المراجع
+
+[1]: ../pipeline/publikclip_pipeline/engine/contracts.py "Engine public types"
+[2]: ../pipeline/publikclip_pipeline/engine/pipeline.py "Pipeline orchestration"
+[3]: ../pipeline/publikclip_pipeline/jobs/queue.py "Checkpoint and job persistence"
+[4]: ../gateway/processing_service.py "Gateway-to-engine bridge"
+[5]: CONTRACTS.md "Cross-component contract"
+
+## References
+
+[1]: ../pipeline/publikclip_pipeline/engine/contracts.py "Engine public types"
+[2]: ../pipeline/publikclip_pipeline/engine/pipeline.py "Pipeline orchestration"
+[3]: ../pipeline/publikclip_pipeline/jobs/queue.py "Checkpoint and job persistence"
+[4]: ../gateway/processing_service.py "Gateway-to-engine bridge"
+[5]: CONTRACTS.md "Cross-component contract"

@@ -1,27 +1,42 @@
 # Test Matrix
 
-## الاختبارات الآلية
+**قاعدة القبول:** compilation وحده لا يثبت اكتمال feature. يجب ربط كل PASS بدليل قابل لإعادة الفحص، ولا تُحتسب mocks كدليل production.
 
-| السيناريو | طبقة الاختبار | النتيجة المطلوبة |
-|---|---|---|
-| إنشاء job بإعدادات صالحة | Engine/Gateway | job جديد وحالة `QUEUED` |
-| مصدر فارغ أو امتداد غير مدعوم | Gateway | error code آمن دون إنشاء job |
-| ملف تالف أو بلا video stream | Media/Gateway | `MEDIA_INVALID` |
-| SHA-256 غير صحيح | Upload | `MEDIA_CHECKSUM_MISMATCH` وتنظيف partial file |
-| polling لحالة job | Android/Gateway | Room يعكس state/progress |
-| cancel أثناء worker | Gateway/Engine | `CANCELLED` أو `cancel_requested` دون نجاح كاذب |
-| resume بعد checkpoint | Engine/Gateway | إعادة تشغيل المراحل الناقصة فقط |
-| restart للـGateway | Gateway | استعادة job من SQLite/checkpoint |
-| غياب FFmpeg أو النموذج | Gateway/Media | error مصنف وقابل للإصلاح إذا أمكن |
-| غياب LLM الاختياري | Scoring | fallback أو error آمن، لا crash غير مصنف |
-| artifact خارج الجذر أو MP4 غير صالح | Gateway | `ARTIFACT_INVALID` وعدم كشف الملف |
-| إعادة رندر clip | Engine/Gateway | تحديث artifact دون إعادة ASR |
-| Android unit/lint/release build | Gradle | نجاح الاختبارات وبناء APK قابل للفحص |
+| الفئة | السيناريو | الاختبار/الدليل الحالي | الحالة |
+|---|---|---|---:|
+| Build | Frontend typecheck وVite build | `npm run build` | PASS |
+| Python | Gateway + pipeline regression | `python3 -m pytest -q` | PASS: 164، skipped: 1 |
+| Engine | lifecycle/checkpoints/progress | `pipeline/tests/test_engine.py`, `test_queue.py` | PASS |
+| Media | invalid/corrupt source | `gateway/tests/test_media_lifecycle.py`, smoke evidence | PASS |
+| Failure | missing provider/model/FFmpeg/render | targeted failure suite | PASS للـclassification، لا يثبت production readiness |
+| Resilience | Gateway restart | `evidence/gateway_restart_recovery.json` | PASS جزئيًا على Gateway |
+| Resilience | network loss/recovery | `evidence/network_loss_observation.json` و`network_loss_recovery.json` | PASS جزئيًا على Gateway |
+| Control | active cancel | `evidence/active_cancel.json` | PASS على Gateway |
+| Control | retry/resume | retry evidence وcontract tests | PASS جزئيًا؛ لا يثبت E2E من Android |
+| Android | unit tests | `:app:testDebugUnitTest` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Android | lint | `:app:lint` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Android | release assembly | `:app:assembleRelease` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Device | install/open/picker/preview/export | ADB device + screenshots/logcat | BLOCKED: لا جهاز متصل |
+| E2E | APK → upload → full pipeline → export | job ID + stages + artifact hashes | BLOCKED: provider/device readiness |
+| Release | signing verification | `apksigner verify --verbose` | BLOCKED حتى توفير release keystore |
+| Large media | 100MB/500MB/1GB+ | `RUN_LARGE_MEDIA_TESTS=1` | SKIPPED عمدًا بسبب الموارد |
 
-## اختبارات الجهاز المطلوبة قبل النشر
+## سيناريوهات يجب إغلاقها قبل release
 
-يجب على جهاز Android أو emulator مستقر تثبيت APK وتشغيله، اختيار فيديو من Photo Picker، بدء رفع، إظهار foreground notification، إغلاق التطبيق أثناء polling، فتحه من جديد، استعادة job، تنزيل MP4 وتشغيل preview، ثم cancel/resume عند فشل الشبكة. هذه الاختبارات لا يثبتها نجاح unit tests وحده.
+يجب تشغيل فيديو عادي وطويل وكبير، ومصدر بلا audio، وmedia فاسدة، وmulti-speaker، وfast speech، وmissing model، وmissing FFmpeg، وLLM unavailable، وcancellation، وresume، وbackend restart، وnetwork interruption، وAndroid process death، وrender failure. لكل failure يجب حفظ reproduction ثم fix ثم regression test ثم verification.
 
-## قاعدة regression
+### المراجع
 
-كل bug يتبع التسلسل: إعادة إنتاج، إصلاح صغير داخل ملكية الملف، اختبار regression، ثم إعادة تشغيل المجموعة ذات الصلة. لا تُقبل عبارة “everything works” دون log أو artifact أو test result قابل للمراجعة.
+[1]: ../evidence/ "Verification evidence"
+[2]: FINAL_ACCEPTANCE.md "Acceptance decision"
+[3]: RELEASE_BLOCKERS.md "Open blockers"
+[4]: ../.github/workflows/quality-gate.yml "CI quality gate"
+[5]: ../.github/workflows/android-build.yml "Android CI"
+
+## References
+
+[1]: ../evidence/ "Verification evidence"
+[2]: FINAL_ACCEPTANCE.md "Acceptance decision"
+[3]: RELEASE_BLOCKERS.md "Open blockers"
+[4]: ../.github/workflows/quality-gate.yml "CI quality gate"
+[5]: ../.github/workflows/android-build.yml "Android CI"

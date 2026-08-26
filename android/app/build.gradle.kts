@@ -13,8 +13,8 @@ android {
     applicationId = "com.aistudio.opuspro.apk"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "0.10.1"
+    versionCode = 6
+    versionName = "0.11.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -115,6 +115,7 @@ dependencies {
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
   testImplementation(libs.junit)
+  testImplementation(libs.mockwebserver)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.robolectric)
   testImplementation(libs.roborazzi)

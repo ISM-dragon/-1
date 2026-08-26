@@ -1,43 +1,46 @@
-# خطة الترحيل من المرجع إلى PublikClip
+# خطة ترحيل الأفكار المرجعية
+
+**الحالة:** معتمدة للتنفيذ التدريجي، وليست تصريحًا بنسخ المشروع المرجعي.
 
 ## المبدأ
 
-لا توجد عملية نسخ كاملة من `clipper-main` إلى `ISM-dragon/-1`. كل تغيير يجب أن يمر عبر الفهم، ثم المقارنة، ثم القرار، ثم implementation مستقل أو adapter صغير، ثم اختبار regression. الأولوية لمسار Android الشخصي من اختيار الفيديو إلى التصدير.
+المسار المستهدف هو Android APK شخصي يتصل بـPrivate Gateway. ستُرحّل الأفكار التي تخدم هذا المسار فقط، وبحدود عقود واضحة. كل تغيير cross-component يبدأ بتثبيت contract واختبار regression، ثم يُدمج على دفعة صغيرة يمكن التراجع عنها. لا يُسمح بإعادة بناء المشروع من الصفر، ولا بإدخال user accounts أو billing أو Redis أو مزودات جديدة لمجرد مطابقة المرجع.
 
-## الموجة الأولى: التدقيق والتوثيق
+## الموجات
 
-تم تنفيذ هذه الموجة عبر جرد شجرة المشروع، مراجعة Android/Gateway/Engine/pipeline، قراءة بنية المرجع، والتحقق من تراخيص الطرفين. الناتج هو هذه الوثيقة ووثائق المقارنة والعقود والتراخيص.
+| الموجة | النطاق | مخرجاتها | بوابة الانتقال |
+|---|---|---|---|
+| Wave 1 — Audit | مقارنة الكود والميزات والتراخيص | هذه المقارنة، قرارات الدمج، وثائق architecture/contracts | لا production replacement قبل اكتمال الوثائق. |
+| Wave 2 — Engine/Runtime | تثبيت Engine facade، lifecycle، media errors، model diagnostics | عقود v1، checkpoints، failure envelope، اختبارات restart/cancel/resume | جميع اختبارات Python الحالية تمر، مع evidence لاختبار failure paths. |
+| Wave 3 — Android Core | upload sessions، Room state، WorkManager، notifications، secure config | APK client لا يعرف Python ولا الأسرار | unit/lint/build، ثم device test على جهاز فعلي. |
+| Wave 4 — Integration | ربط APK بـGateway خاص، تنزيل النتائج، preview/edit/export | E2E من URI إلى artifact | job ID، stage evidence، hashes، وعدم وجود mock في المسار الأساسي. |
+| Wave 5 — Release QA | توقيع، device matrix، network loss، process death، restart/recovery | release APK وrelease evidence | لا تغلق blockers دون دليل تشغيل فعلي. |
 
-## الموجة الثانية: تثبيت الحدود
+## ترتيب التغييرات
 
-يُثبت `ProcessingEngine` كواجهة عامة للمراحل، ويظل `Gateway` هو control plane الوحيد لمسار Android. لا يستورد Android أي Python module، ولا يستورد Gateway تفاصيل كثيرة من pipeline خارج adapter المحرك. تُحفظ checkpoints وartifacts كحقيقة تشغيلية، مع SQLite كدفتر حالة.
+أولًا، يجب تثبيت `/v1` وعقد `ProcessingEngine` بحيث تظل مراحل `ingest → asr → diarize → events → candidates → score → camera → render` خلف facade واحدة. ثانيًا، يجب تحسين upload/session وdiagnostics دون تغيير سلوك one-shot compatibility route قبل اكتمال العميل. ثالثًا، يجب استكمال Android UX على شكل Home → Import → Generate → Processing → Results → Review → Edit → Render → Export، مع تخزين حالة job في Room واستخدام WorkManager للاستمرار.
 
-## الموجة الثالثة: تحسينات منخفضة المخاطر
+بعد ذلك فقط تُضاف أفكار المرجع ذات القيمة المحدودة: presets للـcaptions، بيانات rubric واضحة للـscoring، وعمليات trim/split/merge في شاشة التحرير. هذه الإضافات يجب أن تعمل فوق artifacts والعقود الحالية؛ لا يجوز أن تجعل Android يعيد transcription أو يشغل FFmpeg محليًا. أما B-roll، النشر الاجتماعي، MCP، الحسابات، billing، والـmulti-user فخارج هذه الخطة.
 
-1. توحيد وثائق API وEngine وMedia/AI runtime وAndroid UX.
-2. تثبيت error envelope والأكواد القابلة للعرض في Android.
-3. إضافة أو تحسين فحوص media قبل إنشاء job، مع إبقاء FFmpeg/ffprobe على الخادم.
-4. الحفاظ على clamping وfallback في scoring عند غياب LLM.
-5. فصل caption state عن render implementation في أي تغيير لاحق.
+## ضوابط الترحيل
 
-## الموجة الرابعة: تكامل Android
+| الخطر | الضابط |
+|---|---|
+| كسر checkpoints القديمة | قراءة legacy envelopes، وكتابة versioned envelopes، واختبار resume من كل stage. |
+| اختلاف نتائج scoring | إطلاق rubric versioned وتسجيله في job metadata، ثم مقارنة النتائج قبل تغيير default. |
+| تضخم APK | فحص APK archive يمنع Python/uv/Node/Rust/FFmpeg والنماذج والأسرار. |
+| فقد upload عند انقطاع الشبكة | offset + SHA-256 + idempotency key، واختبار interruption/resume. |
+| تسرب الأسرار | provider keys في Gateway فقط، وAndroid لا يستقبل إلا capability/result آمنًا. |
+| التباس بين Android native وTauri Android | artifact واحد وapplication ID واحد للمسار الشخصي؛ Tauri يبقى مسارًا منفصلًا. |
+| نسخ ترخيص غير واضح | إعادة التنفيذ المستقل عند أي غموض، وإضافة سجل إلى `THIRD_PARTY_LICENSES.md` قبل الدمج. |
 
-يستخدم Android Native مسار `Home → Import → Generate → Processing → Results → Review/Edit → Render → Export`. يعتمد التشغيل الطويل على WorkManager وRoom، ويعيد استخدام `remoteGatewayJobId` بعد إغلاق التطبيق أو انقطاع الشبكة. لا يُعلن local pipeline كمسار release canonical.
+## معايير التراجع
 
-## الموجة الخامسة: التحقق والإصدار
+يُلغى التغيير إذا أدى إلى فشل في build أو regression suite، أو زاد زمن المعالجة/الذاكرة دون evidence، أو غيّر output السابق دون versioning، أو احتاج dependency غير متوافقة مع Android/ترخيص المشروع، أو جعل failure في LLM أو FFmpeg يسبب crash بدل error قابل للفحص.
 
-يجب تشغيل unit tests للـPython وGateway وAndroid، ثم build debug/release وlint، ثم التحقق من APK archive وmanifest والتوقيع. اختبارات الجهاز الحقيقي أو emulator مستقر تظل مطلوبة لمسار install/launch/file-picker/process-death، ولا يكفي نجاح compilation.
+## References
 
-## بوابات القرار
-
-| البوابة | شرط المرور | الإجراء عند الفشل |
-|---|---|---|
-| License gate | الترخيص معروف ومتوافق، أو إعادة تنفيذ مستقلة | منع نسخ الكود وتسجيل السبب |
-| Contract gate | لا تغيير breaking في `/jobs` أو `ProcessingEngine` | تحديث adapter والاختبارات قبل الدمج |
-| Performance gate | benchmark يثبت تحسنًا أو عدم وجود تراجع | إبقاء implementation الحالية |
-| Reliability gate | cancel/resume/restart وملف تالف لا تسبب crash غير مصنف | إضافة regression test وإيقاف الترحيل |
-| Android gate | APK لا يحتوي runtime server أو secrets | إزالة dependency/secret وإعادة البناء |
-
-## الأعمال المؤجلة
-
-إعادة تصميم camera، إدخال B-roll، نقل Whisper إلى native Android، وتوسيع social publishing ليست ضمن التغيير الأول؛ تحتاج benchmark وقرارًا مستقلًا. كذلك لا تُضاف قاعدة بيانات مُدارة أو multi-user architecture في المرحلة الشخصية الحالية.
+[1]: REFERENCE_COMPARISON.md "Comparison and decisions"
+[2]: ARCHITECTURE.md "Canonical topology and ownership"
+[3]: CONTRACTS.md "Public API and engine contracts"
+[4]: FINAL_ACCEPTANCE.md "Evidence-based acceptance matrix"

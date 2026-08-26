@@ -1,37 +1,41 @@
-# سجل تراخيص الطرف الثالث
+# Third-Party Licenses
 
-## ملاحظة النطاق
+**الغرض:** سجل audit للتراخيص قبل أي دمج من المشروع المرجعي أو إضافة dependency.
 
-هذا سجل هندسي أولي للمكونات الموجودة في المستودع ومسار البناء المقترح. لا يُعد رأيًا قانونيًا. لم يُنسخ كود أو asset أو secret من `clipper-main` إلى `ISM-dragon/-1`؛ لذلك لا توجد مطالبة بأن كود المرجع أصبح جزءًا من هذا المستودع.
+## نتيجة مراجعة الأرشيف المرجعي
 
-## تراخيص المستودع والمراجع
+الأرشيف `supoclip-main.zip` يحتوي على ملف `LICENSE` نصه **GNU Affero General Public License v3.0**، مع copyright notice منسوب إلى Sami Hindi. لذلك فإن أي نسخ أو adaptation من كود SupoClip يحتاج مراجعة قانونية لتوافق AGPL-3.0 مع ترخيص المستودع الهدف، وحفظ notices المناسبة، وتحديد corresponding source عند التوزيع. في هذه الدفعة لم تُنسخ أي ملفات source أو binary أو asset من الأرشيف.
 
-| المكوّن | المصدر | الترخيص الظاهر | حالة الاستخدام |
+| المصدر | الترخيص المرصود | ما استُخدم من المصدر | القرار |
 |---|---|---|---|
-| المشروع الأساسي | `LICENSE` في جذر المستودع | GNU AGPL v3 | الترخيص الحاكم للمشروع الأساسي كما هو موزع. |
-| المشروع المرجعي | `reference_zip/clipper-main/LICENSE` | MIT | تمت قراءة الترخيص فقط؛ لم تُنسخ ملفات مصدر منه. |
-| Android/Gradle plugins | `android/*` وملفات Gradle | تحددها ملفات Gradle وملاحظات كل dependency | يجب الاحتفاظ بملفات notices التي يطلبها build عند التوزيع. |
-| Python dependencies | `backend/requirements.txt`, `gateway/requirements.txt`, `pipeline/pyproject.toml` | تراخيص كل حزمة upstream | لا تُعامل قائمة الحزم كترخيص واحد؛ يلزم توليد inventory عند release. |
-| npm/Tauri dependencies | `app/package.json` وlockfile | تراخيص upstream لكل package | خارج APK Native canonical، لكنها تبقى جزءًا من شجرة المستودع. |
+| SupoClip reference ZIP | AGPL-3.0 | مقارنة architecture/UX فقط | لا نسخ؛ الأفكار العامة يعاد تنفيذها مستقلًا. |
+| Target root | كما هو موثق في `LICENSE` | كود المستودع الحالي | يبقى notice الحالي دون تغيير. |
+| Pipeline caption font | notice موجود داخل `pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt` | font asset الحالي | يحتفظ notice المحلي وشروط OFL الخاصة به. |
+| Vendor model/code | notices ومسارات vendor داخل `pipeline/publikclip_pipeline/vendor/` و`VENDORED-LICENSES.md` | الموجود مسبقًا في الهدف | لا تعديل للـnotice؛ أي تحديث يحتاج مراجعة مستقلة. |
+| Android/Gradle/npm dependencies | تراخيص upstream غير منسوخة إلى source | dependencies build-time/runtime | يجب توليد/مراجعة dependency notice عند التوزيع النهائي. |
 
-## مكونات runtime الحساسة
+## قواعد الدمج
 
-يستخدم المسار الخادمي FFmpeg/ffprobe، Python packages للـASR/diarization/vision، وربما مزود LLM اختياري. يجب تثبيت نسخها في بيئة النشر، الاحتفاظ بمعلومات المصدر، وعدم وضع نماذج أو مفاتيح مزودين داخل APK أو Git.
+قبل إدخال dependency أو file من مشروع آخر يجب تحديد license على مستوى repository وfile، وفحص dependency transitive ذات الصلة، وتسجيل copyright/notice، والتحقق من compatibility. إذا كان الترخيص غير واضح أو غير متوافق، لا يُنسخ الكود؛ تُكتب implementation مستقلة مبنية على السلوك العام فقط. لا تُقبل build outputs أو secrets أو model artifacts من مشاريع مرجعية.
 
-## قواعد الدمج من مشاريع خارجية
+## فحص المستودع
 
-قبل نقل أي ملف أو snippet من مشروع آخر، يجب تحديد ترخيص المستودع، وفحص header أو file-level notice، وفحص dependencies المباشرة، ثم تسجيل المصدر والنسخة والملفات المنقولة. إذا كان الترخيص غير واضح أو متعارضًا مع AGPL، يُعاد تنفيذ الفكرة مستقلًا بدل نسخ الكود. عند وجوب الإبقاء على copyright أو notice، يوضع في الملف أو في هذا السجل كما يطلب الترخيص.
+تم التفريق بين source المتعقب وملفات build/cache. لا يُعتد بملفات `node_modules` أو Gradle caches كمرجع ترخيص للمشروع، ولا تُضاف إلى Git. يظل `VENDORED-LICENSES.md` وnotices المحلية مصدر المراجعة للمواد الموجودة بالفعل.
 
-## ما تم أخذه من المرجع
+> هذا سجل هندسي وليس رأيًا قانونيًا. يلزم counsel review قبل توزيع APK أو Gateway مشتق إذا أُضيف كود AGPL أو dependency ذات copyleft متعارض.
 
-| العنصر | هل نُسخ كود؟ | القرار |
-|---|---:|---|
-| فكرة pipeline stateless stages | لا | استخدمت للمقارنة المعمارية فقط. |
-| clamping لمخرجات LLM | لا | فكرة مرشحة للتحسين الانتقائي داخل implementation الحالية. |
-| smoothing وfallback في camera | لا | مراجعة يدوية وbenchmark قبل أي تغيير. |
-| caption styles وkeyword emphasis | لا | تحسين مستقبلي داخل renderer الحالي مع regression. |
-| Pexels B-roll | لا | خارج canonical Android path حاليًا. |
+### المراجع
 
-## متطلبات الإصدار
+[1]: ../../upload/supoclip-main.zip "Supplied reference archive; not committed"
+[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
+[3]: ../LICENSE "Target license"
+[4]: ../VENDORED-LICENSES.md "Existing vendor notices"
+[5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"
 
-قبل نشر APK أو Gateway خارجيًا، يجب توليد قائمة dependencies نهائية مع إصداراتها وتراخيصها، وفحص artifacts وعدم تضمين مفاتيح أو ملفات نماذج خاصة، وإتاحة notices المطلوبة للمكونات التي تُوزع مع المنتج. يبقى هذا العمل release gate مستقلًا عن نجاح اختبارات الوحدة.
+## References
+
+[1]: https://github.com/FujiwaraChoki/supoclip "Reference project represented by supplied archive"
+[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
+[3]: ../LICENSE "Target license"
+[4]: ../VENDORED-LICENSES.md "Existing vendor notices"
+[5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"

@@ -109,7 +109,7 @@ MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1
 MEDIA_UPLOAD_TTL_SECONDS = max(300, int(os.getenv("ISM_MEDIA_UPLOAD_TTL_SECONDS", str(24 * 60 * 60))))
 MEDIA_UPLOAD_CHUNK_BYTES = max(1, int(os.getenv("ISM_MEDIA_UPLOAD_CHUNK_BYTES", str(16 * 1024 * 1024))))
 
-app = FastAPI(title="ISM Social Gateway", version="0.10.1")
+app = FastAPI(title="ISM Social Gateway", version="0.11.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
