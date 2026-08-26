@@ -47,3 +47,19 @@
 [5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"
 [6]: ../../upload/whisper.cpp-master.zip "Supplied whisper.cpp archive; not committed"
 [7]: https://github.com/ggerganov/whisper.cpp/blob/master/LICENSE "whisper.cpp MIT license"
+
+### VideoClipper-main المرفق
+
+يحتوي `VideoClipper-main/LICENSE` على **MIT License** مع `Copyright (c) 2026 Kacper`. فُحصت الملفات `ai_utils.py`, `video_utils.py`, و`app.py` على مستوى المكوّنات، ولم يُنسخ أي منها إلى production. استُخدمت أفكار عامة فقط في المقارنة: audio-energy fallback، face EMA/interpolation، crop presets، وcaption styling. لا توجد إشعارات تشغيلية جديدة مطلوبة ما دام الدمج إعادة تنفيذ مستقلة.
+
+| المصدر | الترخيص المرصود | ما استُخدم | القرار |
+|---|---|---|---|
+| `VideoClipper-main/app.py` | MIT ضمن repository | مقارنة Streamlit UX فقط | لا نسخ؛ IGNORE_REFERENCE للـAPK/Gateway |
+| `VideoClipper-main/ai_utils.py` | MIT ضمن repository | مقارنة ASR/Gemini/fallback فقط | لا نسخ؛ provider secrets تبقى server-side |
+| `VideoClipper-main/video_utils.py` | MIT ضمن repository | مقارنة crop/caption/RMS فقط | لا نسخ؛ إعادة تنفيذ مستقلة عند الحاجة |
+| `VideoClipper-main/LICENSE` | MIT، copyright Kacper | license audit | يُحفظ النص إذا حدث نسخ فعلي مستقبلًا |
+
+[8]: ../../references/VideoClipper-main/LICENSE "Attached VideoClipper MIT license"
+[9]: ../../references/VideoClipper-main/README.md "Attached VideoClipper README"
+[10]: ../../references/VideoClipper-main/ai_utils.py "Attached VideoClipper AI helpers"
+[11]: ../../references/VideoClipper-main/video_utils.py "Attached VideoClipper media helpers"

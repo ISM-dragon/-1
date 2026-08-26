@@ -81,3 +81,27 @@
 ---
 
 **ملاحظة:** لم تُنسخ أي أجزاء من SupoClip أو whisper.cpp إلى المستودع الهدف أثناء هذا التدقيق. القرار الحالي هو الاحتفاظ بالـremote-only Android boundary وإعادة تنفيذ أي أفكار قياس أو UX بشكل مستقل.
+
+## VideoClipper-main المرفق — نتيجة المقارنة الإضافية
+
+يضيف الأرشيف المرفق `VideoClipper-main` مرجعًا مختلفًا عن SupoClip وwhisper.cpp: تطبيق Streamlit أحادي العملية يركز على استخراج الصوت، تحليل Gemini، faster-whisper، إعادة التأطير بالوجه، أنماط letterbox/blurred background/center crop، وcaptions مرسومة عبر Pillow. ملف `LICENSE` في الأرشيف يعلن MIT مع copyright لـKacper. لم تُنسخ منه ملفات source أو assets أو أسرار إلى production.
+
+| فكرة VideoClipper-main | القرار | نتيجة التقييم |
+|---|---|---|
+| Streamlit UI ومعالجة متزامنة داخل الصفحة | IGNORE_REFERENCE | لا يطابق Android lifecycle أو job persistence أو secret boundary. |
+| FFmpeg audio extraction مع MoviePy fallback | COMBINE | نحتفظ بـFFmpeg/Media runtime الحالي ونستفيد من fallback typed فقط؛ لا ننقل MoviePy إلى APK. |
+| faster-whisper وword timestamps | KEEP_CURRENT | تُستخدم timestamps الموجودة في WhisperX/ASR على الخادم، دون transcription ثانٍ على الهاتف. |
+| Gemini cloud audio analysis | ADD_REFERENCE | يُدرس خلف Gateway/provider registry؛ لا يمرر Android API key إلى provider. |
+| RMS audio-energy fallback للفيديو بلا كلام | ADD_REFERENCE | signal deterministic اختياري داخل events/candidates بعد regression fixture. |
+| Face tracking مع EMA/interpolation | COMBINE | تُقارن مع camera director/tracks الحالية بعد benchmark، ولا تُستبدل بلا قياس. |
+| Letterbox وblurred background وPillow captions | ADD_REFERENCE | presets UX/render اختيارية بعد golden tests وبدون تغيير boundary. |
+| JSON-only highlight selection وempty-list error handling | IMPROVE_CURRENT | نحافظ على candidates/scoring وtyped errors/fallback بدل إخفاء فشل LLM. |
+
+المحصلة: المرجع مفيد كمصدر أفكار media UX وfallback، لكنه لا يبرر استبدال Android → Gateway → Engine. القرار يظل **KEEP_CURRENT + COMBINE انتقائي**.
+
+### References إضافية
+
+[10]: ../../references/VideoClipper-main/README.md "Attached VideoClipper feature description"
+[11]: ../../references/VideoClipper-main/ai_utils.py "Attached VideoClipper AI helpers"
+[12]: ../../references/VideoClipper-main/video_utils.py "Attached VideoClipper media helpers"
+[13]: ../../references/VideoClipper-main/LICENSE "Attached VideoClipper MIT license"

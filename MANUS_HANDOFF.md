@@ -143,3 +143,11 @@ export KEY_PASSWORD='***'
 لم يُثبت في هذه الجلسة Android Gradle build/device smoke أو Gateway production E2E بسبب غياب Android SDK/JDK release وبيئة Gateway خارجية. توحيد error envelope واختبار process death تبقيان ضمن موجات التنفيذ التالية؛ أما Android resumable upload فأُضيف في هذه الدفعة إلى `ProcessingGatewayClient` مع SHA-256 وsession dedupe وoffset/Content-Range، ويظل اختبار interruption على جهاز/Gateway فعلي مطلوبًا. لا يجوز إعلان release نهائي قبل توفير evidence لهذه المسارات.
 
 راجع `docs/REFERENCE_COMPARISON.md` و`docs/REFERENCE_MIGRATION_PLAN.md` و`docs/THIRD_PARTY_LICENSES.md` و`docs/AUDIT.md` قبل بدء أي integration لاحق.
+
+## هذه الجولة — Android resumable upload والتحقق
+
+بعد دمج تغييرات العمل المتوازي، أضيف إلى `GatewayApiClient` مسار resumable فعلي يستخدم `POST /v1/sources/uploads`، SHA-256، `Content-Range`، `X-Upload-Offset`، chunk sizing، واستعلام الحالة عند انقطاع الشبكة. إعادة تشغيل WorkManager بنفس المصدر تعيد استخدام جلسة Gateway الجزئية لأن الخادم يطابق `sha256 + bytes`. أضيفت اختبارات contract للـinitialization، ranges، completion، واستئناف offset، وأصبحت قيمة `llm` جزءًا من `GatewayConfig` بدل hardcoding داخل العميل. أزيل Foojay resolver غير الضروري من `android/settings.gradle.kts` حتى يستخدم البناء JDK المحلي دون plugin خارجي.
+
+نتائج التحقق الأخيرة: `python3 -m compileall -q pipeline/publikclip_pipeline backend gateway` نجح؛ pipeline tests `117 passed`؛ Gateway tests `39 passed, 1 skipped`؛ backend tests `6 passed`؛ وAndroid `:app:compileDebugKotlin :app:assembleDebug` نجح باستخدام JDK 21 وAndroid API 36. نجح subset من Android unit tests. full Android unit-test task وصل إلى runtime لكنه فشل في `RemoteGatewayApiContractTest` بسبب TLS أثناء تنزيل artifact Robolectric عبر `MavenArtifactFetcher`، وليس بسبب compiler error؛ يلزم CI أو بيئة Maven مستقرة لإثبات اختبار HTTP الكامل. لم يُعتمد device/emulator smoke.
+
+الـreference الإضافي في هذه الجولة هو `VideoClipper-main` المرفق بترخيص MIT؛ تمت إضافة تفاصيله إلى `docs/REFERENCE_COMPARISON.md` و`docs/THIRD_PARTY_LICENSES.md`، ولم تُنسخ منه ملفات إلى production.
