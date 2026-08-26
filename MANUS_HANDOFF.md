@@ -2,13 +2,13 @@
 
 **المشروع:** `publikclip` داخل المستودع `ISM-dragon/-1`  
 **تاريخ التسليم:** 2026-08-26  
-**نطاق هذه الجلسة:** متابعة انتقال عميل Android إلى APK شخصي يعتمد على Gateway خاص، دمج أحدث تغييرات `origin/main`، إصلاح أعطال CI والاختبارات، ومن دون إعادة كتابة الـPython pipeline أو حذفها.
+**نطاق هذه الجلسة:** متابعة انتقال عميل Android إلى APK شخصي يعتمد على Gateway خاص، دمج أحدث تغييرات `origin/main` حتى commit `d7d922e`، إصلاح أعطال CI والاختبارات، ومن دون إعادة كتابة الـPython pipeline أو حذفها.
 
 ## الخلاصة التنفيذية
 
 المستودع لا يبدأ من تطبيق فارغ. توجد فيه ثلاثة حدود تشغيلية قائمة: تطبيق سطح مكتب React/Tauri، تطبيق Android أصلي مستقل بـKotlin وJetpack Compose، وGateway بـFastAPI ينسق حالات الوظائف، ورفع الوسائط القابل للاستئناف، وطابور المعالجة، ثم يشغّل Python pipeline عبر subprocess وبروتوكول JSONL. لذلك كان القرار الأقل مخاطرة هو اعتماد تطبيق Android الأصلي كنقطة بناء الـAPK، وإبقاء Gateway هو محرك المعالجة خارج الهاتف، مع الحفاظ على pipeline الحالية كما هي.
 
-أصبح مسار المعالجة في Android صريحًا **Gateway-only**: لا تُقبل جدولة مهمة جديدة ما لم يتوفر عنوان Gateway صالح ورمز جلسة، ولا يعود `VideoProcessingWorker` إلى `ProductionVideoPipeline` المحلية. دُمجت كذلك أحدث تغييرات `origin/main` الخاصة بدورة حياة الوسائط والـpipeline، وأصلحت أخطاء CI التي كانت تمنع التحقق من الفرع البعيد. بقي `ProductionVideoPipeline.kt` في شجرة المصدر ولم يُحذف؛ لكنه لم يعد route تشغيليًا للعامل. أضيف كذلك استئناف لمهمة Gateway المحفوظة، بحيث لا يعيد retry/resume رفع الفيديو أو إنشاء مهمة بعيدة جديدة، ويُستخدم معرف المهمة المحلي كمفتاح idempotency عند الإنشاء الأول.
+أصبح مسار المعالجة في Android صريحًا **Gateway-only**: لا تُقبل جدولة مهمة جديدة ما لم يتوفر عنوان Gateway صالح ورمز جلسة، ولا يعود `VideoProcessingWorker` إلى `ProductionVideoPipeline` المحلية. دُمجت كذلك أحدث تغييرات `origin/main` الخاصة بالمصادر البعيدة، ودورة حياة الوسائط القابلة للاستئناف، وعقد pipeline، وأصلحت أخطاء CI التي كانت تمنع التحقق من الفرع البعيد. بقي `ProductionVideoPipeline.kt` في شجرة المصدر ولم يُحذف؛ لكنه لم يعد route تشغيليًا للعامل. أضيف كذلك استئناف لمهمة Gateway المحفوظة، بحيث لا يعيد retry/resume رفع الفيديو أو إنشاء مهمة بعيدة جديدة، ويُستخدم معرف المهمة المحلي كمفتاح idempotency عند الإنشاء الأول.
 
 ## المعمارية الحالية قبل التعديل
 
@@ -67,13 +67,15 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 أولًا، المشروع يضم مسارين Android مختلفين: Tauri Android وNative Android. Tauri Android يمنع Python محليًا عمدًا، بينما Native Android كان يحتوي fallback محليًا مستقلًا عن Python. هذا كان يترك المعمارية الهجينة غير متطابقة مع الهدف المعلن `Android APK = UI/client`.
 
-ثانيًا، كان غياب Gateway يؤدي إلى اختيار `LOCAL_PIPELINE` بدل فشل مبكر. النتيجة العملية هي إمكانية إنشاء WorkManager job ينجح فقط إذا كانت الاعتماديات المحلية متاحة، وهو عكس قرار الاعتماد على محرك خاص خارجي. عولج ذلك الآن في `ProcessingEngine` وداخل `OpusRepository.enqueueVideoProcessing`.
+ثانيًا، كان غياب Gateway يؤدي إلى اختيار `LOCAL_PIPELINE` بدل فشل مبكر. وبعد دمج upstream، تم الحفاظ على دعم مصادر HTTP/HTTPS التي يقرأها Gateway، إلى جانب ملفات `content://` و`file://` التي يرفعها العميل.
 
-ثالثًا، كانت إعادة المحاولة أو الاستئناف في العامل تعيد تنفيذ `process(...)` مع رفع الملف وإنشاء job جديد؛ وكان Gateway يدعم idempotency في عقده، لكن العميل لم يثبت المفتاح على دورة المهمة المحلية، كما أن مسار repository لم يكن يستدعي control endpoint البعيد قبل إعادة الجدولة. عولج ذلك باستخدام `jobId` المحلي كمفتاح idempotency، وتمرير `remoteGatewayJobId` الموجود لاستئناف polling دون إعادة الرفع، واستدعاء `/retry` أو `/resume` على Gateway قبل إعادة WorkManager.
+ثالثًا، كانت النتيجة العملية هي إمكانية إنشاء WorkManager job ينجح فقط إذا كانت الاعتماديات المحلية متاحة، وهو عكس قرار الاعتماد على محرك خاص خارجي. عولج ذلك الآن في `ProcessingEngine` وداخل `OpusRepository.enqueueVideoProcessing`.
 
-رابعًا، أظهر أول build فعلي بعد توفير SDK وJDK خطأ ترجمة موجودًا في `OpusBottomNav.kt`: `NavigationBarItem` هو امتداد لـ`RowScope` في نسخة Material3 المستخدمة، بينما كان helper خارج هذا الـscope. أُصلح ذلك بتحويل `PrimaryItem` إلى `RowScope.PrimaryItem` دون تغيير السلوك المرئي.
+رابعًا، كانت إعادة المحاولة أو الاستئناف في العامل تعيد تنفيذ `process(...)` مع رفع الملف وإنشاء job جديد؛ وكان Gateway يدعم idempotency في عقده، لكن العميل لم يثبت المفتاح على دورة المهمة المحلية، كما أن مسار repository لم يكن يستدعي control endpoint البعيد قبل إعادة الجدولة. عولج ذلك باستخدام `jobId` المحلي كمفتاح idempotency، وتمرير `remoteGatewayJobId` الموجود لاستئناف polling دون إعادة الرفع، واستدعاء `/retry` أو `/resume` على Gateway قبل إعادة WorkManager.
 
-خامسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection بسبب `ModuleNotFoundError: fastapi`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. عولجت المشكلتان في Workflow والاختبار نفسه، من دون تخفيف فحوص الأمان.
+خامسًا، أظهر أول build فعلي بعد توفير SDK وJDK خطأ ترجمة موجودًا في `OpusBottomNav.kt`: `NavigationBarItem` هو امتداد لـ`RowScope` في نسخة Material3 المستخدمة، بينما كان helper خارج هذا الـscope. أُصلح ذلك بتحويل `PrimaryItem` إلى `RowScope.PrimaryItem` دون تغيير السلوك المرئي.
+
+سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection بسبب `ModuleNotFoundError: fastapi`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. عولجت المشكلتان في Workflow والاختبار نفسه، من دون تخفيف فحوص الأمان.
 
 ## القرارات التقنية
 
@@ -111,7 +113,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 لم يتم بعد تغيير `applicationId` أو `namespace` من القيم الحالية (`com.aistudio.opuspro.apk` و`com.example`). هذا يحتاج قرار هوية نهائيًا ومراجعة migration، ولا ينبغي تنفيذه عشوائيًا لأنه قد يؤثر على التثبيت والتوقيع والتوافق.
 
-لم يتم إنشاء release signing key أو توقيع production APK. الموجود حاليًا هو مسار debug، وملف signing يعتمد على متغيرات بيئية وkeystore غير متعقب. كما أن assembleDebug الكامل لم يصل إلى إنشاء artifact بسبب ضغط الذاكرة، رغم نجاح الترجمة واختبار الوحدة المستهدف.
+لم يتم إنشاء release signing key أو توقيع production APK. الموجود حاليًا هو مسار debug، وملف signing يعتمد على متغيرات بيئية وkeystore غير متعقب. كما أن assembleDebug الكامل لم يصل إلى إنشاء artifact بسبب ضغط الذاكرة، رغم نجاح الترجمة واختبار الوحدة المستهدف في الجولة السابقة.
 
 لم يتم نشر Gateway أو ربطه بجهاز دائم أو GPU أو بيئة تملك dependencies الفعلية. لم يتم تنفيذ معالجة MP4 حقيقية من الهاتف، لأن ذلك يتطلب عنوان Gateway قابلًا للوصول، token، FFmpeg، Python/pipeline dependencies، اعتماد Gemini صالحًا عند استخدام Gemini، ومصدر فيديو اختباريًا يملكه المستخدم.
 
@@ -124,15 +126,15 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | الفحص | النتيجة |
 |---|---|
 | `git diff --check` | نجح.
-| ترجمة Kotlin واختبار `ProcessingEngine` ضمن `:app:testDebugUnitTest` | نجح بعد rebase وإصلاح تعارض `scheme`؛ الحالات الخمس مرّت.
-| `./gradlew :app:testDebugUnitTest` الكامل | لم يكتمل محليًا؛ بقي Test Executor عالقًا في sandbox، بينما الاختبار المستهدف نجح. يلزم تشغيله في CI أو بيئة Android أكثر استقرارًا.
 | `./gradlew :app:lint` | لم يكتمل محليًا بسبب ضغط ذاكرة مرتفع في sandbox؛ لا توجد نتيجة lint نهائية محلية.
 | `./gradlew :app:assembleDebug` | لم يكتمل محليًا بسبب ضغط الذاكرة عند مراحل dex؛ لا يوجد APK محلي نهائي من هذه الجلسة.
 | `python3 -m pytest gateway -q` | نجح: `37 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
-| `python3 -m pytest -q` | نجح: `153 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
+| `python3 -m pytest -q` | نجح: `157 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
 | `python3 -m compileall -q gateway pipeline/publikclip_pipeline` | نجح.
+| اختبار Android المستهدف بعد rebase | نجح: `:app:testDebugUnitTest --tests com.example.ProcessingEngineTest`؛ ترجمة Kotlin وKSP وJava و6 حالات ProcessingEngine مرّت.
+| `./gradlew :app:testDebugUnitTest` الكامل | بقي عالقًا محليًا في Test Executor ولم يُعتمد كنجاح؛ يلزم تأكيده عبر CI.
 | `git diff --check` | نجح بعد كل التعديلات الحالية.
-| Quality Gate على GitHub قبل الإصلاح | فشل بسبب عدم تثبيت FastAPI في Workflow؛ تم إصلاح Workflow والاختبار المرتبط بـ`media_uploads`.
+| Quality Gate على GitHub قبل الإصلاح | فشل بسبب عدم تثبيت FastAPI في Workflow، وبسبب عدم تهيئة `media_uploads` في اختبار المسار؛ تم إصلاح Workflow والاختبار.
 
 ## الافتراضات
 
@@ -146,7 +148,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 الـblocker الثاني متعلق بالـrelease: لا توجد هوية package نهائية أو signing configuration شخصية مؤكدة. لا ينبغي توزيع APK release قبل حسم ذلك.
 
-الـblocker الثالث متعلق بالتحقق المحلي: اختبار Android الكامل وLint وassembleDebug احتاجت موارد أكثر أو علقت داخل sandbox؛ لذلك يجب اعتماد CI لتأكيد البناء الكامل. أما اختبارات Python الكاملة فأصبحت تمر بعد تثبيت dependencies المطلوبة محليًا، مع بقاء اختبار الوسائط الكبير skipped عمدًا.
+الـblocker الثالث متعلق بالتحقق المحلي: اختبار Android الكامل بقي عالقًا في Test Executor، وLint وassembleDebug لم يُستكملا في sandbox بسبب الموارد؛ لذلك يجب اعتماد CI لتأكيد البناء الكامل. اختبارات Python الكاملة أصبحت تمر، مع بقاء اختبار الوسائط الكبير skipped عمدًا.
 
 ## Next steps للجلسة التالية
 
