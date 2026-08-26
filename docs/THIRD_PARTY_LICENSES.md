@@ -1,28 +1,41 @@
-# Third-party licenses and provenance
+# Third-Party Licenses
 
-**Review date:** 2026-08-26
+**الغرض:** سجل audit للتراخيص قبل أي دمج من المشروع المرجعي أو إضافة dependency.
 
-## Repository licenses
+## نتيجة مراجعة الأرشيف المرجعي
 
-| Component | License/provenance | Integration decision |
-|---|---|---|
-| Primary repository `ISM-dragon/-1` | AGPL-3.0-or-later, as declared by the repository license files and existing documentation | Remains the governing project license. |
-| Supplied `supoclip-main` archive | Root `LICENSE` declares MIT | Used for inspection and architectural comparison only; no source copied. |
+الأرشيف `supoclip-main.zip` يحتوي على ملف `LICENSE` نصه **GNU Affero General Public License v3.0**، مع copyright notice منسوب إلى Sami Hindi. لذلك فإن أي نسخ أو adaptation من كود SupoClip يحتاج مراجعة قانونية لتوافق AGPL-3.0 مع ترخيص المستودع الهدف، وحفظ notices المناسبة، وتحديد corresponding source عند التوزيع. في هذه الدفعة لم تُنسخ أي ملفات source أو binary أو asset من الأرشيف.
 
-## Reference archive review
+| المصدر | الترخيص المرصود | ما استُخدم من المصدر | القرار |
+|---|---|---|---|
+| SupoClip reference ZIP | AGPL-3.0 | مقارنة architecture/UX فقط | لا نسخ؛ الأفكار العامة يعاد تنفيذها مستقلًا. |
+| Target root | كما هو موثق في `LICENSE` | كود المستودع الحالي | يبقى notice الحالي دون تغيير. |
+| Pipeline caption font | notice موجود داخل `pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt` | font asset الحالي | يحتفظ notice المحلي وشروط OFL الخاصة به. |
+| Vendor model/code | notices ومسارات vendor داخل `pipeline/publikclip_pipeline/vendor/` و`VENDORED-LICENSES.md` | الموجود مسبقًا في الهدف | لا تعديل للـnotice؛ أي تحديث يحتاج مراجعة مستقلة. |
+| Android/Gradle/npm dependencies | تراخيص upstream غير منسوخة إلى source | dependencies build-time/runtime | يجب توليد/مراجعة dependency notice عند التوزيع النهائي. |
 
-The archive contains a root `LICENSE` but no separate file-level license notices were found in the supplied top-level, backend, frontend, or MCP inventory. That does not automatically relicense third-party dependencies. The reference lockfiles and manifests identify independent packages whose licenses must be checked from their upstream distributions before any direct reuse.
+## قواعد الدمج
 
-The following reference dependencies were observed during audit but were **not added** to the primary repository: FastAPI, uvicorn, openai-whisper, pydantic-ai, asyncpg, SQLAlchemy, Alembic, yt-dlp, AssemblyAI, MediaPipe, aiofiles, sse-starlette, ARQ, Redis, boto3, Next.js, Prisma, Better Auth, Stripe, Radix UI, MediaBunny, and related packages. Their presence in the archive is not provenance for the primary implementation.
+قبل إدخال dependency أو file من مشروع آخر يجب تحديد license على مستوى repository وfile، وفحص dependency transitive ذات الصلة، وتسجيل copyright/notice، والتحقق من compatibility. إذا كان الترخيص غير واضح أو غير متوافق، لا يُنسخ الكود؛ تُكتب implementation مستقلة مبنية على السلوك العام فقط. لا تُقبل build outputs أو secrets أو model artifacts من مشاريع مرجعية.
 
-## Primary runtime provenance
+## فحص المستودع
 
-The primary pipeline already documents and packages its own dependencies in `pipeline/pyproject.toml`, `gateway/requirements.txt`, and Android Gradle version catalogs. Model downloads remain runtime data and are not committed into the repository. FFmpeg remains an external runtime dependency on the private processing host and is not bundled into the APK.
+تم التفريق بين source المتعقب وملفات build/cache. لا يُعتد بملفات `node_modules` أو Gradle caches كمرجع ترخيص للمشروع، ولا تُضاف إلى Git. يظل `VENDORED-LICENSES.md` وnotices المحلية مصدر المراجعة للمواد الموجودة بالفعل.
 
-## Copying policy
+> هذا سجل هندسي وليس رأيًا قانونيًا. يلزم counsel review قبل توزيع APK أو Gateway مشتق إذا أُضيف كود AGPL أو dependency ذات copyleft متعارض.
 
-No file or code fragment has been copied from the reference archive. The implementation uses independent code in the existing primary repository and records reference-derived ideas as architectural decisions. If future work imports a source component, the contributor must record the exact upstream URL, commit/version, license, notice requirements, files changed, and compatibility review in this document before merging.
+### المراجع
 
-## Secret and artifact policy
+[1]: ../../upload/supoclip-main.zip "Supplied reference archive; not committed"
+[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
+[3]: ../LICENSE "Target license"
+[4]: ../VENDORED-LICENSES.md "Existing vendor notices"
+[5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"
 
-API keys, OAuth tokens, keystores, passwords, model weights, downloaded media, release artifacts, and generated build caches must not be committed. License notices included by existing dependencies must remain intact. A dependency may be introduced only after its license is compatible with project distribution and its operational cost is justified by a tested requirement.
+## References
+
+[1]: https://github.com/FujiwaraChoki/supoclip "Reference project represented by supplied archive"
+[2]: https://github.com/FujiwaraChoki/supoclip "Reference project"
+[3]: ../LICENSE "Target license"
+[4]: ../VENDORED-LICENSES.md "Existing vendor notices"
+[5]: ../pipeline/publikclip_pipeline/captions/fonts/OFL-Anton.txt "Font license notice"

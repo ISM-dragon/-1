@@ -1,23 +1,40 @@
-# Security boundaries
+# Security Boundary
 
-This application is private and single-user, but it still treats the Android APK, Gateway, engine, models, and media storage as separate trust boundaries.
+## نموذج التهديد
 
-## Controls
+المنتج شخصي، لكن الفيديوهات والـtranscripts حساسة. التهديدات الأساسية هي تسريب provider keys، كشف media URLs، anonymous Gateway access، path traversal، رفع ملفات فاسدة أو ضخمة، وترك artifacts في public storage. التصميم يقلل ذلك بفصل Android عن runtime الخاص، وبحصر auth والتخزين والمزودات في Gateway.
 
-| Boundary | Control |
+| الأصل | الحماية المطلوبة |
 |---|---|
-| Android → Gateway | HTTPS in production, non-empty bearer token, bounded timeouts, no Python-module coupling. |
-| Gateway → engine | Validate source/settings, stable facade, safe error conversion, correlation IDs. |
-| Gateway → storage | Safe basenames, resolved-path containment, per-job roots, cleanup of abandoned parts. |
-| Gateway → providers | Server-side keys/vault; redact secrets and authorization headers from logs/responses. |
-| Model/runtime | Verify downloads/checksums before loading; expose health without exposing paths or credentials. |
-| Media serving | Serve only authorized artifacts below the job root; do not expose arbitrary filesystem paths. |
-| Repository/CI | No secrets, keystores, model weights, downloaded media, or generated build caches in Git. |
+| Gateway token | لا يضمّن في source أو APK؛ يُخزن في secure storage ويُمرر عبر HTTPS. |
+| Provider keys | `gateway/secret_vault.py` أو secret manager على الخادم فقط. |
+| Source media | job-private storage، checksum، policy للحجم والصيغة، وretention واضح. |
+| Outputs | media route محمي بـBearer ولا يعيد filesystem path داخليًا. |
+| Job state | SQLite volume دائم مع correlation/request IDs ومنع تعديل state من العميل. |
+| Upload | offset مثبت، SHA-256، filename normalization، ورفض invalid range. |
+| Logs | لا transcripts أو tokens أو command secrets في response/log public. |
+| Deployment | شبكة خاصة أو reverse proxy/VPN، HTTPS، `REQUIRE_GATEWAY_TOKEN=true`، وvolume دائم. |
 
-## Threats addressed
+## قواعد Android
 
-The Gateway validates remote sources and rejects unsafe/reserved network targets according to its existing URL policy. Uploads use declared byte size and SHA-256, resumable offsets, safe filenames, and final media probing. Idempotency prevents duplicate processing when mobile retries a request. Cancellation is persisted so restart recovery cannot resurrect a user-cancelled job.
+لا يحتوي APK على Python أو uv أو pip أو Rust أو Node أو FFmpeg binaries أو model weights أو Gemini key. لا تُضاف صلاحيات واسعة بلا مبرر. يجب طلب `POST_NOTIFICATIONS` عند الحاجة فقط، ونسخ URI إلى `filesDir` بدل منح الخادم وصولًا مباشرًا إلى content provider. يجب مسح الملفات المؤقتة بعد النجاح أو وفق retention policy.
 
-## Deployment requirements
+## قواعد النشر الشخصي
 
-Use a private network or HTTPS reverse proxy, set `REQUIRE_GATEWAY_TOKEN=true`, provide a strong token through environment configuration, restrict source/processing roots, and do not expose provider credentials to Android. Release signing credentials are injected into CI or the local build environment and never committed.
+SQLite وworker واحد مناسبان لمستخدم واحد، لكنهما لا يقدمان horizontal scaling أو multi-tenant isolation. لا يجوز فتح Gateway على الإنترنت العام بلا HTTPS وtoken وreverse proxy مناسب. الأسرار والقيم الإنتاجية توضع في environment/secret manager خارج Git؛ ملفات `.env.example` placeholders فقط.
+
+### المراجع
+
+[1]: ../gateway/secret_vault.py "Gateway secret boundary"
+[2]: ../gateway/main.py "Auth, upload, and media routes"
+[3]: ../android/app/src/main/AndroidManifest.xml "Android permissions"
+[4]: ../.env.example "Example configuration without secrets"
+[5]: ../docker-compose.gateway.yml "Private deployment shape"
+
+## References
+
+[1]: ../gateway/secret_vault.py "Gateway secret boundary"
+[2]: ../gateway/main.py "Auth, upload, and media routes"
+[3]: ../android/app/src/main/AndroidManifest.xml "Android permissions"
+[4]: ../.env.example "Example configuration without secrets"
+[5]: ../docker-compose.gateway.yml "Private deployment shape"

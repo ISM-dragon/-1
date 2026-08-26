@@ -72,27 +72,48 @@ export KEY_PASSWORD='***'
 
 التفاصيل التشغيلية، مصفوفة الصلاحيات، بصمة APK، وقيود اختبار الجهاز موجودة في [`docs/RELEASE.md`](docs/RELEASE.md). يجب أن يكون أي backend مستخدم في الإنتاج خاصاً ومحمياً بـ HTTPS وGateway token، ويجب عدم نقل محرك Python أو أسراره إلى تطبيق Android.
 
-## تحديث 2026-08-26
 
-أُنجز تدقيق المشروع المرجعي `supoclip-main` دون نسخ source code، وسُجلت المقارنة والقرارات وخطة الهجرة في `docs/REFERENCE_COMPARISON.md` و`docs/REFERENCE_MIGRATION_PLAN.md` و`docs/MIGRATION_DECISIONS.md` و`docs/THIRD_PARTY_LICENSES.md`. أضيفت كذلك وثائق API وEngine وAI runtime وMedia runtime وAndroid UI وTest Matrix وPerformance وSecurity.
+## جلسة التدقيق والتجهيز — 2026-08-26
 
-أضيفت طبقة `pipeline/publikclip_pipeline/runtime/` المستقلة: `HardwareInfo` لاكتشاف موارد المضيف، و`MediaManager` لفحص FFmpeg/ffprobe وتنفيذ probe/validation/audio/frame/transcode/render/cleanup بأخطاء مصنفة، و`ModelManager` لتتبع الإصدار والحجم وchecksum والمصدر والمسار وحالة التثبيت والتنزيل القابل للاستئناف والتحميل والتفريغ والحذف. عُرضت هذه الجاهزية في `GET /v1/processing/capabilities` تحت `details.runtime` مع الحفاظ على الحقول القديمة.
+تم فحص `supoclip-main.zip` باعتباره مرجعًا خارجيًا، وفحص بنية المستودع الحالي قبل أي نسخ. المرجع AGPL-3.0 ويحتوي على web stack وBackend متعدد الخدمات؛ لم تُنسخ منه ملفات source أو assets أو secrets أو build outputs. القرار المعتمد هو الاحتفاظ بمسار `android/` + `gateway/` + `pipeline/` كمسار APK canonical، مع استخدام أفكار UX وrubric فقط عبر إعادة تنفيذ مستقلة واختبارات regression.
 
-أضيفت اختبارات regression للوسائط والنماذج وعقد Gateway. نتائج التحقق الحالية: `123 passed` لاختبارات pipeline و`48 passed, 1 skipped` لاختبارات Gateway، و`npm run typecheck` و`npm run build` نجحا. فحص compileall نجح. لم يُنفذ Android Gradle build محليًا لأن Android SDK غير موجود في بيئة التنفيذ؛ CI أصبح يبني debug وunsigned release APK ويرفعهما دون أي مفاتيح سرية.
+تمت إضافة الوثائق المطلوبة التالية: `docs/API.md`, `docs/ENGINE.md`, `docs/AI_RUNTIME.md`, `docs/MEDIA_RUNTIME.md`, `docs/ANDROID_UI.md`, `docs/TEST_MATRIX.md`, `docs/PERFORMANCE.md`, `docs/SECURITY.md`, `docs/THIRD_PARTY_LICENSES.md`, `docs/REFERENCE_COMPARISON.md`, `docs/REFERENCE_MIGRATION_PLAN.md`, و`docs/MIGRATION_DECISIONS.md`. كما أضيف `scripts/verify.sh` لتشغيل Python regression وfrontend build، وتشغيل Android checks تلقائيًا عند توفر SDK.
 
-## الملفات الجديدة/المعدلة في هذه المرحلة
+## Evidence هذه الجلسة
 
-| الملف | التغيير |
-|---|---|
-| `pipeline/publikclip_pipeline/runtime/*` | Runtime managers مستقلون للعتاد والوسائط والنماذج. |
-| `pipeline/publikclip_pipeline/models/registry.py` | Metadata اختيارية متوافقة لخدمة lifecycle. |
-| `pipeline/tests/test_ai_media_runtime.py` | اختبارات regression للـruntime. |
-| `gateway/main.py` | إضافة runtime readiness إلى capabilities. |
-| `gateway/tests/test_web_processing_contract.py` | اختبار contract لحقول readiness. |
-| `.github/workflows/android-build.yml` | إضافة unsigned release assembly وartifact. |
-| `docs/*` | وثائق المقارنة، الحدود، التشغيل، الأمان، الأداء، والاختبارات. |
-| `MANUS_HANDOFF.md` | هذا التحديث. |
+| الفحص | النتيجة |
+|---|---:|
+| `python3 -m pytest -q` | 164 passed، 1 skipped، 4 deprecation warnings |
+| `scripts/verify.sh` | نجح؛ Python وfrontend مرّا، Android skipped بسبب غياب SDK في البيئة الحالية |
+| `npm ci && npm run build` | نجح، 0 vulnerabilities في audit الخاص بـnpm |
+| `bash -n scripts/verify.sh` | PASS |
+| reference license inspection | AGPL-3.0؛ لا code copied |
+| Git status | تغييرات محصورة في الوثائق و`scripts/verify.sh` |
 
-## المتبقي قبل النشر الشخصي
+## Known blockers غير البرمجية
 
-يلزم تشغيل Gateway فعليًا مع Python dependencies والنماذج وFFmpeg، ثم تنفيذ E2E حقيقي من Android إلى upload/job/poll/render/download على جهاز أو محاكي مستقر. يلزم كذلك keystore مملوك للمستخدم إذا كان APK سيُوزع خارج بيئة التطوير. لا توجد ادعاءات بأن social publishing أو Android-local ML أصبحا production-ready ضمن هذا التغيير.
+لا يزال القبول النهائي مشروطًا بتوفير Android SDK/JDK كاملين لبيئة البناء، جهاز Android فعلي أو emulator مستقر لاختبار install/open/picker/process death/export، Gateway خاص عبر HTTPS مع token، مزود ASR/diarization/LLM جاهز، وrelease keystore. لا يُعلن release accepted قبل حفظ job IDs وstage outputs وartifact hashes وscreenshots/logcat لهذه المسارات. هذه القيود موثقة تفصيليًا في `docs/FINAL_ACCEPTANCE.md` و`docs/RELEASE_BLOCKERS.md`.
+
+
+## ملحق جلسة البناء والدمج — 2026-08-26
+
+بعد مزامنة main مع تحديثات remote المتزامنة، حُفظت وثائق التدقيق وملفات الإصدار الأحدث من remote، وأُبقي إصلاح `ApiContractClient` واختباره كإضافة مستقلة. الإصلاح يقرأ `detail` الكائني وقائمة `errors` و`request_id` من Gateway بدل تحويل الكائن إلى نص غير مفيد. كما بقيت ملفات Android الثلاثة المطلوبة للبناء واعتماد MockWebServer موجودة.
+
+| الفحص | النتيجة |
+|---|---:|
+| `python3 -m pytest -q` | 164 passed، 1 skipped |
+| `:app:testDebugUnitTest` | PASS |
+| `:app:lint` | PASS مع تحذيرات deprecated غير مانعة |
+| `:app:assembleRelease` | PASS؛ الناتج unsigned لغياب keystore الإنتاجي |
+| `:app:assembleDebug` | PASS؛ APK Debug موقّع v2 متاح خارج Git |
+| `unzip -t` وAPK badging | PASS؛ package `com.aistudio.opuspro.apk` وSDK 36 |
+
+نسخة release الإنتاجية يجب توقيعها لاحقًا باستخدام keystore خاص عبر متغيرات `KEYSTORE_PATH`, `STORE_PASSWORD`, و`KEY_PASSWORD`. لا تزال اختبارات الجهاز الحقيقي أو emulator المستقر وGateway الخاص ومزودات runtime شروطًا لتجربة end-to-end، وليست مغطاة بالكامل داخل sandbox.
+
+## ملحق التنفيذ المحلي — 2026-08-26
+
+تمت إضافة `pipeline/publikclip_pipeline/runtime/` كحد مستقل لإدارة موارد المضيف والوسائط والنماذج. `MediaManager` يصنف أخطاء `MEDIA_INVALID`, `FFMPEG_MISSING`, `FFMPEG_FAILED`, `UNSUPPORTED_FORMAT`, و`INSUFFICIENT_DISK` ويغطي probe/validation/audio/frame/transcode/render/cleanup. `ModelManager` يسجل name/version/size/checksum/source/local path وحالة installed/loaded، ويدعم verify/download/resume/load/unload/delete. يعرض Gateway الحالة في `GET /v1/processing/capabilities` تحت `details.runtime`، ويعلن `runtime_ready=false` عندما تكون النماذج المطلوبة مفقودة.
+
+تم تحديث عميل Android ليقرأ `runtime_ready` ويعرضه في إعدادات Gateway، مع اختبار عقدي لذلك. أضيف CI assembly لـ`app-release-unsigned.apk` دون أسرار أو keystore. لم تُنسخ أي ملفات أو assets أو secrets من `supoclip-main.zip`؛ المرجع AGPL-3.0 كما يثبت ملف `LICENSE` المرفق، وهو موثق في `docs/THIRD_PARTY_LICENSES.md`.
+
+نتيجة التحقق في هذه الجلسة: `123 passed` لاختبارات pipeline، و`48 passed, 1 skipped` لاختبارات Gateway، و`python3 -m compileall -q pipeline gateway` نجح، و`npm run typecheck` و`npm run build` نجحا بعد `npm ci`. تحقق runtime الفعلي من FFmpeg/ffprobe، واكتشف 6 نماذج معلنة مفقودة وأعاد `runtime_ready=false` كما هو متوقع. محاولة Android Gradle الحالية توقفت لأن Android SDK/`local.properties` غير موجودين في sandbox؛ لذلك لا أضيف ادعاء نجاح بناء Android جديد إلى هذه الجلسة.

@@ -1,28 +1,40 @@
-# Migration decisions
+# سجل قرارات الترحيل
 
-**Decision owner:** Manus AI
-**Date:** 2026-08-26
+**النطاق:** SupoClip reference ZIP مقابل ISM / PublikClip.
 
-| Decision | Outcome | Evidence/constraint |
-|---|---|---|
-| Official Android processing model | Remote Gateway processing | The APK cannot safely embed Python, uv, WhisperX, model caches, or desktop FFmpeg. |
-| Maintained Android client | Native Compose client | Room and WorkManager provide durable lifecycle behavior; the Tauri shell remains compatibility-only. |
-| Engine strategy | Preserve existing stage graph | Existing stages and explainable scoring are more complete than the reference alternatives. |
-| Backend persistence | Keep SQLite + durable worker queue | Appropriate for a personal private backend; avoids unnecessary Redis/Postgres/S3 operations. |
-| API boundary | Versioned `/v1` contract | Android depends on stable JSON projections, not internal pipeline modules. |
-| Media errors | Use typed categories | Invalid media, missing tools, model failures, disk exhaustion, and unsupported formats need distinct recovery UX. |
-| Model management | Server-side metadata and health | Model paths, checksums, installation state, and loading stay off-device. |
-| Captions | Keep Python word-timed ASS render path | Android reviews and exports server-produced clips; it does not silently produce a different canonical result. |
-| Camera | Keep current implementation until benchmarked | A reference camera implementation is not a sufficient reason for replacement. |
-| LLM failure | Degrade or return structured failure | A provider failure must not crash the complete job when a safe fallback exists. |
-| Reference licensing | No source copied | The archive's root license is MIT; dependencies require independent review. The current repository remains AGPL-3.0-or-later. |
-| Social publishing | Out of scope for this migration | Private clip generation is the target; existing social surfaces remain isolated and mock-first where applicable. |
-| Release signing | Environment/CI secret only | No keystore, password, API key, or provider secret may be committed. |
+**تاريخ المراجعة:** 2026-08-26.
 
-## Rejected alternatives
+| القرار | المكوّن أو الفكرة | القرار المطبق | الدليل |
+|---|---|---|---|
+| KEEP_CURRENT | Native Android client | الاحتفاظ بمشروع `android/` كعميل APK canonical | Compose، Room، WorkManager، Media3، وGateway client موجودة في المصدر. |
+| KEEP_CURRENT | Private Gateway | الاحتفاظ بـ`gateway/` كـcontrol plane لمسار Android | يملك auth، upload، SQLite job state، worker، diagnostics، وmedia delivery. |
+| KEEP_CURRENT | PublikClip stages | الاحتفاظ بالـPipeline stages والـcheckpoints | `pipeline/publikclip_pipeline/engine` يعرض contract v1 ويغطي lifecycle والاستئناف. |
+| KEEP_CURRENT | ASR/diarization/media runtime | إبقاء Python/WhisperX/FFmpeg على الخادم الخاص | requirement صريح يمنع تشغيل desktop runtime داخل Android. |
+| IMPROVE_CURRENT | Job lifecycle | توحيد الحالات والتحكم والـtransition history تدريجيًا | يلزم بقاء jobs بعد restart/network loss وعدم إعادة معالجة checkpoint صالح. |
+| IMPROVE_CURRENT | Error handling | جعل error code/retryable/correlation جزءًا من الحدود العامة | يمنع تسرب stack traces ويتيح retry/resume آمنًا. |
+| IMPROVE_CURRENT | Captions | فصل caption state عن render logic وإضافة presets versioned | يحقق karaoke/emphasis/readability دون إعادة transcription. |
+| IMPROVE_CURRENT | Scoring | إضافة rubric أو signals versioned فقط بعد baseline | يحافظ على scoring الحالي ويمنع اعتماد LLM وحيدًا. |
+| ADD_REFERENCE | Editor UX | استعارة trim/split/merge وflow الواضح من الويب كـAndroid UX جديد | لا تُنقل مكونات Next.js أو CSS أو state إلى Kotlin. |
+| ADD_REFERENCE | Caption presets | إضافة أفكار قوالب العرض فقط إذا لم تكسر contract | المرجع غني بالقوالب، لكن التنفيذ يجب أن يظل server/render compatible. |
+| COMBINE | Progress and worker model | Room/WorkManager على Android مع SQLite/worker على Gateway | لكل طرف lifecycle مختلف؛ لا يُستبدل أحدهما بالآخر. |
+| COMBINE | Candidate selection | rubric المرجع كإشارة اختيارية مع scoring الحالي | يسمح بالقياس والرجوع إلى default السابق. |
+| IGNORE_REFERENCE | accounts/billing/subscriptions | عدم نقلها | خارج هدف single-user APK ويزيد attack surface. |
+| IGNORE_REFERENCE | Redis/ARQ topology | عدم إدخالها في Wave الحالية | SQLite + worker واحد كافيان لمستخدم واحد، والتوسع ليس شرطًا حاليًا. |
+| IGNORE_REFERENCE | MCP/social/analytics | إبقاؤها اختيارية ومنفصلة | لا تمنع إنشاء clip ولا ينبغي أن تكون dependency للمسار الأساسي. |
+| MANUAL_REVIEW | Copying code | لا نسخ مباشر من ZIP | المرجع AGPL-3.0؛ أي نقل لاحق يحتاج تحديد file-level notice وتوافق ترخيص. |
+| MANUAL_REVIEW | External model/provider | لا إضافة provider افتراضي جديد | يتطلب مفاتيح، privacy review، cost/performance baseline، وfailure tests. |
+| MANUAL_REVIEW | Tauri generated Android | لا دمج binary أو resources مع native Android | يوجد runtimeان؛ يجب اختيار identity/artifact واحد قبل أي release migration. |
 
-Replacing the entire repository with the supplied archive was rejected because it would discard working pipeline stages, durable state, and existing test evidence. Porting the desktop Python stack directly into Android was rejected because its runtime and model dependencies do not match the Android process model. A broad service stack with billing, multi-user authentication, Redis, PostgreSQL, and S3 was rejected because the requested product is a personal private tool.
+## قرارات غير قابلة للتفاوض
 
-## Review triggers
+لا يُنقل secret أو API key أو model artifact أو build output من المرجع. لا يُستبدل implementation حالي لمجرد اختلاف الحجم أو أسلوب التصميم. لا يُغلق أي blocker إنتاجي اعتمادًا على compilation أو mocks فقط. وأي دمج مستقبلـي يجب أن يضيف regression test وقياسًا عند تأثيره على correctness أو الأداء.
 
-Revisit these decisions only if a real-device benchmark demonstrates that the remote flow is unusable, if a native Android runtime can provide equivalent stage outputs within the device resource budget, or if the product scope explicitly expands to multiple users or public hosting.
+## References
+
+[1]: REFERENCE_COMPARISON.md "Reference comparison"
+[2]: REFERENCE_MIGRATION_PLAN.md "Migration plan"
+[3]: ARCHITECTURE.md "Architecture baseline"
+[4]: CONTRACTS.md "Contracts"
+[5]: ../android/ "Native Android project"
+[6]: ../gateway/ "Private Gateway"
+[7]: ../pipeline/publikclip_pipeline/engine/ "PublikClip Engine"

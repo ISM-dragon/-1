@@ -1,47 +1,46 @@
-# Reference migration plan
+# خطة ترحيل الأفكار المرجعية
 
-**Status:** Approved implementation plan for this repository
-**Date:** 2026-08-26
+**الحالة:** معتمدة للتنفيذ التدريجي، وليست تصريحًا بنسخ المشروع المرجعي.
 
-## Principles
+## المبدأ
 
-The migration is incremental. The existing pipeline remains the source of truth for generated clips. The Android application communicates through a narrow private API and never imports Python internals. Every cross-component change begins with a contract and ends with tests. No stage is replaced solely because a reference implementation is larger or newer.
+المسار المستهدف هو Android APK شخصي يتصل بـPrivate Gateway. ستُرحّل الأفكار التي تخدم هذا المسار فقط، وبحدود عقود واضحة. كل تغيير cross-component يبدأ بتثبيت contract واختبار regression، ثم يُدمج على دفعة صغيرة يمكن التراجع عنها. لا يُسمح بإعادة بناء المشروع من الصفر، ولا بإدخال user accounts أو billing أو Redis أو مزودات جديدة لمجرد مطابقة المرجع.
 
-## Waves
+## الموجات
 
-| Wave | Scope | Exit criteria |
-|---:|---|---|
-| 1 | Audit, comparison, architecture, license review | Required documents exist; ownership and non-goals are explicit. |
-| 2 | Engine, AI/media runtime, Gateway foundations | Stable engine facade, typed errors, runtime readiness, durable job behavior, and regression tests. |
-| 3 | Android core and UI | Remote import, upload, progress, restoration, result review, edit, and export are contract-driven. |
-| 4 | Integration | Android and Gateway agree on source/upload, status, result manifest, cancel, retry, and resume. |
-| 5 | QA and release | Unit/integration/build checks pass; real-device E2E and signing prerequisites are recorded. |
+| الموجة | النطاق | مخرجاتها | بوابة الانتقال |
+|---|---|---|---|
+| Wave 1 — Audit | مقارنة الكود والميزات والتراخيص | هذه المقارنة، قرارات الدمج، وثائق architecture/contracts | لا production replacement قبل اكتمال الوثائق. |
+| Wave 2 — Engine/Runtime | تثبيت Engine facade، lifecycle، media errors، model diagnostics | عقود v1، checkpoints، failure envelope، اختبارات restart/cancel/resume | جميع اختبارات Python الحالية تمر، مع evidence لاختبار failure paths. |
+| Wave 3 — Android Core | upload sessions، Room state، WorkManager، notifications، secure config | APK client لا يعرف Python ولا الأسرار | unit/lint/build، ثم device test على جهاز فعلي. |
+| Wave 4 — Integration | ربط APK بـGateway خاص، تنزيل النتائج، preview/edit/export | E2E من URI إلى artifact | job ID، stage evidence، hashes، وعدم وجود mock في المسار الأساسي. |
+| Wave 5 — Release QA | توقيع، device matrix، network loss، process death، restart/recovery | release APK وrelease evidence | لا تغلق blockers دون دليل تشغيل فعلي. |
 
-## Implementation order
+## ترتيب التغييرات
 
-1. Keep the existing engine stages and formalize the public facade.
-2. Add media and model managers on the processing host, with explicit capability and error reporting.
-3. Keep Gateway SQLite and its persistent worker queue for this single-user deployment.
-4. Treat the Gateway as authoritative for job state, checkpoints, and artifact manifests.
-5. Keep Android local storage limited to imported source copies, job projections, cached results, and user editing state.
-6. Add contract tests before changing payload shapes.
-7. Add Android workflow tests and release-build validation without committing signing keys.
+أولًا، يجب تثبيت `/v1` وعقد `ProcessingEngine` بحيث تظل مراحل `ingest → asr → diarize → events → candidates → score → camera → render` خلف facade واحدة. ثانيًا، يجب تحسين upload/session وdiagnostics دون تغيير سلوك one-shot compatibility route قبل اكتمال العميل. ثالثًا، يجب استكمال Android UX على شكل Home → Import → Generate → Processing → Results → Review → Edit → Render → Export، مع تخزين حالة job في Room واستخدام WorkManager للاستمرار.
 
-## Explicitly deferred
+بعد ذلك فقط تُضاف أفكار المرجع ذات القيمة المحدودة: presets للـcaptions، بيانات rubric واضحة للـscoring، وعمليات trim/split/merge في شاشة التحرير. هذه الإضافات يجب أن تعمل فوق artifacts والعقود الحالية؛ لا يجوز أن تجعل Android يعيد transcription أو يشغل FFmpeg محليًا. أما B-roll، النشر الاجتماعي، MCP، الحسابات، billing، والـmulti-user فخارج هذه الخطة.
 
-Native WhisperX/diarization parity, Android-local active-speaker detection, full ASS renderer parity on-device, live social publishing, billing, multi-user accounts, and cloud storage are deferred. They require independent benchmarks, provider reviews, or infrastructure decisions and are not prerequisites for a private remote-processing APK.
+## ضوابط الترحيل
 
-## Rollback strategy
-
-Changes are grouped into focused commits. If runtime capability probing causes compatibility issues, the Gateway can fall back to the existing contract-level checks while retaining typed error responses. If Android UI changes fail, the existing Compose screens remain available because the remote client and worker are isolated from the presentation layer.
-
-## Ownership boundaries
-
-| Owner | Paths |
+| الخطر | الضابط |
 |---|---|
-| Engine/runtime | `pipeline/publikclip_pipeline/engine`, `pipeline/publikclip_pipeline/runtime`, related tests |
-| Gateway | `gateway`, Gateway tests, deployment docs |
-| Android | `android`, Android tests, Android README |
-| Documentation | `docs`, `MANUS_HANDOFF.md` |
+| كسر checkpoints القديمة | قراءة legacy envelopes، وكتابة versioned envelopes، واختبار resume من كل stage. |
+| اختلاف نتائج scoring | إطلاق rubric versioned وتسجيله في job metadata، ثم مقارنة النتائج قبل تغيير default. |
+| تضخم APK | فحص APK archive يمنع Python/uv/Node/Rust/FFmpeg والنماذج والأسرار. |
+| فقد upload عند انقطاع الشبكة | offset + SHA-256 + idempotency key، واختبار interruption/resume. |
+| تسرب الأسرار | provider keys في Gateway فقط، وAndroid لا يستقبل إلا capability/result آمنًا. |
+| التباس بين Android native وTauri Android | artifact واحد وapplication ID واحد للمسار الشخصي؛ Tauri يبقى مسارًا منفصلًا. |
+| نسخ ترخيص غير واضح | إعادة التنفيذ المستقل عند أي غموض، وإضافة سجل إلى `THIRD_PARTY_LICENSES.md` قبل الدمج. |
 
-Cross-boundary changes must update the relevant contract documentation and regression tests in the same change set.
+## معايير التراجع
+
+يُلغى التغيير إذا أدى إلى فشل في build أو regression suite، أو زاد زمن المعالجة/الذاكرة دون evidence، أو غيّر output السابق دون versioning، أو احتاج dependency غير متوافقة مع Android/ترخيص المشروع، أو جعل failure في LLM أو FFmpeg يسبب crash بدل error قابل للفحص.
+
+## References
+
+[1]: REFERENCE_COMPARISON.md "Comparison and decisions"
+[2]: ARCHITECTURE.md "Canonical topology and ownership"
+[3]: CONTRACTS.md "Public API and engine contracts"
+[4]: FINAL_ACCEPTANCE.md "Evidence-based acceptance matrix"

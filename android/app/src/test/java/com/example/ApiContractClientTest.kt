@@ -3,6 +3,7 @@ package com.example
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.contract.ApiContractClient
+import com.example.data.contract.ApiContractException
 import com.example.data.contract.ClipArtifact
 import com.example.data.model.GatewayConfig
 import com.example.data.contract.ProcessingRequest
@@ -42,6 +43,9 @@ class ApiContractClientTest {
             }
         }
         server.createContext("/v1/processing/jobs/proc_test/cancel") { exchange -> respond(exchange, "{\"id\":\"proc_test\",\"status\":\"cancelled\",\"state\":\"CANCELLED\"}") }
+        server.createContext("/v1/processing/jobs/proc_error") { exchange ->
+            respondStatus(exchange, 422, "{\"detail\":{\"code\":\"MEDIA_INVALID\",\"message\":\"Uploaded file is not a readable video.\"},\"request_id\":\"req_media_1\"}")
+        }
         server.createContext("/clip.mp4") { exchange -> respond(exchange, "real-mp4-bytes", "video/mp4") }
         server.start()
         client = ApiContractClient(ApplicationProvider.getApplicationContext<android.content.Context>().contentResolver)
@@ -64,16 +68,37 @@ class ApiContractClientTest {
     fun `artifact download is persisted as a non-empty file`() = runBlocking<Unit> {
         val config = GatewayConfig("http://127.0.0.1:${server.address.port}", "token")
         val target = Files.createTempFile("ism-clip", ".mp4").toFile()
-        val artifact = ClipArtifact("clip_1", "Demo", "http://127.0.0.1:${server.address.port}/clip.mp4", 0, 5, 5, 80, "", "clip.mp4")
+        val artifact = ClipArtifact("clip_1", "Demo", "http://127.0.0.1:${server.address.port}/clip.mp4", 0, 5, 5, 80, "", "clip.mp4", "04b8ccc5f19b8f3bed371fec98c184d98aaa78c33fa08b2015cfe3c453bd706f")
         assertTrue(client.download(config, artifact, target).isSuccess)
         assertTrue(target.length() > 0)
         target.delete()
     }
 
     @Test
+    fun `object error detail is parsed into a stable api error`() = runBlocking<Unit> {
+        val config = GatewayConfig("http://127.0.0.1:${server.address.port}", "token")
+        val failure = client.getJob(config, "proc_error").exceptionOrNull()
+        require(failure is ApiContractException)
+        assertEquals("MEDIA_INVALID", failure.apiError.code)
+        assertEquals("Uploaded file is not a readable video.", failure.apiError.message)
+        assertEquals("req_media_1", failure.apiError.requestId)
+        assertTrue(!failure.apiError.retryable)
+    }
+
+    @Test
+    fun `artifact download rejects a checksum mismatch`() = runBlocking<Unit> {
+        val config = GatewayConfig("http://127.0.0.1:${server.address.port}", "token")
+        val target = Files.createTempFile("ism-clip-bad", ".mp4").toFile()
+        val artifact = ClipArtifact("clip_bad", "Bad", "http://127.0.0.1:${server.address.port}/clip.mp4", 0, 5, 5, 80, "", "clip.mp4", "0".repeat(64))
+        assertTrue(client.download(config, artifact, target).isFailure)
+        assertTrue(!target.exists() || target.length() == 0L)
+        target.delete()
+    }
+
+    @Test
     fun `json mapper keeps fractional progress and artifact manifest`() {
         val payload = JSONObject("""
-            {"id":"p1","state":"COMPLETED","fraction":1,"artifacts":[{"id":"c1","title":"Hook","url":"https://cdn/clip.mp4","start":2,"end":12,"duration":10,"score":91}]}
+            {"id":"p1","state":"COMPLETED","fraction":1,"artifacts":[{"id":"c1","title":"Hook","url":"https://cdn/clip.mp4","start":2,"end":12,"duration":10,"score":91,"sha256":"04b8ccc5f19b8f3bed371fec98c184d98aaa78c33fa08b2015cfe3c453bd706f"]}
         """.trimIndent()).toJobResource()
         assertEquals(100, payload.progress)
         assertEquals(1, payload.artifacts.size)
@@ -81,9 +106,13 @@ class ApiContractClientTest {
     }
 
     private fun respond(exchange: com.sun.net.httpserver.HttpExchange, body: String, contentType: String = "application/json") {
+        respondStatus(exchange, 200, body, contentType)
+    }
+
+    private fun respondStatus(exchange: com.sun.net.httpserver.HttpExchange, status: Int, body: String, contentType: String = "application/json") {
         val bytes = body.toByteArray()
         exchange.responseHeaders.add("Content-Type", contentType)
-        exchange.sendResponseHeaders(200, bytes.size.toLong())
+        exchange.sendResponseHeaders(status, bytes.size.toLong())
         exchange.responseBody.use { it.write(bytes) }
     }
 }

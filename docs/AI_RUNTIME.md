@@ -1,29 +1,44 @@
-# AI runtime
+# AI Runtime
 
-All heavyweight AI execution is owned by the private processing host. The Android APK receives progress and validated results; it does not carry Python ML dependencies or provider secrets.
+**المكان:** Private Gateway/AI host فقط.
 
-## Components
+لا يحتوي APK على Python أو WhisperX أو PyTorch أو provider keys أو model weights. يحتفظ الخادم الخاص بسجل المزودات، وmodel cache، وdiagnostics، ويعرض للعميل readiness وerrors آمنة فقط.
 
-| Capability | Canonical runtime | Android responsibility |
-|---|---|---|
-| ASR and word alignment | WhisperX/VAD/alignment stages in the Python pipeline | Display transcript and caption preview. |
-| Diarization | Python diarization stage | Display speaker-aware results when returned. |
-| Audio events | Laughter, energy, arousal, and related event stages | No duplicate transcription or event inference. |
-| Text/vision scoring | Gateway-configured provider router and pipeline scoring | Display score, confidence, provenance, and fallback state. |
-| Face/camera signals | Python camera and visual analysis stages | Review crop/result; no silent local replacement. |
+## نموذج السجل
 
-## Model metadata
+| الحقل | الغرض |
+|---|---|
+| `name` | الاسم المنطقي للنموذج أو المزود. |
+| `version` | تثبيت reproducible للنتائج. |
+| `size_bytes` | التحقق من disk budget. |
+| `sha256` | منع model corruption أو substitution. |
+| `source` | مصدر التنزيل أو artifact registry. |
+| `local_path` | مسار خاص بالخادم، ولا يخرج إلى العميل. |
+| `installed` | هل الملفات كاملة ومتحقق منها؟ |
+| `health` | `ready`, `missing`, `invalid`, أو `unavailable`. |
 
-Each managed model should have a name, version, size, checksum, source, local path, installed state, health, and last verification time. Downloads must be resumable and verified before use. A missing or corrupt model produces `MODEL_MISSING` or `MODEL_INVALID`; it must not be reported as a generic crash.
+## الحدود التشغيلية
 
-## Provider failure policy
+تبدأ الخدمة بفحص FFmpeg/ffprobe، مساحة التخزين، قابلية كتابة job directory، ووجود ASR/diarization models. عند اختيار Gemini أو Ollama يجب أن تعيد diagnostics سببًا قابلًا للفهم. لا يبدأ job جديد إذا كان provider المطلوب غير جاهز، ولا يحوّل هذا الوضع إلى 500 غامض أو crash.
 
-A provider is selected by task capability, health, configuration, cost/latency policy, and explicit fallback order. A failed LLM request must either use a safe deterministic/local fallback or return a structured degraded result. A mock success response is not acceptable in production processing.
+يجب أن يكون model download قابلًا للاستئناف والتحقق والحذف الآمن. تحميل النموذج أو provider client يكون lazy ومخزنًا في cache لتجنب reload لكل job. تُقاس أزمنة ASR وdiarization وscoring واستهلاك RAM/VRAM قبل أي optimization.
 
-## Readiness
+## Scoring وfallback
 
-Gateway readiness distinguishes configuration from runtime verification. A configured provider key is not proof that the provider is reachable, and a present pipeline directory is not proof that every heavy import/model is healthy. Capability responses must expose the distinction so Android can show an actionable operator message.
+يبقى scoring الحالي هو الأساس. يمكن للـLLM أن يضيف hook/value/shareability signals أو تفسيرًا، لكنه لا يحتكر صحة النتيجة. عند network/provider failure، يستخدم المحرك fallback rubric أو signal-based scoring عندما يكون متاحًا، ويسجل `provider_status`, `rubric_version`, و`confidence` في metadata. لا تُرسل transcript أو media إلى provider إلا وفق إعداد مالك Gateway.
 
-## Privacy
+### المراجع
 
-Provider keys, model caches, and raw media stay on the private processing host. Logs redact authorization headers, credentials, and private filesystem paths. The Android app stores only the private Gateway session configuration required to use the service.
+[1]: ../gateway/provider_registry.py "Provider registry and health"
+[2]: ../gateway/secret_vault.py "Gateway-owned secrets"
+[3]: ../pipeline/publikclip_pipeline/insights/ "Scoring and calibration"
+[4]: ../pipeline/publikclip_pipeline/asr/ "ASR runtime"
+[5]: ../docs/FINAL_ACCEPTANCE.md "Observed readiness blockers"
+
+## References
+
+[1]: ../gateway/provider_registry.py "Provider registry and health"
+[2]: ../gateway/secret_vault.py "Gateway-owned secrets"
+[3]: ../pipeline/publikclip_pipeline/insights/ "Scoring and calibration"
+[4]: ../pipeline/publikclip_pipeline/asr/ "ASR runtime"
+[5]: FINAL_ACCEPTANCE.md "Observed readiness blockers"

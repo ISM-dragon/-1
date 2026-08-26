@@ -1,25 +1,34 @@
-# Performance baseline
+# Performance Baseline
 
-Optimization is evidence-driven. Before a large change, capture a representative short, long, and multi-speaker fixture on the private processing host.
+**الحالة:** القياس جزء من release evidence؛ لا توجد أرقام production جديدة في هذه الجلسة لأن نماذج المعالجة وجهاز Android الفعلي غير متاحين.
 
-## Measurements
+## المقاييس المطلوبة
 
-| Metric | Measurement point |
-|---|---|
-| Total processing time | Job creation to validated final manifest. |
-| ASR time | ASR stage start/end. |
-| Diarization time | Diarization stage start/end. |
-| Events/scoring time | Event and scoring stage start/end. |
-| Camera time | Camera stage start/end. |
-| Render time | FFmpeg invocation and final probe. |
-| CPU/RAM/GPU | Host-level process/resource samples per stage. |
-| Disk | Source, checkpoint, temporary, and output peaks. |
-| Android upload/download | Bytes, elapsed time, retries, and battery/network behavior. |
+| المكوّن | المقياس | طريقة القياس | معيار المقارنة |
+|---|---|---|---|
+| End-to-end | total processing time | timestamps من create إلى artifact verified | حسب مدة/دقة المصدر وmode. |
+| ASR | ASR wall time وRTF | stage timestamps ومدة الفيديو | baseline لكل model/version. |
+| Diarization | stage wall time وRAM peak | process metrics | مقارنة قبل/بعد model cache. |
+| Scoring | زمن signals وLLM | provider latency وfallback count | لا تضحى correctness لخفض latency. |
+| Camera | تحليل frames وcrop smoothing | stage timing وعدد frames | ثبات framing وغياب jitter. |
+| Render | render time وoutput size | FFmpeg logs وartifact metadata | bitrate/resolution/preset ثابت. |
+| Server | CPU/RAM/VRAM/disk | host metrics لكل job | منع OOM وdisk exhaustion. |
+| Android | upload throughput وbattery وcache size | WorkManager/device logs | لا ينهار job عند process death أو network loss. |
 
-## Operating constraints
+## قواعد benchmark
 
-The Android client must not load the desktop ML graph or model weights. Uploads are resumable and bounded. The Gateway uses a bounded worker queue so a personal host does not start unbounded model processes. Model caching avoids repeated downloads/loads where supported.
+يُستخدم source ثابت ومجموعة إعدادات ثابتة، ويُسجل commit وmodel versions وFFmpeg version وhardware. تُقارن النتيجة مع baseline لا مع انطباع بصري. أي optimization يجب أن تثبت فائدتها في الزمن أو الذاكرة أو الاستقرار، مع إبقاء output correctness وcaption timing وcamera framing ضمن regression checks.
 
-## Acceptance rule
+### المراجع
 
-An optimization is accepted only if it improves the measured target without reducing result correctness, reliability, or recoverability. Any change that increases peak memory or disk consumption must document the new bound and failure behavior.
+[1]: ../evidence/environment.md "Environment evidence"
+[2]: ../docs/FINAL_ACCEPTANCE.md "Current acceptance limitations"
+[3]: ../pipeline/publikclip_pipeline/ "Pipeline runtime"
+[4]: ../gateway/processing_service.py "Stage execution bridge"
+
+## References
+
+[1]: ../evidence/environment.md "Environment evidence"
+[2]: FINAL_ACCEPTANCE.md "Current acceptance limitations"
+[3]: ../pipeline/publikclip_pipeline/ "Pipeline runtime"
+[4]: ../gateway/processing_service.py "Stage execution bridge"

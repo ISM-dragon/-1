@@ -1,65 +1,91 @@
-# Private processing API
+# API Reference — Private Processing Gateway
 
-**Contract version:** `/v1`
-**Audience:** native Android client and private Gateway operators
+**الإصدار:** `/v1`.
 
-## Boundary
+**الجمهور:** Android personal client وعميل smoke/E2E، وليس API عامًا متعدد المستخدمين.
 
-The Android client sends a bearer Gateway token and treats the Gateway as the authoritative source of job state. The client may persist a local projection for offline display, but it must reconcile that projection with the server before offering resume, retry, or export.
+## الحدود والمصادقة
 
-## Common response fields
+يستخدم العميل `Authorization: Bearer <gateway-token>` مع `X-Request-ID` اختياريًا و`X-Device-ID` عند تفعيل device binding. لا تُرسل مفاتيح Gemini أو AssemblyAI أو أي provider إلى Android. يجب تشغيل Gateway خلف HTTPS أو شبكة خاصة؛ قيمة `localhost` مخصصة للاختبار المحلي فقط.
 
-| Field | Type | Meaning |
+| المجموعة | المسارات الأساسية | الغرض |
 |---|---|---|
-| `job_id` | string | Stable immutable processing identity. |
-| `state` | string | `QUEUED`, `RUNNING`, `CANCEL_REQUESTED`, `CANCELLED`, `FAILED`, or `COMPLETED`; stage-specific states may be exposed for compatibility. |
-| `stage` | string | Current pipeline stage: `ingest`, `asr`, `diarization`, `events`, `candidates`, `scoring`, `camera`, or `render`. |
-| `fraction` | number | Server-reported progress in the inclusive range 0–1. |
-| `message` | string | User-safe status text. |
-| `recoverable` | boolean | Whether retry/resume may be offered. |
-| `retry_count` | integer | Number of persisted attempts. |
-| `error_code` | string or null | Stable machine-readable error category. |
-| `correlation_id` | string or null | Diagnostic identifier safe to show in support logs. |
+| Health | `GET /health`, `GET /ready`, `GET /v1/diagnostics` | فحص الخدمة والـruntime والمزودات. |
+| Upload | `POST /v1/sources/uploads`, `PUT /v1/sources/uploads/{id}`, `POST /v1/sources/uploads/{id}/complete` | رفع resumable مع offset وSHA-256. |
+| Processing | `POST /v1/processing/jobs`, `GET /v1/processing/jobs/{id}` | إنشاء job idempotently وقراءة الحالة. |
+| Controls | `POST /v1/processing/jobs/{id}/cancel`, `/retry`, `/resume` | إلغاء، إعادة محاولة، أو استئناف checkpoint صالح. |
+| Results | `GET /v1/processing/jobs/{id}/results`, `GET /v1/processing/jobs/{id}/media/{filename}` | نتائج آمنة وتنزيل artifacts بعد التحقق. |
 
-## Endpoints
+## إنشاء job
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/health` | Unauthenticated liveness/readiness summary. |
-| `GET` | `/v1/auth/session` | Validate the configured private token session. |
-| `GET` | `/v1/processing/capabilities` | Check Gateway, pipeline, FFmpeg, storage, and optional provider readiness. |
-| `POST` | `/v1/sources/uploads` | Initialize a resumable upload using filename, byte size, and SHA-256. |
-| `PATCH` | `/v1/sources/uploads/{upload_id}` | Append a chunk at the expected byte offset. |
-| `POST` | `/v1/sources/uploads/{upload_id}/complete` | Validate and finalize the uploaded media. |
-| `POST` | `/v1/processing/jobs` | Create a job from a remote URL or finalized upload URL. |
-| `GET` | `/v1/processing/jobs/{job_id}` | Read the current durable job projection. |
-| `POST` | `/v1/processing/jobs/{job_id}/cancel` | Persist cancellation and interrupt active execution. |
-| `POST` | `/v1/processing/jobs/{job_id}/retry` | Start a bounded new attempt when recoverable. |
-| `POST` | `/v1/processing/jobs/{job_id}/resume` | Resume using valid stage checkpoints. |
-| `GET` | `/v1/processing/jobs/{job_id}/results` | Read the validated clip manifest. |
-| `GET` | `/v1/processing/jobs/{job_id}/media/{filename}` | Download an authorized artifact inside the job directory. |
+يرسل العميل مصدرًا مكتملًا وخيارات المعالجة و`idempotency_key`. تعيد الخدمة job id وحالة `QUEUED` أو نتيجة reused عند تكرار المفتاح. القيم الحالية لـ`llm` هي `gemini` و`ollama`، والقيم الحالية لـ`mode` هي `fast`, `balanced`, `quality`, و`maximum`.
 
-## Source creation
+```json
+{
+  "source": "upl_01H...",
+  "llm": "gemini",
+  "mode": "balanced",
+  "captions": "classic",
+  "idempotency_key": "android-device-01-upl-01H..."
+}
+```
 
-A remote source submission uses `source_type=remote_url` and a validated HTTPS URL. A local Android video uses the resumable upload endpoints first; the Gateway returns a private source URL that is then referenced by the processing job. The Android app never sends a `content://` URI to the Gateway.
+## الحالة والنتائج
 
-## Result manifest
+الحالة server-side durable، بينما يعرض Android snapshot محليًا عند انقطاع الشبكة. الحالة التوافقية هي `queued`, `running`, `done`, `failed`، مع حالات تفصيلية مثل `CANCELLED`, `INTERRUPTED`, و`RETRY_WAIT`. كل response يجب أن يضم `request_id` و`correlation_id` عندما تكون الخدمة جاهزة لذلك.
 
-Each output contains `id`, `title`, `start`, `end`, `duration`, `transcript`, `score`, `media_url`, and, when available, score provenance and caption metadata. Missing optional metadata is represented as `null`; the client must not invent timestamps or scores.
+```json
+{
+  "job_id": "proc_01H...",
+  "status": "running",
+  "state": "DIARIZING",
+  "stage": "diarize",
+  "fraction": 0.42,
+  "message": "Processing audio",
+  "retry_count": 0,
+  "recoverable": true,
+  "results": null
+}
+```
 
-## Error mapping
+لا يخرج filesystem path داخلي في response النهائي. يعيد Gateway `media_url` محميًا أو مسارًا نسبيًا يُطلب بنفس Bearer، ويتحقق من وجود الملف، ونوعه، وحجمه، وSHA-256 قبل إتاحته.
 
-| Code | Meaning | Suggested client behavior |
-|---|---|---|
-| `MEDIA_INVALID` | Source cannot be probed or has no video stream | Ask for another file. |
-| `UNSUPPORTED_FORMAT` | Container/codec is not accepted | Transcode locally only if explicitly supported, otherwise ask for another file. |
-| `FFMPEG_MISSING` | Processing host lacks FFmpeg/ffprobe | Operator action; show Gateway degraded. |
-| `FFMPEG_FAILED` | FFmpeg command failed | Offer retry; preserve correlation ID. |
-| `MODEL_MISSING` / `MODEL_INVALID` | Required model is absent or corrupt | Operator/model-manager action; do not retry indefinitely. |
-| `INSUFFICIENT_DISK` | Storage threshold was exceeded | Operator cleanup action, then retry. |
-| `NETWORK_UNAVAILABLE` | Client or Gateway connection failed | WorkManager retry with backoff. |
-| `JOB_CANCELLED` | Cancellation was persisted | Stop polling and show cancelled state. |
+## Error envelope
 
-## Idempotency and recovery
+```json
+{
+  "error": {
+    "code": "PIPELINE_UNAVAILABLE",
+    "message": "The processing engine is not ready.",
+    "request_id": "req_01H...",
+    "correlation_id": "cor_01H...",
+    "retryable": true
+  }
+}
+```
 
-Job creation accepts an idempotency key. Repeating a request with the same key returns the existing immutable job rather than creating duplicate processing. On application restart, Android restores its local job projection and schedules reconciliation. On Gateway restart, non-terminal jobs are requeued unless cancellation was already persisted; valid checkpoints are reused.
+| HTTP | أمثلة code | سلوك Android |
+|---:|---|---|
+| 400/422 | `VALIDATION_ERROR`, `MEDIA_INVALID`, `UNSUPPORTED_FORMAT` | عرض رسالة قابلة للإصلاح دون retry تلقائي. |
+| 401/403 | `UNAUTHORIZED`, `DEVICE_REQUIRED` | إيقاف الطلب وطلب تصحيح إعداد Gateway. |
+| 404 | `JOB_NOT_FOUND`, `MEDIA_NOT_FOUND` | تحديث Room وحذف المرجع غير الصالح. |
+| 409 | `OFFSET_MISMATCH`, `JOB_BUSY`, `JOB_NOT_RESUMABLE` | قراءة الحالة الحالية ثم متابعة المسار المناسب. |
+| 413 | `UPLOAD_TOO_LARGE` | إظهار policy الحد الأقصى. |
+| 429 | `WORKER_BUSY`, `RATE_LIMITED` | احترام backoff و`Retry-After`. |
+| 500–504 | `PIPELINE_FAILED`, `PROVIDER_UNAVAILABLE`, `STORAGE_UNAVAILABLE` | retry/resume فقط عندما يعلن `retryable=true`. |
+
+### المراجع
+
+[1]: CONTRACTS.md "Detailed contract shapes"
+[2]: ../gateway/main.py "Gateway routes"
+[3]: ../gateway/job_state.py "Durable job state"
+[4]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Android HTTP client"
+[5]: ../docs/FINAL_ACCEPTANCE.md "Acceptance evidence"
+
+## References
+
+[1]: CONTRACTS.md "Detailed contract shapes"
+[2]: ../gateway/main.py "Gateway routes"
+[3]: ../gateway/job_state.py "Durable job state"
+[4]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Android HTTP client"
+[5]: FINAL_ACCEPTANCE.md "Acceptance evidence"

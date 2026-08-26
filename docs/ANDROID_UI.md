@@ -1,27 +1,45 @@
-# Android UI and lifecycle
+# Android UI وClient Responsibilities
 
-The Android experience is intentionally mobile-first and personal. It does not replicate the desktop navigation tree or expose SaaS concepts.
+**الهدف:** APK شخصي خفيف أمام Gateway خاص.
 
-## Primary flow
+## المسار الرئيسي
 
 ```text
-Home → Import → Generate → Processing → Results → Clip Review → Edit → Render → Export
+Home → Import → Generate → Processing → Results
+     → Clip Review → Edit → Render → Export
 ```
 
-Home shows the last project and connection status. Import uses Android Photo Picker/GetContent and copies the selected URI into app-private storage before background work begins. Processing shows server-reported stage/progress and supports cancel. Results lists the returned clip manifest. Review previews one clip and exposes trim/caption/style intent. Render asks the Gateway for the canonical output. Export saves/downloads the validated artifact to a user-visible destination.
+تختار شاشة Import فيديو من Photo Picker أو URI مدعوم، وتنسخه إلى app-private storage قبل جدولة الرفع. شاشة Generate تجمع خيارات آمنة مثل mode وcaption preset؛ لا تعرض provider secrets. شاشة Processing تعرض state وstage وfraction من Gateway مع حالة offline/reconnecting، وتسمح بالإلغاء عندما يكون job قابلًا لذلك. Results وClip Review تعرضان metadata والـpreview، ثم تحفظ شاشة Edit تغييرات trim/caption/framing كطلب render جديد أو update مقيد. Export ينزل artifact ويتحقق من bytes قبل عرضه عبر Android media/share APIs.
 
-## Lifecycle requirements
-
-| Event | Required behavior |
+| مسؤولية Android | ما يجب ألا يفعله |
 |---|---|
-| Activity closes | Work continues through WorkManager; state is in Room/local store. |
-| Process death | On next launch, restore the local projection and reconcile with Gateway. |
-| Network loss | Keep the job, show reconnect state, and retry with bounded exponential backoff. |
-| Gateway restart | Poll the same immutable job ID; server recovery requeues resumable work. |
-| User cancellation | Persist cancellation locally and remotely; do not silently requeue. |
-| Recoverable failure | Offer retry/resume with the stored correlation ID and error category. |
-| Completed job | Keep the manifest and downloaded clips available for review/export. |
+| اختيار الفيديو والوصول إلى URI | تمرير `content://` إلى الخادم باعتباره filesystem path. |
+| نسخ المصدر والتحقق من الحجم | الاحتفاظ بمصدر أو نتيجة في public storage بلا حاجة. |
+| upload/poll/control عبر Gateway | استيراد Python internal modules أو تشغيل FFmpeg server binary. |
+| Room job state وWorkManager | افتراض أن Activity أو process سيبقى حيًا أثناء المعالجة. |
+| foreground notification وطلب `POST_NOTIFICATIONS` | إنشاء progress وهمي أو إعلان completion قبل server state. |
+| preview/cache/export | عرض path داخلي أو URL غير محمي. |
 
-## Security and accessibility
+## الاستمرار والـprocess death
 
-The client must not display or log bearer tokens. It must provide readable status text, clear error categories, progress that reflects the server rather than animation, touch targets appropriate for mobile, and an explicit connection/settings surface for the private Gateway.
+يحتفظ Room بـ`remoteGatewayJobId` وupload offset وstate وlast error. يستخدم WorkManager unique work، وnetwork constraint، وbackoff. عند إغلاق التطبيق يعاد إنشاء observer من Room، ثم يقرأ الحالة من Gateway؛ لا تبدأ مهمة ثانية إذا بقي `idempotency_key` نفسه. عند فشل الشبكة يحتفظ العميل بآخر snapshot ويعرض reconnecting، ثم يستأنف upload أو polling من offset/status.
+
+## الهوية والصلاحيات
+
+الـapplication ID الحالي هو `com.aistudio.opuspro.apk`. يُطلب أقل قدر من الصلاحيات، مع foreground service type `dataSync` للمهام الطويلة و`POST_NOTIFICATIONS` على Android 13+. يُخزّن Gateway token في secure storage خارج Room plain text. لا يُستخدم Tauri-generated Android runtime كبديل صامت للمشروع native.
+
+### المراجع
+
+[1]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Background work"
+[2]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Gateway client"
+[3]: ../android/app/src/main/java/com/example/data/repository/OpusRepository.kt "Room/repository flow"
+[4]: ../android/app/src/main/AndroidManifest.xml "Permissions and service declaration"
+[5]: ../android/app/src/main/java/com/example/MainActivity.kt "Android entry point"
+
+## References
+
+[1]: ../android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Background work"
+[2]: ../android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt "Gateway client"
+[3]: ../android/app/src/main/java/com/example/data/repository/OpusRepository.kt "Room/repository flow"
+[4]: ../android/app/src/main/AndroidManifest.xml "Permissions and service declaration"
+[5]: ../android/app/src/main/java/com/example/MainActivity.kt "Android entry point"

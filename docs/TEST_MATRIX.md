@@ -1,23 +1,42 @@
-# Test matrix
+# Test Matrix
 
-| Scenario | Layer | Expected result | Evidence |
-|---|---|---|---|
-| Normal short video | Pipeline/Gateway/Android | Job reaches completed and returns validated MP4 manifest. | Requires configured runtime for full E2E. |
-| Long or large video | Gateway/storage | Upload and processing remain bounded; disk errors are classified. | Gateway tests and host benchmark. |
-| No audio | Media/ASR | Media is rejected or ASR fallback is explicit; no unhandled crash. | Pipeline regression tests. |
-| Broken media | Gateway/media | `MEDIA_INVALID` or `UNSUPPORTED_FORMAT`. | Upload/media tests. |
-| Multiple speakers | Pipeline | Diarization/camera stages preserve speaker metadata. | Pipeline tests and fixture. |
-| Fast speech | Pipeline/ASR | Word timing remains valid or the job fails safely. | ASR tests. |
-| Missing model | Runtime/Gateway | Capability is degraded; job returns `MODEL_MISSING`. | Runtime tests. |
-| Missing FFmpeg | Runtime/Gateway | Capability is degraded; job returns `FFMPEG_MISSING`. | Gateway tests. |
-| LLM unavailable | Scoring | Safe fallback or structured degraded score. | Provider/scoring tests. |
-| Cancellation | Gateway/Android | State reaches `CANCELLED` and is not resurrected by restart. | Gateway state tests and Android worker tests. |
-| Resume | Engine/Gateway/Android | Valid checkpoints are reused; job ID remains stable. | Queue/checkpoint tests. |
-| Gateway restart | Gateway | Non-terminal non-cancelled jobs are requeued. | Restart recovery evidence. |
-| Network interruption | Android/Gateway | WorkManager retries; no duplicate job from the idempotency key. | Client contract tests. |
-| Android process death | Android | Room/local store restores job and worker reconciliation. | Device/instrumentation test required. |
-| Rendering failure | Pipeline/Gateway | `FFMPEG_FAILED` or render error is persisted with recoverability. | Render tests. |
-| Release assembly | Android/CI | APK assembles without secrets; signing is injected only when configured. | Gradle build evidence. |
-| Secret scan | Repository | No keys, tokens, keystores, or generated media are committed. | Git/CI checks. |
+**قاعدة القبول:** compilation وحده لا يثبت اكتمال feature. يجب ربط كل PASS بدليل قابل لإعادة الفحص، ولا تُحتسب mocks كدليل production.
 
-A compilation-only result is not acceptance. Real-device E2E remains a release gate because the current sandbox may not provide a stable Android SDK/emulator or a configured model/FFmpeg host.
+| الفئة | السيناريو | الاختبار/الدليل الحالي | الحالة |
+|---|---|---|---:|
+| Build | Frontend typecheck وVite build | `npm run build` | PASS |
+| Python | Gateway + pipeline regression | `python3 -m pytest -q` | PASS: 164، skipped: 1 |
+| Engine | lifecycle/checkpoints/progress | `pipeline/tests/test_engine.py`, `test_queue.py` | PASS |
+| Media | invalid/corrupt source | `gateway/tests/test_media_lifecycle.py`, smoke evidence | PASS |
+| Failure | missing provider/model/FFmpeg/render | targeted failure suite | PASS للـclassification، لا يثبت production readiness |
+| Resilience | Gateway restart | `evidence/gateway_restart_recovery.json` | PASS جزئيًا على Gateway |
+| Resilience | network loss/recovery | `evidence/network_loss_observation.json` و`network_loss_recovery.json` | PASS جزئيًا على Gateway |
+| Control | active cancel | `evidence/active_cancel.json` | PASS على Gateway |
+| Control | retry/resume | retry evidence وcontract tests | PASS جزئيًا؛ لا يثبت E2E من Android |
+| Android | unit tests | `:app:testDebugUnitTest` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Android | lint | `:app:lint` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Android | release assembly | `:app:assembleRelease` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
+| Device | install/open/picker/preview/export | ADB device + screenshots/logcat | BLOCKED: لا جهاز متصل |
+| E2E | APK → upload → full pipeline → export | job ID + stages + artifact hashes | BLOCKED: provider/device readiness |
+| Release | signing verification | `apksigner verify --verbose` | BLOCKED حتى توفير release keystore |
+| Large media | 100MB/500MB/1GB+ | `RUN_LARGE_MEDIA_TESTS=1` | SKIPPED عمدًا بسبب الموارد |
+
+## سيناريوهات يجب إغلاقها قبل release
+
+يجب تشغيل فيديو عادي وطويل وكبير، ومصدر بلا audio، وmedia فاسدة، وmulti-speaker، وfast speech، وmissing model، وmissing FFmpeg، وLLM unavailable، وcancellation، وresume، وbackend restart، وnetwork interruption، وAndroid process death، وrender failure. لكل failure يجب حفظ reproduction ثم fix ثم regression test ثم verification.
+
+### المراجع
+
+[1]: ../evidence/ "Verification evidence"
+[2]: FINAL_ACCEPTANCE.md "Acceptance decision"
+[3]: RELEASE_BLOCKERS.md "Open blockers"
+[4]: ../.github/workflows/quality-gate.yml "CI quality gate"
+[5]: ../.github/workflows/android-build.yml "Android CI"
+
+## References
+
+[1]: ../evidence/ "Verification evidence"
+[2]: FINAL_ACCEPTANCE.md "Acceptance decision"
+[3]: RELEASE_BLOCKERS.md "Open blockers"
+[4]: ../.github/workflows/quality-gate.yml "CI quality gate"
+[5]: ../.github/workflows/android-build.yml "Android CI"
