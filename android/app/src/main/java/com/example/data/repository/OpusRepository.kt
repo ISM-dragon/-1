@@ -17,7 +17,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
-import com.example.data.engine.ProcessingEngine
 import com.example.data.model.AiProviderConfig
 import com.example.data.model.AiUsageAggregate
 import com.example.data.model.AiUsageEntity
@@ -63,6 +62,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -93,7 +93,6 @@ class OpusRepository(context: Context) {
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
     private val processingJobDao = db.processingJobDao()
-    private val processingEngine = ProcessingEngine()
     private val appContext = context.applicationContext
     private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
@@ -109,7 +108,7 @@ class OpusRepository(context: Context) {
                     id = "gemini-prod",
                     name = "Google Gemini 2.5 Flash",
                     providerType = AiProviderType.GEMINI.name,
-                    apiKey = com.example.BuildConfig.GEMINI_API_KEY,
+                    apiKey = "",
                     modelName = "gemini-2.5-flash",
                     priority = 1,
                     isEnabled = true
@@ -664,8 +663,6 @@ class OpusRepository(context: Context) {
         require(sourceUri.isNotBlank()) { "مصدر الفيديو مطلوب." }
         require(durationMinutes > 0) { "مدة الفيديو غير صالحة." }
 
-        processingEngine.plan(sourceUri, _gatewayConfig.value).getOrElse { throw it }
-
         val parsedSourceUri = Uri.parse(sourceUri)
         val stableSourceUri = if (parsedSourceUri.scheme == "content" || parsedSourceUri.scheme == "file") {
             runCatching {
@@ -784,21 +781,13 @@ class OpusRepository(context: Context) {
     suspend fun retryVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
         val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
         require(existing.status == ProcessingJobEntity.STATUS_FAILED || existing.status == ProcessingJobEntity.STATUS_CANCELLED) { "لا يمكن إعادة محاولة هذه المهمة." }
-        existing.remoteGatewayJobId?.takeIf { it.isNotBlank() }?.let { remoteJobId ->
-            ProcessingGatewayClient(appContext.contentResolver)
-                .retry(_gatewayConfig.value, remoteJobId)
-                .getOrThrow()
-        }
         processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "RETRY_WAIT", "إعادة المحاولة مجدولة.")
         requeuePersistedProcessing(existing)
     }
+
     suspend fun resumeVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
         val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
-        val remoteJobId = existing.remoteGatewayJobId?.takeIf { it.isNotBlank() }
-            ?: error("لا يوجد job بعيد قابل للاستئناف.")
-        ProcessingGatewayClient(appContext.contentResolver)
-            .resume(_gatewayConfig.value, remoteJobId)
-            .getOrThrow()
+        require(existing.remoteGatewayJobId?.isNotBlank() == true) { "لا يوجد job بعيد قابل للاستئناف." }
         processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "QUEUED", "استئناف المهمة من checkpoint Gateway.")
         requeuePersistedProcessing(existing)
     }
@@ -899,250 +888,38 @@ class OpusRepository(context: Context) {
         targetPlatform: String,
         captionTheme: String
     ): Long = withContext(Dispatchers.IO) {
-        val startTime = System.currentTimeMillis()
-
         _processingStep.value = ProcessingStep.Transcribing
-
-        // Check local Room cache for metadata only; a cache hit never fabricates clips.
-        val cachedEntry = if (sourceUrl.isNotBlank()) videoProcessingCacheDao.getCacheByUrlSync(sourceUrl) else null
-        if (cachedEntry != null) videoProcessingCacheDao.recordCacheHit(cachedEntry.id)
-
-        val inputMediaUri = sourceUrl.toMediaUriOrNull()
-        val mediaAnalysis = inputMediaUri?.let { uri ->
-            localMediaAnalyzer.analyze(uri).getOrElse { throw it }
-        }
-        val sourceMetadata = mediaAnalysis?.metadata
-        val actualDurationSec = sourceMetadata?.durationSec ?: (durationMinutes * 60)
-        val actualDurationMinutes = ((actualDurationSec + 59) / 60).coerceAtLeast(1)
-        val effectiveTranscript = if (inputMediaUri != null && transcriptOrPrompt.isBlank()) {
-            val sttKey = _aiProviders.value.firstOrNull {
-                it.isEnabled && it.apiKey.isNotBlank() &&
-                    (it.providerType == AiProviderType.OPENAI.name || it.providerType == AiProviderType.GROQ.name)
-            }?.apiKey.orEmpty()
-            if (sttKey.isNotBlank()) {
-                speechToTextService.transcribe(inputMediaUri, sttKey).getOrElse { throw it }.text
-            } else {
-                // Gemini can receive the local video file directly; transcription is optional.
-                ""
-            }
-        } else transcriptOrPrompt.trim()
-
-        _processingStep.value = ProcessingStep.ScanningHooks
-        val aiClips = geminiService.analyzeAndGenerateClips(
-            title = title,
-            sourceUrl = sourceUrl,
-            transcriptOrPrompt = effectiveTranscript,
-            durationMinutes = actualDurationMinutes,
-            providers = _aiProviders.value,
-            videoUri = inputMediaUri?.takeIf { it.scheme == "content" || it.scheme == "file" }
-        ).map(AnalysisValidator::normalizeScores)
-            .distinctBy { "${it.startTimeSec}:${it.endTimeSec}" }
-            .take(10)
-        val validation = AnalysisValidator.validateClips(aiClips, actualDurationSec)
-        if (!validation.isValid) {
-            throw IllegalStateException(
-                "مخرجات تحليل المقاطع غير صالحة: ${validation.issues.take(5).joinToString { it.message }}"
-            )
-        }
-        val clipsData = aiClips
-        if (clipsData.isEmpty()) {
-            _processingStep.value = ProcessingStep.Idle
-            throw IllegalStateException(
-                "لم يُرجع مزود الذكاء الاصطناعي مقاطع حقيقية. أضف مفتاحاً صالحاً ونصاً أو فيديو قابلاً للتحليل."
-            )
-        }
-
-        recordAiUsage(
-            AiUsageEntity(
-                provider = _aiProviders.value.firstOrNull { it.isEnabled && it.apiKey.isNotBlank() }?.name ?: "configured-provider",
-                model = _aiProviders.value.firstOrNull { it.isEnabled && it.apiKey.isNotBlank() }?.modelName ?: "unknown",
-                requestType = "clip_analysis",
-                inputUnits = null,
-                outputUnits = null,
-                audioDurationSec = mediaAnalysis?.metadata?.durationSec,
-                videoDurationSec = actualDurationSec,
-                latencyMs = System.currentTimeMillis() - startTime,
-                success = true,
-                estimatedCostUsd = null,
-                isEstimate = false
-            )
-        )
-
-        // Deduct Google Flow Credits only after validated AI output.
-        deductGoogleFlowCredits(actualDurationMinutes)
-
-        _processingStep.value = ProcessingStep.CalculatingScores
-
-        val maxScore = clipsData.maxOfOrNull { it.viralityScore } ?: 90
-        val actualTitle = title.ifBlank { "Viral Video Repurposing Project" }
-        val actualUrl = sourceUrl.ifBlank { "Custom Video Upload / Prompt" }
-
-        val project = Project(
-            title = actualTitle,
-            sourceUrl = actualUrl,
-            sourceDurationSec = actualDurationSec,
-            status = "PROCESSING",
-            targetPlatform = targetPlatform,
-            captionTheme = captionTheme,
-            clipCount = clipsData.size,
-            bestViralityScore = maxScore,
-            createdAt = System.currentTimeMillis()
-        )
-
-        val newProjectId = projectDao.insertProject(project)
-
-        _processingStep.value = ProcessingStep.StylingCaptions
-
-        val clipEntities = clipsData.map { clipData ->
-            createClipEntity(
-                projectId = newProjectId,
-                data = clipData,
+        try {
+            val jobId = enqueueVideoProcessing(
+                title = title,
+                sourceUri = sourceUrl,
+                transcriptOrPrompt = transcriptOrPrompt,
+                durationMinutes = durationMinutes,
+                targetPlatform = targetPlatform,
                 captionTheme = captionTheme
             )
-        }
+            val terminalJob = processingJobDao.observe(jobId).first { job ->
+                job?.status in setOf(
+                    ProcessingJobEntity.STATUS_SUCCEEDED,
+                    ProcessingJobEntity.STATUS_FAILED,
+                    ProcessingJobEntity.STATUS_CANCELLED
+                )
+            } ?: error("لم تُحفظ مهمة المعالجة البعيدة.")
 
-        clipDao.insertClips(clipEntities)
-
-        // Real render step inspired by PublikClip's separate scoring/rendering
-        // stages. Only local files, content Uris, and direct media URLs are
-        // rendered here; a YouTube/Drive webpage URL must first be resolved to
-        // an authorized media Uri by a downloader or Drive integration.
-        var exportFailures = 0
-        val mediaUri = inputMediaUri
-        if (mediaUri != null) {
-            _processingStep.value = ProcessingStep.StylingCaptions
-            val exportRoot = File(
-                appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-                    ?: appContext.cacheDir,
-                "opus_clips/$newProjectId"
-            )
-            val storedClips = clipDao.getClipsForProjectSync(newProjectId)
-            val faceTrackPoints = runCatching {
-                faceTrackingAnalyzer.analyze(mediaUri, sampleIntervalMs = 600L, maxSamples = 180)
-            }.getOrElse { error ->
-                Log.w("OpusRepository", "Face tracking unavailable; using safe center crop", error)
-                emptyList()
-            }
-            clipsData.forEachIndexed { index, data ->
-                val storedClip = storedClips.firstOrNull {
-                    it.title == data.title &&
-                        it.startTimeSec == data.startTimeSec &&
-                        it.endTimeSec == data.endTimeSec
-                } ?: storedClips.getOrNull(index)
-                try {
-                    val output = File(exportRoot, "clip_${index + 1}.mp4")
-                    videoProcessor.exportClip(
-                        inputUri = mediaUri,
-                        outputFile = output,
-                        startTimeSec = data.startTimeSec,
-                        endTimeSec = data.endTimeSec,
-                        vertical = true,
-                        cropCenterX = cropCenterForClip(faceTrackPoints, data.startTimeSec, data.endTimeSec),
-                        captionCues = storedClip?.let(::decodeCaptionCues).orEmpty()
-                    ) { progress ->
-                        _processingStep.value = ProcessingStep.StylingCaptions
+            when (terminalJob.status) {
+                ProcessingJobEntity.STATUS_SUCCEEDED -> {
+                    _processingStep.value = ProcessingStep.Completed
+                    requireNotNull(terminalJob.outputProjectId) {
+                        "اكتملت المعالجة البعيدة دون معرف مشروع صالح."
                     }
-                    CaptionSidecarWriter.writeWebVtt(output, data.wordTimestamps, data.keywords)
-                    storedClip?.let { clipDao.updateExportPath(it.id, output.absolutePath) }
-                } catch (error: Exception) {
-                    exportFailures++
-                    Log.w("OpusRepository", "Real clip export failed for clip ${index + 1}", error)
                 }
+                ProcessingJobEntity.STATUS_CANCELLED -> error("تم إلغاء المعالجة البعيدة.")
+                else -> error(terminalJob.errorMessage.ifBlank { "فشلت المعالجة البعيدة." })
             }
+        } finally {
+            _processingStep.value = ProcessingStep.Idle
         }
-
-        val finalProjectStatus = if (exportFailures == 0) "COMPLETED" else "PARTIAL_FAILURE"
-        projectDao.updateProject(project.copy(id = newProjectId, status = finalProjectStatus))
-
-        val processingDurationMs = System.currentTimeMillis() - startTime
-
-        // 1. Cache video processing metadata in Room DB
-        val videoCache = VideoProcessingCacheEntity(
-            sourceUrl = actualUrl,
-            videoHash = "hash_${newProjectId}_${actualDurationSec}",
-            videoTitle = actualTitle,
-            sourceDurationSec = actualDurationSec,
-            resolution = sourceMetadata?.let { "${it.width}x${it.height}" } ?: "غير متاح",
-            detectedLanguage = detectLanguageFromText(transcriptOrPrompt),
-            speakerCount = -1,
-            audioSummary = "",
-            fullTranscript = effectiveTranscript.ifBlank { clipsData.joinToString("\n") { it.transcript } },
-            rawAnalysisJson = "{}",
-            processingDurationMs = processingDurationMs,
-            cacheHitCount = 1,
-            cachedAt = System.currentTimeMillis()
-        )
-        videoProcessingCacheDao.insertOrUpdateCache(videoCache)
-
-        // 2. Cache granular viral score breakdown for each generated clip
-        val viralScoreEntities = clipsData.mapIndexed { index, clipData ->
-            ViralScoreMetricEntity(
-                clipId = newProjectId * 100 + (index + 1),
-                projectId = newProjectId,
-                clipTitle = clipData.title,
-                overallViralityScore = clipData.viralityScore,
-                hookScore = clipData.hookScore,
-                retentionScore = clipData.retentionScore,
-                emotionalScore = clipData.emotionalScore,
-                shareabilityScore = clipData.shareabilityScore,
-                punchlineScore = clipData.punchlineScore,
-                tiktokFitScore = -1,
-                reelsFitScore = -1,
-                shortsFitScore = -1,
-                viralityGrade = when {
-                    clipData.viralityScore >= 95 -> "S+"
-                    clipData.viralityScore >= 90 -> "S"
-                    clipData.viralityScore >= 80 -> "A+"
-                    clipData.viralityScore >= 70 -> "A"
-                    else -> "B"
-                },
-                hookExplanation = clipData.hookExplanation,
-                viralityFactorsJson = clipData.hookExplanation.takeIf { it.isNotBlank() }?.let { "[${JSONObject.quote(it)}]" } ?: "[]",
-                suggestedTargetAudience = "غير مستخرج",
-                peakRetentionSec = -1f,
-                evaluatedAt = System.currentTimeMillis()
-            )
-        }
-        viralScoreMetricDao.insertScores(viralScoreEntities)
-
-        // 3. Log repurposing event in User History Room Table
-        val historyEntry = RepurposingHistoryEntity(
-            projectId = newProjectId,
-            videoTitle = actualTitle,
-            sourceUrl = actualUrl,
-            actionType = "AI_REPURPOSE_PROCESSED",
-            clipsGeneratedCount = clipsData.size,
-            highestViralScore = maxScore,
-            estimatedTimeSavedMinutes = 0,
-            status = if (exportFailures == 0) "SUCCESS" else "PARTIAL_FAILURE",
-            targetPlatform = targetPlatform,
-            details = if (exportFailures == 0) {
-                "Extracted ${clipsData.size} validated clips; highest returned score was ${maxScore}%."
-            } else {
-                "Extracted ${clipsData.size} clips, but $exportFailures MP4 export(s) failed; review the project before publishing."
-            },
-            timestamp = System.currentTimeMillis()
-        )
-        repurposingHistoryDao.insertHistory(historyEntry)
-
-        // Deduct credits
-        val updatedCreditState = _userCreditState.value.copy(
-            creditsRemaining = _googleFlowCredits.value.remainingCreditsMinutes,
-            totalProcessedMinutes = _userCreditState.value.totalProcessedMinutes + actualDurationMinutes,
-            clipsCreatedCount = _userCreditState.value.clipsCreatedCount + clipsData.size
-        )
-        _userCreditState.value = updatedCreditState
-        apiPrefs.edit()
-            .putInt("real_total_processed_minutes", updatedCreditState.totalProcessedMinutes)
-            .putInt("real_clips_created_count", updatedCreditState.clipsCreatedCount)
-            .apply()
-
-        _processingStep.value = ProcessingStep.Completed
-        _processingStep.value = ProcessingStep.Idle
-
-        return@withContext newProjectId
     }
-
 
     private fun String.toMediaUriOrNull(): Uri? {
         val uri = runCatching { Uri.parse(trim()) }.getOrNull() ?: return null

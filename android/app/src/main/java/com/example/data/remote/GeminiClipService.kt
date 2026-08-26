@@ -3,7 +3,6 @@ package com.example.data.remote
 import android.content.Context
 import android.net.Uri
 import android.util.Log
-import com.example.BuildConfig
 import com.example.data.model.AiProviderConfig
 import com.example.data.model.AiProviderType
 import com.example.data.model.AiTemplateRecommendation
@@ -516,16 +515,12 @@ class GeminiClipService(private val context: Context? = null) {
         }
 
         // 2. Primary Google Gemini key fallback
-        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() } ?: try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
-            ""
-        }
+        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() }.orEmpty()
         val primaryKeyAlreadyTried = activeProviders.any {
             it.providerType == AiProviderType.GEMINI.name && it.apiKey.trim() == apiKey
         }
 
-        if (!apiKey.isNullOrBlank() && apiKey != "MY_GEMINI_API_KEY" && !primaryKeyAlreadyTried) {
+        if (apiKey.isNotBlank() && !primaryKeyAlreadyTried) {
             try {
                 val primaryConfig = AiProviderConfig(
                     name = "Primary Google Gemini",
@@ -687,13 +682,9 @@ class GeminiClipService(private val context: Context? = null) {
         language: String = "English",
         captionTheme: String = "Opus Neon"
     ): List<AnimatedWord> = withContext(Dispatchers.IO) {
-        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() } ?: try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
-            ""
-        }
+        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() }.orEmpty()
 
-        if (apiKey.isNotBlank() && apiKey != "MY_GEMINI_API_KEY") {
+        if (apiKey.isNotBlank()) {
             try {
                 val systemPrompt = """
                     You are an expert Speech-to-Text & Subtitle Synchronization Engine for short-form viral videos (TikTok, Reels, Shorts).
@@ -945,13 +936,9 @@ class GeminiClipService(private val context: Context? = null) {
             }
         }
 
-        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() } ?: try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
-            ""
-        }
+        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() }.orEmpty()
 
-        if (apiKey.isNotBlank() && apiKey != "MY_GEMINI_API_KEY") {
+        if (apiKey.isNotBlank()) {
             try {
                 val primaryConfig = AiProviderConfig(
                     name = "Primary Google Gemini",
@@ -1316,13 +1303,9 @@ class GeminiClipService(private val context: Context? = null) {
             }
         }
 
-        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() } ?: try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
-            ""
-        }
+        val apiKey = customApiKey?.trim()?.takeIf { it.isNotBlank() }.orEmpty()
 
-        if (!apiKey.isNullOrBlank() && apiKey != "MY_GEMINI_API_KEY") {
+        if (apiKey.isNotBlank()) {
             try {
                 val primaryConfig = AiProviderConfig(
                     name = "Primary Google Gemini",

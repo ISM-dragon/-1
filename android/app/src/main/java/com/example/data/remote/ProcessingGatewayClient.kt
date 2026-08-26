@@ -48,16 +48,16 @@ class ProcessingGatewayClient(
         captionTheme: String,
         mode: String,
         onProgress: suspend (Progress) -> Unit,
-        onJobCreated: suspend (String) -> Unit = {},
-        existingGatewayJobId: String? = null,
-        idempotencyKey: String = UUID.randomUUID().toString()
+        onJobCreated: suspend (String) -> Unit = {}
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
-            val gatewayJobId = existingGatewayJobId?.trim()?.takeIf { it.isNotBlank() } ?: run {
-                val source = resolveRemoteSource(baseUrl, config.token, sourceUri, onProgress)
-                start(baseUrl, config.token, source, captionTheme, mode, idempotencyKey)
+            val localUri = Uri.parse(sourceUri)
+            val upload = upload(baseUrl, config.token, localUri) { percent ->
+                onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
             }
+            onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
+            val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode, UUID.randomUUID().toString())
             onJobCreated(gatewayJobId)
             var lastStatus = "queued"
             var completedResult: RemoteResult? = null
@@ -86,32 +86,6 @@ class ProcessingGatewayClient(
             Result.success(requireNotNull(completedResult))
         } catch (error: Exception) {
             Result.failure<RemoteResult>(error)
-        }
-    }
-
-    private suspend fun resolveRemoteSource(
-        baseUrl: String,
-        token: String,
-        rawSource: String,
-        onProgress: suspend (Progress) -> Unit
-    ): String {
-        val source = rawSource.trim()
-        val scheme = Uri.parse(source).scheme?.lowercase()
-        return when (scheme) {
-            "content", "file" -> {
-                val localUri = Uri.parse(source)
-                val uploaded = upload(baseUrl, token, localUri) { percent ->
-                    onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
-                }
-                onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
-                uploaded
-            }
-            "http", "https" -> {
-                require(Uri.parse(source).host?.isNotBlank() == true) { "رابط الفيديو البعيد غير صالح" }
-                onProgress(Progress(5, "SOURCE_READY", "سيقرأ Gateway مصدر الفيديو البعيد"))
-                source
-            }
-            else -> error("مصدر الفيديو يجب أن يكون content:// أو file:// أو HTTP/HTTPS")
         }
     }
 
@@ -268,9 +242,7 @@ class ProcessingGatewayClient(
         val normalized = raw.trim().removeSuffix("/")
         require(normalized.isNotBlank()) { "Gateway URL غير مضبوط" }
         val uri = URI(normalized)
-        val host = uri.host.orEmpty().lowercase()
-        val local = host == "localhost" || host == "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.16.")
-        require(uri.scheme?.lowercase() == "https" || local) { "يجب استخدام HTTPS خارج الشبكة المحلية" }
+        require(uri.scheme?.lowercase() == "https") { "يجب استخدام HTTPS مع private Processing Gateway" }
         return normalized
     }
 

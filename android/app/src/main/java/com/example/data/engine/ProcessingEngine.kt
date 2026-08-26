@@ -1,14 +1,16 @@
 package com.example.data.engine
 
-import java.net.URI
 import com.example.data.model.GatewayConfig
+import java.net.URI
 
 /**
- * Compatibility validation boundary for legacy callers.
- * Android processing is remote-only; the Gateway owns all media execution.
+ * Android's processing boundary. The heavy engine never runs in the APK: the
+ * private Processing Gateway owns the server-side pipeline and provider keys.
  */
 class ProcessingEngine {
-    enum class Route { REMOTE_GATEWAY }
+    enum class Route {
+        REMOTE_GATEWAY
+    }
 
     data class Plan(
         val route: Route,
@@ -19,25 +21,50 @@ class ProcessingEngine {
 
     fun plan(sourceUri: String, gateway: GatewayConfig): Result<Plan> {
         val trimmedSource = sourceUri.trim()
-        if (trimmedSource.isBlank()) return Result.failure(IllegalArgumentException("مصدر الفيديو مطلوب."))
-        val scheme = runCatching { URI(trimmedSource).scheme?.lowercase() }.getOrNull()
-        if (scheme !in setOf("content", "file")) {
-            return Result.failure(IllegalArgumentException("مصدر الفيديو يجب أن يكون ملفًا محليًا قابلًا للقراءة."))
+        if (trimmedSource.isBlank()) {
+            return Result.failure(IllegalArgumentException("مصدر الفيديو مطلوب."))
+        }
+
+        val sourceScheme = runCatching { URI(trimmedSource).scheme?.lowercase() }.getOrNull()
+        if (sourceScheme !in setOf("content", "file")) {
+            return Result.failure(
+                IllegalArgumentException("مصدر الفيديو يجب أن يكون ملفًا محليًا قابلًا للقراءة.")
+            )
         }
 
         val baseUrl = gateway.baseUrl.trim().trimEnd('/')
-        if (baseUrl.isBlank()) return Result.failure(IllegalArgumentException("عنوان Gateway مطلوب؛ لا توجد معالجة محلية على Android."))
+        if (baseUrl.isBlank()) {
+            return Result.failure(
+                IllegalStateException("يجب ضبط private Processing Gateway قبل بدء المعالجة.")
+            )
+        }
+        if (gateway.token.trim().isBlank()) {
+            return Result.failure(
+                IllegalStateException("رمز الوصول إلى private Processing Gateway مطلوب.")
+            )
+        }
+
         val parsedGateway = runCatching { URI(baseUrl) }.getOrNull()
         val gatewayScheme = parsedGateway?.scheme?.lowercase()
-        if (gatewayScheme !in setOf("http", "https") || parsedGateway?.host.isNullOrBlank()) {
-            return Result.failure(IllegalArgumentException("عنوان Gateway غير صالح. استخدم عنوان HTTP أو HTTPS كاملًا."))
+        val host = parsedGateway?.host.orEmpty().lowercase()
+        val isLocalDevelopmentHost = host == "localhost" ||
+            host == "127.0.0.1" ||
+            host.startsWith("192.168.") ||
+            host.startsWith("10.") ||
+            host.startsWith("172.16.")
+        if (parsedGateway == null || parsedGateway.host.isNullOrBlank() ||
+            (gatewayScheme != "https" && !(gatewayScheme == "http" && isLocalDevelopmentHost))) {
+            return Result.failure(
+                IllegalArgumentException("عنوان Gateway غير صالح. استخدم HTTPS، أو HTTP على شبكة التطوير المحلية فقط.")
+            )
         }
+
         return Result.success(
             Plan(
                 route = Route.REMOTE_GATEWAY,
                 sourceUri = trimmedSource,
                 gatewayUrl = baseUrl,
-                label = "Gateway البعيد"
+                label = "private Processing Gateway"
             )
         )
     }

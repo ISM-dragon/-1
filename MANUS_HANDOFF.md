@@ -1,115 +1,73 @@
-# MANUS HANDOFF — ISM Android application
+# MANUS HANDOFF
 
-**المشروع:** ISM / PERSONAL ANDROID APK + PRIVATE BACKEND + PUBLIKCLIP ENGINE
-**المستودع:** `ISM-dragon/-1`
-**تاريخ التسليم:** 2026-08-26
-**الحالة:** **FINAL ACCEPTANCE BLOCKED — evidence and build artifacts committed for internal QA only**
-**آخر commit مرفوع:** `b5849db` — `docs: record android artifact and final fixes [skip ci]`
+## الحالة الحالية
 
-## القرار المعماري
+تم تجهيز تطبيق Android أصلي مستقل داخل `android/` ليكون عميل release خفيفاً أمام private Processing Gateway. لا يوجد `MANUS_HANDOFF.md` في نقطة البداية التي تم استلامها؛ لذلك أُنشئت هذه الوثيقة لتثبيت الحالة الحالية ومتطلبات المتابعة.
 
-المسار canonical هو: **Android APK → Private Gateway → PublikClip Engine → AI/Media Runtime**. تطبيق Android هو stateful client فوق Gateway؛ لا يشغّل Python أو `uv` أو WhisperX أو PyTorch أو FFmpeg. Gateway هو المصدر authoritative لحالة الوظيفة والتقدم والنتائج، ويحوي auth وSQLite وupload/storage وworker supervision وdiagnostics وserver-side secret boundary.
+التطبيق لا يشغّل Python أو `uv` أو Node أو Rust أو FFmpeg داخله. `ProcessingEngine` أصبح remote-only، و`VideoProcessingWorker` ينفذ الرفع والاستطلاع والتنزيل عبر Gateway داخل `CoroutineWorker`، بينما تبقى Python pipeline ومفاتيح Gemini وFFmpeg في backend الخاص.
 
-تم اختيار `gateway/` كـprivate backend canonical لمسار Android. مجلد `backend/` مستقل/legacy ولا ينبغي إضافة features جديدة إليه بالتوازي دون قرار دمج صريح. لم تُضف features أو تُعدّل المعمارية أو خوارزميات المعالجة في جلسة القبول هذه.
+## Artifact
 
-## البنية المنفذة
+المسار الناتج:
 
-| الطبقة | الملف/المكوّن | المسؤولية |
-|---|---|---|
-| Engine contract | `pipeline/publikclip_pipeline/engine/` | `ProcessingEngine` و`PipelineEngine` وlifecycle وcheckpoint-backed results |
-| Pipeline | `pipeline/publikclip_pipeline/` | ingest، ASR، diarization، events، candidates، scoring، camera، captions، render |
-| Gateway | `gateway/` | auth، SQLite، upload/storage، workers، diagnostics، provider registry، secret boundary |
-| Android contract | `android/app/src/main/java/com/example/data/contract/` و`remote/` | نماذج الحالة والعقد وGateway client للعميل الشخصي |
-| Android orchestration | `RemoteProcessingCoordinator.kt`, `RemoteProcessingWorker.kt`, `GatewayProcessingWorker.kt` | unique WorkManager، upload، create/poll/cancel/retry/resume، download والتحقق |
-| Android UI | `RemoteStudioScreens.kt`, `RemoteStudioViewModel.kt` وCompose screens | Home، import، processing، error، results، clip review، settings |
-| Desktop | `app/src/` و`app/src-tauri/` | React/Tauri local CLI path وGateway adapter وreview/social UX |
+```text
+android/app/build/outputs/apk/release/app-release.apk
+```
 
-يستخدم Android اختيار `video/*` مع persistable URI permission، حفظ الوظيفة محليًا، منع duplicate work عبر `ExistingWorkPolicy.KEEP`، وإعادة polling بعد restart. يدعم Gateway resumable upload عبر `/v1/sources/uploads` إضافة إلى one-shot `/v1/sources/upload` للتوافق، ويفحص outputs مع bytes وSHA-256 وintegrity metadata.
-
-## نتائج البناء والتحقق
-
-| الفحص | النتيجة | الدليل |
-|---|---:|---|
-| Android unit tests | 33 passed | `evidence/android_unit_test.log` |
-| Final Android unit retest | 33 passed | `evidence/final_android_unit_retest.log` |
-| Gateway tests | 40 passed, 1 skipped | `evidence/gateway_pytest.log` |
-| PublikClip tests | 117 passed | `evidence/pipeline_pytest.log` |
-| Root regression | 157 passed, 1 skipped | `evidence/root_pytest.log` |
-| Final root regression retest | 157 passed, 1 skipped | `evidence/final_root_retest.log` |
-| Targeted failure regression | 51 passed, 1 skipped | `evidence/targeted_failure_tests.log` |
-| Identity | PASS: ISM / 0.10.1 / application ID / v1 | `evidence/identity.log` |
-| Python compile | PASS | `evidence/py_compile.log` |
-| Git whitespace | PASS | `evidence/git_diff_check.log` |
-| Final release assembly | PASS | `evidence/final_android_release_build.log` |
-| APK metadata/ZIP | PASS | `evidence/final_release_apk_badging.txt`, `evidence/final_release_apk_zip_test.txt` |
-| APK signing | BLOCKED | `evidence/release_apk_signing_check.txt` — unsigned |
-| Embedded Android CI | PASS | Run `32954274421` على commit `2e7d5fa`: 35 unit tests، Lint، `assembleDebug`، ورفع artifact مرّت |
-
-**APK الناتج:** `android/app/build/outputs/apk/release/app-release-unsigned.apk`
-**SHA-256:** `f0ae2936f6dc10242c864460081151395fc9f621270d742639a67cb1159dc9ab`
-**Application ID:** `com.aistudio.opuspro.apk`
-**Version:** `0.10.1` / versionCode `5`
-
-**Debug APK artifact المرفوع من CI:** `app-debug.apk`، الحجم `69,488,254` bytes، SHA-256 `9e2a020b8cf8710f1141be49f7a573426bf9d79047acca31dfa8d8e871880c1c`. يمكن تنزيله من artifact `ISM-Android-embedded-2e7d5fa48de5a8e8ba8f3e15d35ee4f9b4cb3ade` في تشغيل `32954274421`.
-
-## Evidence تشغيلي فعلي
-
-| المسار | النتيجة |
+| الخاصية | القيمة |
 |---|---|
-| Gateway health/auth/capabilities | PASS محليًا؛ health وcapabilities نجحت، وroute خاص بلا token أعاد 401 |
-| Valid video upload | PASS؛ `short.mp4` رُفع وأعيد source URL مع bytes وSHA-256 |
-| Invalid video | PASS؛ `corrupted.mp4` رُفض HTTP 422 مع `MEDIA_INVALID` |
-| Gemini create job | BLOCKED بأمان؛ 503 مع `GEMINI_NOT_CONFIGURED` |
-| Real pipeline attempt | بدأ فعليًا ووصل إلى ingest/ASR، لكنه لم يصل إلى downstream artifact |
-| Active cancel | PASS على Gateway؛ `CANCELLED` مع `JOB_CANCELLED` |
-| Backend restart | PASS جزئيًا؛ job ID وtransition history بقيا durable بعد restart |
-| Network loss | PASS جزئيًا؛ connection refusal أثناء التوقف ثم قراءة الوظيفة بعد عودة الخدمة |
-| Retry | PASS جزئيًا؛ أعاد إدراج الوظيفة مع retry metadata، بينما ظل فشل pipeline الحقيقي قائمًا |
-| Android install/open/picker/preview/edit/export | BLOCKED؛ لا جهاز حقيقي متصل وAPK unsigned |
+| Package | `com.aistudio.opuspro.apk` |
+| Version | `0.10.1` |
+| Version code | `5` |
+| Min SDK | `24` |
+| Target/Compile SDK | `36` |
+| APK size | `55,596,707` bytes |
+| SHA-256 الحالي | `deceadddb138251acd6da62478f8b8913f7620c3f25140d2e3c108805c5faf5a` |
+| Signature | APK Signature Scheme v2، بمفتاح اختبار خارج المستودع |
 
-الأدلة التفصيلية موجودة في `evidence/`، وأحكام القبول في `docs/FINAL_ACCEPTANCE.md`، وتصنيف الحواجز في `docs/RELEASE_BLOCKERS.md`.
+مفتاح الاختبار ليس مفتاح النشر العام. يجب قبل النشر تمرير keystore مملوك للمنتج عبر `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD`، وعدم تخزينه في Git أو تضمين أسراره في APK.
 
-## حالات الاعتماد والاستعادة
+## قرارات الإصدار
 
-يُحفظ `local_job_id` و`remote_job_id` و`idempotency_key` قبل وبعد كل حد شبكي مهم. عند إغلاق التطبيق أثناء المعالجة يعاود WorkManager التنفيذ من الحالة المحفوظة، وعند `INTERRUPTED` يستدعي `/resume`. عند `FAILED` يظهر retry فقط عندما تكون `recoverable=true`. لا يرسل Android Gemini key؛ المفاتيح تبقى في Gateway/AI runtime.
+يجب ضبط private Gateway بعنوان HTTPS ورمز وصول غير فارغ. في مسار معالجة الفيديو، يرسل Android الفيديو ورمز Gateway فقط؛ Gateway يدير Python pipeline وFFmpeg ومفاتيح Gemini. قد تستخدم بعض أدوات الذكاء الاختيارية مفتاحاً يضيفه المستخدم بنفسه، لكن لا يوجد مفتاح مضمّن في APK. التخزين العام غير مطلوب: Photo Picker يعيد `content://` أو URI محلياً، ثم ينسخ التطبيق المصدر إلى `filesDir/source_media` قبل جدولة العمل. النتائج البعيدة تُنزّل إلى `filesDir/gateway_exports/<jobId>`.
 
-## حواجز الإصدار
+يستخدم التطبيق `WorkManager` مع `CoroutineWorker` و`setForeground()` ونوع خدمة `dataSync` للمهام الطويلة. حالة job محفوظة في Room، ويستخدم العمل الفريد network constraint وexponential backoff؛ كما يدعم الإلغاء وإعادة المحاولة والاستئناف عبر `remoteGatewayJobId`. `POST_NOTIFICATIONS` يُطلب وقت التشغيل على Android 13+، وتوجد قناة تقدم وقناة نتيجة. معالج `OpusApplication` يحفظ آخر crash في `filesDir/last_crash.txt` ثم يعيد تمرير الاستثناء إلى handler السابق.
 
-**P0:** لا يوجد جهاز Android حقيقي للاختبار، والمسار الكامل APK → Gateway → Pipeline → artifact → preview/edit/render-again/export غير مثبت.
-**P1:** APK غير موقّع؛ Gemini غير مهيأ؛ اكتمال ASR/diarization/LLM production غير مثبت؛ private HTTPS/Docker deployment غير متاح في sandbox.
-**P2:** large-media test skipped وdevice instrumentation غير مشغّل.
-**P3:** deprecation warnings وصيانة namespace التاريخي موثقتان ولا تمنعان البناء.
+## الملفات الرئيسية التي تغيرت
 
-هذه الحواجز ليست عيوبًا يجوز تجاوزها بإضافة mock success. لم يتم الادعاء بإغلاق P0/P1، ولم يُجرَ تغيير source code لإخفائها.
-
-## كيفية إعادة التحقق
-
-لإغلاق القبول، استخدم APK موقّعًا على جهاز Android حقيقي متصل مع USB debugging، واضبط Gateway خاصًا عبر HTTPS مع token، ثم نفّذ diagnostics قبل إنشاء job. يجب أن تكون pipeline وFFmpeg/storage وASR/diarization وLLM جاهزة. بعد ذلك أعد سيناريو `docs/FINAL_ACCEPTANCE.md` كاملًا، واجمع screenshots/logcat/job IDs/transition history وSHA-256 لكل artifact، ثم حدّث الحكم إلى PASS فقط بعد تحقق export وrender again من التطبيق نفسه.
-
-## إصلاحات هذه الجلسة وملفاتها
-
-| الملف | التعديل |
+| الملف | التغيير |
 |---|---|
-| `.github/workflows/quality-gate.yml` | تثبيت `gateway/requirements.txt` و`httpx` وFFmpeg قبل اختبارات Gateway وpipeline. |
-| `gateway/test_processing_bridge.py` | جعل قاعدة SQLite ووسائط upload في الاختبار مكتملة ومطابقة للحجم وSHA-256. |
-| `gateway/tests/test_gateway_safety.py` | جعل رفض الوسائط الفاسدة مستقلًا عن وجود FFprobe عبر mock deterministic. |
-| `pipeline/tests/test_asr_errors.py` | عزل اختبار runtime غير المتاح عبر fake `torch`/`whisperx` والتحقق من `ASR_MODEL_UNAVAILABLE`. |
-| `android/app/src/test/java/com/example/ApiContractClientTest.kt` | تثبيت Robolectric على SDK 34 لتجنب اختيار SDK غير متوفر في CI. |
-| `MANUS_HANDOFF.md` | تحديث الأدلة، أرقام التشغيلات، الـblockers، وartifact الأخير. |
+| `android/app/src/main/java/com/example/data/engine/ProcessingEngine.kt` | إزالة fallback المحلي وفرض Gateway HTTPS + token. |
+| `android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt` | حذف استدعاء `ProductionVideoPipeline` المحلي، إضافة foreground progress، والإبقاء على remote processing. |
+| `android/app/src/main/java/com/example/data/repository/OpusRepository.kt` | تحويل `processNewVideo` إلى enqueue وانتظار terminal Room state بدلاً من تنفيذ محرك محلي. |
+| `android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt` | فرض HTTPS للـ Gateway. |
+| `android/app/src/main/java/com/example/data/worker/ProcessingNotification.kt` | foreground notification وتحديث progress وقناة النتائج. |
+| `android/app/src/main/java/com/example/MainActivity.kt` | طلب إذن الإشعارات على Android 13+. |
+| `android/app/src/main/java/com/example/OpusApplication.kt` | crash handler يحفظ آخر stack trace. |
+| `android/app/src/main/AndroidManifest.xml` | أقل صلاحيات صريحة، وإضافة foreground service type `dataSync`. |
+| `android/app/build.gradle.kts` | إزالة Firebase/Google Services/Secrets plugin غير المستخدمة من APK. |
+| `android/app/src/test/java/com/example/ProcessingEngineTest.kt` | اختبار Gateway-only ورفض المصدر/العنوان/token غير الصالح. |
+| `docs/RELEASE.md` | تقرير الإصدار ومصفوفة التحقق وحدود اختبار الجهاز. |
 
-**Commits المرفوعة:** `0262537`, `3be5cd0`, `57aca4c`, `fe71b18`, `8e4825d`, `8596bed`, `2e7d5fa`, `b5849db`.
-تم rebase آمن فوق تحديثات `origin/main` دون force push، والفرع المحلي متطابق مع `origin/main`.
+## نتائج التحقق
 
-## ملاحظة عن الوثائق
+نجحت `:app:testDebugUnitTest` و`:app:lint` و`:app:assembleRelease`. أكد `apksigner` توقيع v2، وأكد `aapt2` package والـ SDK والصلاحيات. فحص أرشيف APK لم يجد Python أو `uv` أو Node أو Rust أو Cargo أو FFmpeg runtime، ولم يجد Gemini API key أو placeholder key مضمّناً في DEX.
 
-النسخة الأحدث من المستودع تحتوي الآن وثائق baseline المطلوبة مثل `docs/ARCHITECTURE.md` و`docs/AUDIT.md` و`docs/CONTRACTS.md` و`docs/PARALLEL_WORK.md`، إضافة إلى وثائق التشغيل والقبول `docs/FINAL_ACCEPTANCE.md` و`docs/RELEASE_BLOCKERS.md`. تم الحفاظ على هذه الملفات عند الدمج مع main البعيد.
+تم إنشاء AVD نظيف Android 15 باسم `clean_api35` ومحاولة تثبيت وتشغيل الـ APK. المحاكي يعمل في بيئة TCG بلا acceleration؛ ظهر online مؤقتاً ثم خرج قبل اكتمال `sys.boot_completed=1`. لذلك لم يتم اعتماد install/launch/restart/file-picker/background على جهاز حقيقي كاختبار ناجح، ويجب إكمالها على هاتف Android أو emulator مستقر مزود بتسريع قبل النشر العام.
 
-## ملفات التسليم
+## أوامر إعادة الإنتاج
 
-- `docs/ARCHITECTURE.md`
-- `docs/AUDIT.md`
-- `docs/CONTRACTS.md`
-- `docs/FINAL_ACCEPTANCE.md`
-- `docs/RELEASE_BLOCKERS.md`
-- `evidence/` وسجلات الاختبارات والـ smoke tests
-- `android/app/build/outputs/apk/release/app-release-unsigned.apk` للاختبار الداخلي فقط
+```bash
+cd android
+export JAVA_HOME=/path/to/jdk-21
+export ANDROID_HOME=/path/to/android-sdk
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export KEYSTORE_PATH=/secure/path/release.jks
+export STORE_PASSWORD='***'
+export KEY_PASSWORD='***'
+./gradlew :app:testDebugUnitTest :app:lint :app:assembleRelease
+```
+
+## مراجع التسليم
+
+التفاصيل التشغيلية، مصفوفة الصلاحيات، بصمة APK، وقيود اختبار الجهاز موجودة في [`docs/RELEASE.md`](docs/RELEASE.md). يجب أن يكون أي backend مستخدم في الإنتاج خاصاً ومحمياً بـ HTTPS وGateway token، ويجب عدم نقل محرك Python أو أسراره إلى تطبيق Android.

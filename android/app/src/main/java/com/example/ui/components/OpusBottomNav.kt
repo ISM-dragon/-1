@@ -3,10 +3,13 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -15,10 +18,11 @@ import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
@@ -35,6 +39,7 @@ import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusVioletGlow
 
+/** Primary destinations only; secondary tools live in ToolsScreen. */
 enum class OpusNavTab(val label: String, val subtitle: String, val testTag: String) {
     HOME("الرئيسية", "محرك القص الذكي", "nav_tab_home"),
     STUDIO("الاستوديو", "تحرير المقاطع", "nav_tab_studio"),
@@ -52,21 +57,27 @@ fun OpusBottomNav(
     onTabSelected: (OpusNavTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth().background(OpusDarkSurface).border(1.dp, OpusBorder).padding(horizontal = 6.dp, vertical = 5.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
+    NavigationBar(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(OpusDarkCanvas)
+            .border(width = 1.dp, color = OpusBorder.copy(alpha = 0.75f))
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        containerColor = OpusDarkSurface,
+        contentColor = OpusTextPrimary,
+        tonalElevation = 0.dp
     ) {
-        NavItem(OpusNavTab.HOME, currentTab, Icons.Default.AutoAwesome, OpusElectricCyan, onTabSelected)
-        NavItem(OpusNavTab.STUDIO, currentTab, Icons.Default.SlowMotionVideo, OpusVioletGlow, onTabSelected)
-        NavItem(OpusNavTab.PROJECTS, currentTab, Icons.Default.FolderSpecial, OpusElectricCyan, onTabSelected)
-        NavItem(OpusNavTab.GATEWAY, currentTab, Icons.Default.Cloud, OpusGold, onTabSelected)
-        NavItem(OpusNavTab.TOOLS, currentTab, Icons.Default.GridView, OpusVioletGlow, onTabSelected)
+        PrimaryItem(OpusNavTab.HOME, currentTab, Icons.Default.AutoAwesome, OpusElectricCyan, onTabSelected)
+        PrimaryItem(OpusNavTab.STUDIO, currentTab, Icons.Default.SlowMotionVideo, OpusVioletGlow, onTabSelected)
+        PrimaryItem(OpusNavTab.PROJECTS, currentTab, Icons.Default.FolderSpecial, OpusElectricCyan, onTabSelected)
+        PrimaryItem(OpusNavTab.GATEWAY, currentTab, Icons.Default.Cloud, OpusGold, onTabSelected)
+        PrimaryItem(OpusNavTab.TOOLS, currentTab, Icons.Default.GridView, OpusVioletGlow, onTabSelected)
     }
 }
 
 @Composable
-private fun NavItem(
+private fun RowScope.PrimaryItem(
     tab: OpusNavTab,
     currentTab: OpusNavTab,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -74,13 +85,26 @@ private fun NavItem(
     onTabSelected: (OpusNavTab) -> Unit
 ) {
     val selected = currentTab == tab || (tab == OpusNavTab.TOOLS && currentTab in setOf(OpusNavTab.DASHBOARD, OpusNavTab.BENCHMARK, OpusNavTab.SETTINGS))
-    Column(
-        modifier = Modifier.clip(RoundedCornerShape(12.dp)).testTag(tab.testTag),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        IconButton(onClick = { onTabSelected(tab) }) {
-            Icon(icon, contentDescription = tab.label, tint = if (selected) accent else OpusTextSecondary)
-        }
-        Text(tab.label, color = if (selected) accent else OpusTextSecondary, fontSize = 10.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
-    }
+    NavigationBarItem(
+        selected = selected,
+        onClick = { onTabSelected(tab) },
+        icon = { Icon(imageVector = icon, contentDescription = tab.label) },
+        label = {
+            Text(
+                text = tab.label,
+                fontSize = 10.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            )
+        },
+        colors = NavigationBarItemDefaults.colors(
+            selectedIconColor = accent,
+            selectedTextColor = accent,
+            indicatorColor = OpusPrimaryViolet.copy(alpha = 0.28f),
+            unselectedIconColor = OpusTextSecondary,
+            unselectedTextColor = OpusTextSecondary
+        ),
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .testTag(tab.testTag)
+    )
 }

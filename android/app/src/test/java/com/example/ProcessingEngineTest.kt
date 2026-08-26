@@ -10,27 +10,43 @@ class ProcessingEngineTest {
     private val engine = ProcessingEngine()
 
     @Test
-    fun `blank gateway is rejected because Android is remote only`() {
-        val result = engine.plan("content://media/video/42", GatewayConfig())
+    fun `gateway is required for every processing job`() {
+        val result = engine.plan(
+            "content://media/video/42",
+            GatewayConfig()
+        )
 
         assertTrue(result.isFailure)
     }
 
     @Test
-    fun `valid gateway routes a local file to remote gateway`() {
+    fun `valid private gateway routes a local file remotely`() {
         val result = engine.plan(
-            "file:///data/user/0/com.example/files/input.mp4",
+            "file:///data/user/0/com.aistudio.opuspro.apk/files/input.mp4",
             GatewayConfig(baseUrl = "https://gateway.example.com/", token = "secret")
         )
 
-        assertTrue(result.isSuccess)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty(), result.isSuccess)
         assertEquals(ProcessingEngine.Route.REMOTE_GATEWAY, result.getOrThrow().route)
         assertEquals("https://gateway.example.com", result.getOrThrow().gatewayUrl)
     }
 
     @Test
     fun `invalid source is rejected before work is scheduled`() {
-        val result = engine.plan("https://example.com/video.mp4", GatewayConfig(baseUrl = "https://gateway.example.com"))
+        val result = engine.plan(
+            "https://example.com/video.mp4",
+            GatewayConfig(baseUrl = "https://gateway.example.com", token = "secret")
+        )
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun `missing gateway token is rejected`() {
+        val result = engine.plan(
+            "content://media/video/42",
+            GatewayConfig(baseUrl = "https://gateway.example.com")
+        )
 
         assertTrue(result.isFailure)
     }
@@ -39,7 +55,7 @@ class ProcessingEngineTest {
     fun `invalid gateway address is rejected`() {
         val result = engine.plan(
             "content://media/video/42",
-            GatewayConfig(baseUrl = "gateway-without-scheme")
+            GatewayConfig(baseUrl = "gateway-without-scheme", token = "secret")
         )
 
         assertTrue(result.isFailure)

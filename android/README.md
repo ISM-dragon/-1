@@ -1,49 +1,47 @@
-# ISM Android client
+# تطبيق ISM Android
+
+هذا المجلد يحتوي على تطبيق ISM للموبايل، وهو عميل Android أصلي مبني باستخدام Kotlin وJetpack Compose وRoom وWorkManager وMedia3.
 
 ## تجربة الاستخدام
 
-هذا تطبيق Android أصلي مخصص للاستخدام الشخصي في ISM. يبدأ التدفق من **Home** ثم **Import Video** لاختيار فيديو من file picker، وبعدها تُرفع النسخة إلى Gateway وتُتابع الوظيفة من **Processing**. عند النجاح تظهر **Results** ثم **Clip Review** للتحكم الأساسي في بداية ونهاية المقطع، بينما تحفظ **Settings** عنوان Gateway ورمز الجلسة بطريقة آمنة.
+واجهة التطبيق موجهة للاستخدام الشخصي السريع: الشاشة الرئيسية تبدأ بمصدر فيديو أو ملف من Photo Picker، والاستوديو يعرض نتائج القص، والمكتبة تحفظ المشاريع، بينما يجمع «مركز التحكم» التحليلات والمقارنة وإدارة Gateway دون ازدحام شريط التنقل.
 
-## حدود المسؤولية
+## محرك المعالجة
 
-Android مسؤول عن الواجهة، اختيار الفيديو، الرفع، إنشاء الوظيفة، عرض التقدم، تنزيل النتائج، المراجعة، والتحكم الأساسي بالمقطع. لا يحتوي التطبيق على Python أو FFmpeg أو أي خط معالجة وسائط محلي، ولا تعتمد الواجهة على أسماء وحدات Pipeline الداخلية. المصدر الوحيد للحالة والتقدم والنتائج هو عقد Gateway العام تحت `/v1`.
+يستخدم التطبيق طبقة `ProcessingEngine` بمسار واحد فقط هو `REMOTE_GATEWAY`. لا توجد معالجة فيديو محلية ولا fallback محلي. بعد اختيار الملف ينسخ التطبيق URI إلى مساحة خاصة، ويحفظ job في Room، ثم يجدول `VideoProcessingWorker` عبر WorkManager. العامل يرفع الفيديو إلى private Processing Gateway، ينشئ job بعيداً، يستطلع الحالة، ينزّل MP4 الناتج، ويحفظ المشروع والمقاطع محلياً.
 
-## دورة الوظيفة
+يملك Gateway محرك Python وFFmpeg ومفاتيح Gemini ومفاتيح المزودين. لا يحتوي APK على Python أو `uv` أو Node أو Rust أو desktop FFmpeg runtime، ولا يضمّن Android أي Gemini secret؛ وقد تستخدم بعض أدوات الذكاء الاختيارية مفتاحاً يضيفه المستخدم بنفسه. لا تُقبل عناوين Gateway إلا عبر HTTPS مع Gateway token غير فارغ.
 
-يستخدم التطبيق `RemoteProcessingCoordinator` و`RemoteProcessingWorker` مع WorkManager. يُحفظ `local_job_id` و`remote_job_id` و`idempotency_key` والنتائج في تخزين محلي دائم، ويُستخدم unique work لمنع إنشاء وظيفة ثانية عند إعادة فتح التطبيق. عند إغلاق التطبيق أو انقطاع الشبكة يستعيد العامل الوظيفة، ويستعلم عن الحالة الحالية، ويعيد المحاولة بمهلة تزايدية عند الأخطاء القابلة لإعادة المحاولة. إذا أعاد Gateway حالة `INTERRUPTED` يُطلب الاستئناف عبر العقد، وإذا كانت الوظيفة مكتملة أثناء إغلاق التطبيق تُستعاد النتائج عند التشغيل التالي.
+## البناء والتحقق
 
-تدعم الواجهة حالات المهمة الجارية، المهمة الموجودة مسبقًا، اكتمال المهمة، الفشل، إعادة المحاولة، الاستئناف، والإلغاء. لا تُعرض نسبة تقدم مصطنعة؛ النسبة المعروضة مشتقة من `progress` أو `fraction` التي يعيدها Gateway.
-
-## عقد API المستخدم
-
-| العملية | العقد المستخدم |
-|---|---|
-| اختبار الاتصال | `GET /health`, `GET /v1/auth/session`, `GET /v1/processing/capabilities` |
-| رفع الفيديو | `POST /v1/sources/upload` بصيغة stream/multipart-compatible raw video |
-| إنشاء الوظيفة | `POST /v1/processing/jobs` مع `source`, `llm`, `captions`, `mode`, `idempotency_key` |
-| الاستعلام | `GET /v1/processing/jobs/{id}` |
-| التحكم | `POST /cancel`, `POST /retry`, `POST /resume` |
-| النتائج | `results.render.outputs` أو `artifacts` ثم تنزيل روابط الوسائط العامة |
-
-تُقرأ حالات `state` canonical، مع دعم الحقول التوافقية `status`. تُحوّل أخطاء العقد إلى رسالة آمنة ورمز خطأ قابل للعرض دون كشف stack trace أو المسارات الخاصة أو Authorization header.
-
-## البناء والاختبار
-
-من داخل هذا المجلد:
+من داخل هذا المجلد، يتطلب البناء JDK 21 وAndroid SDK 36 فقط على جهاز التطوير:
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:lint
-./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```
 
-اختبار `RemoteGatewayApiContractTest` يستخدم Mock Gateway ويغطي الاتصال، Authorization، رفع الفيديو، إنشاء الوظيفة، قراءة حالة التقدم، قراءة النتائج، وتنزيل MP4. لا يحتاج الاختبار إلى تشغيل Python أو Gateway فعلي.
+لإخراج APK قابل للتثبيت يجب تمرير `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD` إلى Gradle. الناتج هو `app/build/outputs/apk/release/app-release.apk`. لا تُحفظ مفاتيح التوقيع في المستودع.
+
+## الصلاحيات والتخزين
+
+يطلب التطبيق `INTERNET` للشبكة، و`POST_NOTIFICATIONS` على Android 13+ لعرض حالة المهمة، و`FOREGROUND_SERVICE` و`FOREGROUND_SERVICE_DATA_SYNC` للمهام الطويلة. WorkManager يضيف صلاحياته الداخلية اللازمة لتشغيل واستعادة العمل. لا توجد صلاحيات قراءة أو كتابة تخزين عام؛ Photo Picker و`GetContent` يقدمان URI للملف، ثم يُنسخ إلى `filesDir/source_media` كي لا تعتمد المهمة الخلفية على صلاحية مؤقتة. النتائج تحفظ في `filesDir/gateway_exports`.
+
+## الخلفية وإعادة التشغيل والأعطال
+
+المهام الطويلة تعمل في `CoroutineWorker` على `Dispatchers.IO` مع إشعار foreground وتحديث progress، وقيد network، وexponential backoff. حالة المهمة و`remoteGatewayJobId` محفوظان في Room؛ لذلك لا تعتمد المعالجة على بقاء Activity مفتوحة. يدعم التطبيق الإلغاء وإعادة المحاولة والاستئناف من checkpoint البعيد. يحفظ `OpusApplication` آخر stack trace في `filesDir/last_crash.txt` ثم يمرر crash إلى النظام بدلاً من ابتلاعه.
+
+## حدود الاختبار
+
+نجحت اختبارات الوحدة وAndroid Lint وrelease assembly وفحوص توقيع APK وmanifest. تم إنشاء AVD Android 15 نظيف ومحاولة تثبيت وتشغيل APK، لكن بيئة TCG بلا acceleration لم تُبقِ المحاكي مستقراً حتى اكتمال الإقلاع؛ يجب إكمال install/launch/restart/file-picker/background على جهاز فعلي أو emulator مستقر قبل النشر العام.
+
+راجع [`../docs/RELEASE.md`](../docs/RELEASE.md) و[`../MANUS_HANDOFF.md`](../MANUS_HANDOFF.md) لمصفوفة الإصدار الكاملة.
 
 ## العلاقة مع المستودع
 
-المشروع الأصلي في جذر المستودع هو تطبيق سطح المكتب وطبقة Gateway وPython Pipeline. تطبيق Android هنا عميل مستقل، ويشارك العقد العام فقط. وثيقة العقد المرجعية هي `docs/API-CONTRACT.md`، كما تُحافظ `MANUS_HANDOFF.md` على تفاصيل التسليم الحالية.
+المشروع الأصلي في الجذر هو تطبيق سطح المكتب وطبقة Gateway وPython Pipeline. يبقى تطبيق Android هنا كعميل مستقل يستخدم عقد Gateway المشترك عند تفعيله.
 
-## الخصوصية
+## الترخيص
 
-رمز جلسة Gateway يُحفظ مشفرًا عبر Android Keystore. لا يرسل التطبيق مفتاح Gemini ولا أي سر خاص بالمزود إلى الخادم؛ يرسل فقط طلب API وفق العقد. المعالجة الفعلية للوسائط تقع على Gateway المهيأ من المستخدم.
+المشروع مرخّص وفق AGPL-3.0-or-later. راجع `../LICENSE` و`../VENDORED-LICENSES.md`.
