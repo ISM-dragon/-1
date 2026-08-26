@@ -47,7 +47,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -410,7 +410,7 @@ private fun PreviewCard(state: CaptionEditorUiState, viewModel: CaptionEditorVie
                     Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(CaptionAccent))
                     Text(" LIVE CAPTION", color = Color.White.copy(alpha = 0.82f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(start = 7.dp))
                     Spacer(Modifier.weight(1f))
-                    Icon(Icons.Default.VolumeUp, contentDescription = "Audio enabled", tint = Color.White.copy(alpha = 0.75f), modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = "Audio enabled", tint = Color.White.copy(alpha = 0.75f), modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.weight(1f))
                 CaptionOverlay(
