@@ -7,19 +7,18 @@ import com.example.data.model.GatewayConfig
  * The mobile processing engine's routing boundary.
  *
  * The UI submits a job; this class decides which production executor should own it.
- * It intentionally contains no fake fallback: a remote route is selected only when
- * a real Gateway URL is configured, otherwise the local pipeline is used.
+ * It intentionally contains no local fallback: every production route goes through
+ * the private Gateway, which may receive a local file or fetch an HTTP/HTTPS source.
  */
 class ProcessingEngine {
     enum class Route {
-        LOCAL_PIPELINE,
         REMOTE_GATEWAY
     }
 
     data class Plan(
         val route: Route,
         val sourceUri: String,
-        val gatewayUrl: String? = null,
+        val gatewayUrl: String,
         val label: String
     )
 
@@ -41,17 +40,13 @@ class ProcessingEngine {
 
         val baseUrl = gateway.baseUrl.trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            if (!isLocalSource) {
-                return Result.failure(
-                    IllegalArgumentException("مصدر HTTP/HTTPS يحتاج إلى Processing Gateway صالح؛ المعالجة المحلية تقبل الملفات فقط.")
-                )
-            }
-            return Result.success(
-                Plan(
-                    route = Route.LOCAL_PIPELINE,
-                    sourceUri = trimmedSource,
-                    label = "المحرك المحلي"
-                )
+            return Result.failure(
+                IllegalArgumentException("يجب ضبط عنوان Gateway الخاص قبل جدولة المعالجة.")
+            )
+        }
+        if (gateway.token.trim().isBlank()) {
+            return Result.failure(
+                IllegalArgumentException("يجب ضبط رمز Gateway قبل جدولة المعالجة.")
             )
         }
 

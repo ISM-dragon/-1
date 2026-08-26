@@ -17,6 +17,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
+import com.example.data.engine.ProcessingEngine
 import com.example.data.model.AiProviderConfig
 import com.example.data.model.AiUsageAggregate
 import com.example.data.model.AiUsageEntity
@@ -92,6 +93,7 @@ class OpusRepository(context: Context) {
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
     private val processingJobDao = db.processingJobDao()
+    private val processingEngine = ProcessingEngine()
     private val appContext = context.applicationContext
     private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
@@ -662,6 +664,8 @@ class OpusRepository(context: Context) {
         require(sourceUri.isNotBlank()) { "مصدر الفيديو مطلوب." }
         require(durationMinutes > 0) { "مدة الفيديو غير صالحة." }
 
+        processingEngine.plan(sourceUri, _gatewayConfig.value).getOrElse { throw it }
+
         val parsedSourceUri = Uri.parse(sourceUri)
         val stableSourceUri = if (parsedSourceUri.scheme == "content" || parsedSourceUri.scheme == "file") {
             runCatching {
@@ -780,13 +784,21 @@ class OpusRepository(context: Context) {
     suspend fun retryVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
         val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
         require(existing.status == ProcessingJobEntity.STATUS_FAILED || existing.status == ProcessingJobEntity.STATUS_CANCELLED) { "لا يمكن إعادة محاولة هذه المهمة." }
+        existing.remoteGatewayJobId?.takeIf { it.isNotBlank() }?.let { remoteJobId ->
+            ProcessingGatewayClient(appContext.contentResolver)
+                .retry(_gatewayConfig.value, remoteJobId)
+                .getOrThrow()
+        }
         processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "RETRY_WAIT", "إعادة المحاولة مجدولة.")
         requeuePersistedProcessing(existing)
     }
-
     suspend fun resumeVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
         val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
-        require(existing.remoteGatewayJobId?.isNotBlank() == true) { "لا يوجد job بعيد قابل للاستئناف." }
+        val remoteJobId = existing.remoteGatewayJobId?.takeIf { it.isNotBlank() }
+            ?: error("لا يوجد job بعيد قابل للاستئناف.")
+        ProcessingGatewayClient(appContext.contentResolver)
+            .resume(_gatewayConfig.value, remoteJobId)
+            .getOrThrow()
         processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "QUEUED", "استئناف المهمة من checkpoint Gateway.")
         requeuePersistedProcessing(existing)
     }
