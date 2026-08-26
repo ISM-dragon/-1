@@ -75,7 +75,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 خامسًا، أظهر أول build فعلي بعد توفير SDK وJDK خطأ ترجمة موجودًا في `OpusBottomNav.kt`: `NavigationBarItem` هو امتداد لـ`RowScope` في نسخة Material3 المستخدمة، بينما كان helper خارج هذا الـscope. أُصلح ذلك بتحويل `PrimaryItem` إلى `RowScope.PrimaryItem` دون تغيير السلوك المرئي.
 
-سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection بسبب `ModuleNotFoundError: fastapi`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. عولجت المشكلتان في Workflow والاختبار نفسه، من دون تخفيف فحوص الأمان.
+سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection أولًا بسبب `ModuleNotFoundError: fastapi` ثم كشف التشغيل التالي غياب `httpx` الذي يستورده `ProviderRouter`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. عولجت المشاكل في Workflow والاختبار نفسه، من دون تخفيف فحوص الأمان.
 
 ## القرارات التقنية
 
@@ -103,7 +103,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | `android/app/src/test/java/com/example/ProcessingEngineTest.kt` | استبدال اختبار fallback المحلي باختبارات فشل مبكر للعنوان والرمز، مع تغطية route البعيد والمصدر والعنوان غير الصالح.
 | `android/app/src/main/java/com/example/ui/components/OpusBottomNav.kt` | إصلاح receiver الخاص بـ`NavigationBarItem` حتى تترجم واجهة Android.
 | `android/README.md` و`ANDROID.md` | توثيق تدفق APK الشخصي Gateway-only، ومكان Python/FFmpeg/WhisperX خارج الهاتف.
-| `.github/workflows/quality-gate.yml` | تثبيت `gateway/requirements.txt` قبل اختبارات Python.
+| `.github/workflows/quality-gate.yml` | تثبيت `gateway/requirements.txt` و`httpx` قبل اختبارات Python حتى تطابق بيئة CI اعتماديات Gateway وProviderRouter.
 | `gateway/test_processing_bridge.py` | تهيئة SQLite المؤقتة وإضافة upload مكتمل مطابق للحجم وSHA-256.
 | `MANUS_HANDOFF.md` | هذه الوثيقة.
 
@@ -134,7 +134,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | اختبار Android المستهدف بعد rebase | نجح: `:app:testDebugUnitTest --tests com.example.ProcessingEngineTest`؛ ترجمة Kotlin وKSP وJava و6 حالات ProcessingEngine مرّت.
 | `./gradlew :app:testDebugUnitTest` الكامل | بقي عالقًا محليًا في Test Executor ولم يُعتمد كنجاح؛ يلزم تأكيده عبر CI.
 | `git diff --check` | نجح بعد كل التعديلات الحالية.
-| Quality Gate على GitHub قبل الإصلاح | فشل بسبب عدم تثبيت FastAPI في Workflow، وبسبب عدم تهيئة `media_uploads` في اختبار المسار؛ تم إصلاح Workflow والاختبار.
+| Quality Gate على GitHub قبل الإصلاح | فشل أولًا بسبب عدم تثبيت FastAPI، ثم فشل التشغيل التالي بسبب عدم تثبيت `httpx`؛ كما كان اختبار المسار يحتاج تهيئة `media_uploads`. تم إصلاح Workflow والاختبار، ويجب تأكيد التشغيل الجديد بعد هذا commit.
 
 ## الافتراضات
 
