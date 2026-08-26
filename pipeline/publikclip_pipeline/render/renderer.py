@@ -29,6 +29,7 @@ OUT_W = 1080
 OUT_H = 1920
 X264_CRF = 19
 VT_BITRATE = "10M"
+RENDERER_CACHE_VERSION = 2
 
 _vt_checked: bool | None = None
 
@@ -152,8 +153,12 @@ def render_clip(
         "-map_metadata", "-1",  # metadata scrub (openshorts ffmpeg_utils)
         str(out_path),
     ]
-    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-    cmd_path.unlink(missing_ok=True)
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    finally:
+        # sendcmd is an implementation detail; never leave it behind after
+        # an error, timeout, or successful render.
+        cmd_path.unlink(missing_ok=True)
     if proc.returncode != 0:
         raise RuntimeError(f"Render failed: {(proc.stderr or '')[-800:]}")
 

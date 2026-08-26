@@ -22,22 +22,29 @@ import subprocess
 import time
 from pathlib import Path
 
+import numpy as np
+
 from .. import config
 from ..jobs.queue import Stage, StageContext, StageError
 from ..models import registry, specs
 from ..render import ffmpeg_bin
 
 
-def _extract_wav(media: Path, dst: Path, sr: int) -> None:
+def _extract_audio_pcm(media: Path, sr: int) -> np.ndarray:
+    """Decode mono PCM directly to memory, avoiding a transient WAV artifact."""
     proc = subprocess.run(
         [
-            ffmpeg_bin.ffmpeg(), "-y", "-i", str(media),
-            "-vn", "-ac", "1", "-ar", str(sr), "-c:a", "pcm_s16le", str(dst),
+            ffmpeg_bin.ffmpeg(), "-v", "error", "-i", str(media),
+            "-vn", "-ac", "1", "-ar", str(sr), "-f", "s16le", "pipe:1",
         ],
-        capture_output=True, text=True, timeout=3600,
+        capture_output=True, timeout=3600,
     )
     if proc.returncode != 0:
-        raise StageError(f"Audio extraction failed: {(proc.stderr or '')[-500:]}")
+        detail = proc.stderr.decode(errors="replace")[-500:]
+        raise StageError(f"Audio extraction failed: {detail}")
+    if len(proc.stdout) < 2:
+        raise StageError("Audio extraction returned no samples.")
+    return np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
 
 
 class EventsStage(Stage):
@@ -58,8 +65,8 @@ class EventsStage(Stage):
         import json
 
         import librosa
-        import numpy as np
         import torch
+
 
         from ..vendor.laughter import model as laugh_model
         from ..vendor.laughter import segmenter as laugh_seg
@@ -105,16 +112,16 @@ class EventsStage(Stage):
         ctx.emit(0.35, "Detecting audio events (PANNs)…")
         t0 = time.monotonic()
         ckpt = registry.ensure(specs.PANNS_CNN14_MAX, lambda f, m: ctx.emit(0.35 + f * 0.1, m))
-        wav32 = ctx.job_dir / "audio32k.wav"
-        if not wav32.exists():
-            _extract_wav(media, wav32, panns_models.SAMPLE_RATE)
-        y32k, _ = librosa.load(str(wav32), sr=panns_models.SAMPLE_RATE, mono=True)
+        y32k = _extract_audio_pcm(media, panns_models.SAMPLE_RATE)
         pmodel = panns_models.load_model(str(ckpt), device)
         probs_by_type, fps = panns_channel.framewise_probs(
             pmodel, y32k, device,
             progress=lambda f: ctx.emit(0.45 + f * 0.35, "Detecting audio events…"),
         )
         del pmodel
+        # PANNs has consumed the 32 kHz waveform; release it before curves
+        # and SER so long videos do not retain two full audio arrays.
+        del y32k
         for etype, probs in probs_by_type.items():
             enter, stay = panns_channel.THRESHOLDS.get(etype, (0.15, 0.08))
             for start, end, peak in post.postprocess(probs, fps, enter=enter, stay=stay):
@@ -128,7 +135,6 @@ class EventsStage(Stage):
                     }
                 )
         bench["panns_sec"] = round(time.monotonic() - t0, 1)
-        wav32.unlink(missing_ok=True)  # 32k wav is only needed here
 
         # --- Channel 3: transcript long pauses ----------------------------
         events.extend(dsp.long_pauses(asr["segments"]))
