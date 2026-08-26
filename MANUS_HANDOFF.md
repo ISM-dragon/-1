@@ -75,7 +75,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 خامسًا، أظهر أول build فعلي بعد توفير SDK وJDK خطأ ترجمة موجودًا في `OpusBottomNav.kt`: `NavigationBarItem` هو امتداد لـ`RowScope` في نسخة Material3 المستخدمة، بينما كان helper خارج هذا الـscope. أُصلح ذلك بتحويل `PrimaryItem` إلى `RowScope.PrimaryItem` دون تغيير السلوك المرئي.
 
-سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection أولًا بسبب `ModuleNotFoundError: fastapi` ثم كشف التشغيل التالي غياب `httpx` الذي يستورده `ProviderRouter`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. عولجت المشاكل في Workflow والاختبار نفسه، من دون تخفيف فحوص الأمان.
+سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection أولًا بسبب `ModuleNotFoundError: fastapi` ثم كشف التشغيل التالي غياب `httpx` الذي يستورده `ProviderRouter`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. وأظهر التشغيل التالي أن اختبار الوسائط الفاسدة يعتمد ضمنيًا على وجود FFprobe في runner؛ عُزل ذلك الاختبار باستخدام mock يعيد probe فاشلًا، مع إبقاء اختبار جاهزية FFprobe منفصلًا. عولجت المشاكل في Workflow والاختبارات نفسها، من دون تخفيف فحوص الأمان.
 
 ## القرارات التقنية
 
@@ -105,6 +105,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | `android/README.md` و`ANDROID.md` | توثيق تدفق APK الشخصي Gateway-only، ومكان Python/FFmpeg/WhisperX خارج الهاتف.
 | `.github/workflows/quality-gate.yml` | تثبيت `gateway/requirements.txt` و`httpx` قبل اختبارات Python حتى تطابق بيئة CI اعتماديات Gateway وProviderRouter.
 | `gateway/test_processing_bridge.py` | تهيئة SQLite المؤقتة وإضافة upload مكتمل مطابق للحجم وSHA-256.
+| `gateway/tests/test_gateway_safety.py` | جعل اختبار الوسائط الفاسدة deterministic عبر mock لـFFprobe مع الحفاظ على عقد 422.
 | `MANUS_HANDOFF.md` | هذه الوثيقة.
 
 لم تُعدّل Python pipeline أو Gateway API في هذه الجلسة لأن الحد الفاصل القائم، بعد دمج تحسينات `origin/main`، كان كافيًا لإعادة الاستخدام. أُصلح اختبار Gateway وWorkflow التحقق فقط. لم تُحذف الوظائف الاجتماعية أو التحليلية أو إعدادات المزودين، لأنها ليست blocker لمسار معالجة الفيديو الشخصي.
@@ -128,13 +129,13 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | `git diff --check` | نجح.
 | `./gradlew :app:lint` | لم يكتمل محليًا بسبب ضغط ذاكرة مرتفع في sandbox؛ لا توجد نتيجة lint نهائية محلية.
 | `./gradlew :app:assembleDebug` | لم يكتمل محليًا بسبب ضغط الذاكرة عند مراحل dex؛ لا يوجد APK محلي نهائي من هذه الجلسة.
-| `python3 -m pytest gateway -q` | نجح: `37 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
+| `python3 -m pytest gateway -q` | نجح: `40 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
 | `python3 -m pytest -q` | نجح: `157 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
 | `python3 -m compileall -q gateway pipeline/publikclip_pipeline` | نجح.
 | اختبار Android المستهدف بعد rebase | نجح: `:app:testDebugUnitTest --tests com.example.ProcessingEngineTest`؛ ترجمة Kotlin وKSP وJava و6 حالات ProcessingEngine مرّت.
 | `./gradlew :app:testDebugUnitTest` الكامل | بقي عالقًا محليًا في Test Executor ولم يُعتمد كنجاح؛ يلزم تأكيده عبر CI.
 | `git diff --check` | نجح بعد كل التعديلات الحالية.
-| Quality Gate على GitHub قبل الإصلاح | فشل أولًا بسبب عدم تثبيت FastAPI، ثم فشل التشغيل التالي بسبب عدم تثبيت `httpx`؛ كما كان اختبار المسار يحتاج تهيئة `media_uploads`. تم إصلاح Workflow والاختبار، ويجب تأكيد التشغيل الجديد بعد هذا commit.
+| Quality Gate على GitHub قبل الإصلاح | فشل بسبب FastAPI ثم `httpx` ثم اعتماد اختبار safety على FFprobe؛ تم إصلاح Workflow والاختبارات الثلاثة، ويجب تأكيد التشغيل الجديد بعد هذا commit.
 
 ## الافتراضات
 
