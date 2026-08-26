@@ -28,7 +28,7 @@ Android لا يشغّل Python أو `uv` أو Node أو Rust أو FFmpeg desktop
 | Android Lint | نجح؛ التحذيرات المتبقية deprecation/quality warnings غير مانعة. |
 | Android release assembly | نجح باستخدام JDK 21 وAndroid SDK/API 36. |
 | APK | `android/app/build/outputs/apk/release/app-release-unsigned.apk`، package `com.aistudio.opuspro.apk`، version `0.12.0`، versionCode `7`، minSdk `24`، target/compile SDK `36`. |
-| APK digest | الحجم `55,690,915` bytes، SHA-256 `7394f25bd513aa8db4b46f739a22d507a6b614399645948eaf908fcb18a89f6f`. |
+| APK digest | الحجم `55,690,915` bytes، SHA-256 `58bc1d81adbe30fa2920e0555baa91dfd6b019578d81d6ddf14871658160e06f`. |
 | APK archive scan | لا توجد Python أو `uv` أو Node أو Rust/Cargo أو FFmpeg desktop runtime داخل الأرشيف. |
 | Android unit-test execution | مصدر الاختبار compile-checked، لكن التشغيل الكامل لـRobolectric لم يُعتمد بسبب تنزيل Android framework artifact خارجي من Maven في sandbox. |
 | Device smoke وE2E | غير معتمدين داخل sandbox؛ يلزم جهاز فعلي أو emulator مستقر وGateway خاص حقيقي. |
@@ -61,4 +61,4 @@ export ANDROID_SDK_ROOT="$ANDROID_HOME"
 
 ## حالة GitHub
 
-التغييرات المحلية الحالية تشمل hardening للـAndroid client والـworker، تصحيح اختبار Gateway الذي كان يفشل لأن `TestClient` لا يفعّل lifespan/database initialization، وتحديثات الوثائق و`.gitignore`. سيتم دفع commit النهائي إلى `main` بعد آخر فحص نظافة وأمان.
+التغييرات المحلية الحالية تشمل hardening للـAndroid client والـworker، تصحيح اختبار Gateway الذي كان يفشل لأن `TestClient` لا يفعّل lifespan/database initialization، وتحديثات الوثائق و`.gitignore`. تم دفع commit النهائي إلى `main` بعد اجتياز فحص النظافة والأمان.

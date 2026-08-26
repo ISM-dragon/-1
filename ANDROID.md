@@ -25,7 +25,7 @@ The APK is produced at:
 android/app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 
-The release package is `com.aistudio.opuspro.apk`, version `0.12.0`, `versionCode=7`. The current reproducible unsigned artifact is `55,690,915` bytes with SHA-256 `7394f25bd513aa8db4b46f739a22d507a6b614399645948eaf908fcb18a89f6f`. Never commit the keystore or its passwords; the unsigned artifact must be replaced with the product's release key before public distribution.
+The release package is `com.aistudio.opuspro.apk`, version `0.12.0`, `versionCode=7`. The current reproducible unsigned artifact is `55,690,915` bytes with SHA-256 `58bc1d81adbe30fa2920e0555baa91dfd6b019578d81d6ddf14871658160e06f`. Never commit the keystore or its passwords; the unsigned artifact must be replaced with the product's release key before public distribution.
 
 ## Runtime boundary
 
