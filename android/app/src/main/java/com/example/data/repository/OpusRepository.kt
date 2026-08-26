@@ -17,7 +17,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
-import com.example.data.engine.ProcessingEngine
 import com.example.data.model.AiProviderConfig
 import com.example.data.model.AiUsageAggregate
 import com.example.data.model.AiUsageEntity
@@ -52,7 +51,10 @@ import com.example.data.video.LocalMediaAnalyzer
 import com.example.data.video.Media3VideoProcessor
 import com.example.data.video.MediaUriStabilizer
 import com.example.data.worker.VideoProcessingWorker
+import com.example.data.worker.ClipRenderWorker
 import com.example.domain.analysis.AnalysisValidator
+import com.example.domain.editor.ClipEditEngine
+import com.example.domain.model.ClipEditState
 import com.example.domain.analysis.Transcript
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
@@ -81,7 +83,7 @@ sealed class ProcessingStep(val stepNumber: Int, val title: String, val descript
     object Completed : ProcessingStep(5, "Clips Generated", "Your viral shorts are ready in ISM Studio!")
 }
 
-class OpusRepository(context: Context) {
+class OpusRepository(context: Context) : ClipEditEngine {
 
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     private val db = OpusDatabase.getDatabase(context)
@@ -93,7 +95,6 @@ class OpusRepository(context: Context) {
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
     private val processingJobDao = db.processingJobDao()
-    private val processingEngine = ProcessingEngine()
     private val appContext = context.applicationContext
     private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
@@ -664,8 +665,6 @@ class OpusRepository(context: Context) {
         require(sourceUri.isNotBlank()) { "مصدر الفيديو مطلوب." }
         require(durationMinutes > 0) { "مدة الفيديو غير صالحة." }
 
-        processingEngine.plan(sourceUri, _gatewayConfig.value).getOrElse { throw it }
-
         val parsedSourceUri = Uri.parse(sourceUri)
         val stableSourceUri = if (parsedSourceUri.scheme == "content" || parsedSourceUri.scheme == "file") {
             runCatching {
@@ -784,21 +783,13 @@ class OpusRepository(context: Context) {
     suspend fun retryVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
         val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
         require(existing.status == ProcessingJobEntity.STATUS_FAILED || existing.status == ProcessingJobEntity.STATUS_CANCELLED) { "لا يمكن إعادة محاولة هذه المهمة." }
-        existing.remoteGatewayJobId?.takeIf { it.isNotBlank() }?.let { remoteJobId ->
-            ProcessingGatewayClient(appContext.contentResolver)
-                .retry(_gatewayConfig.value, remoteJobId)
-                .getOrThrow()
-        }
         processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "RETRY_WAIT", "إعادة المحاولة مجدولة.")
         requeuePersistedProcessing(existing)
     }
+
     suspend fun resumeVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
         val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
-        val remoteJobId = existing.remoteGatewayJobId?.takeIf { it.isNotBlank() }
-            ?: error("لا يوجد job بعيد قابل للاستئناف.")
-        ProcessingGatewayClient(appContext.contentResolver)
-            .resume(_gatewayConfig.value, remoteJobId)
-            .getOrThrow()
+        require(existing.remoteGatewayJobId?.isNotBlank() == true) { "لا يوجد job بعيد قابل للاستئناف." }
         processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "QUEUED", "استئناف المهمة من checkpoint Gateway.")
         requeuePersistedProcessing(existing)
     }
@@ -1269,12 +1260,55 @@ class OpusRepository(context: Context) {
         return if (weightTotal > 0f) (weightedCenter / weightTotal).coerceIn(-1f, 1f) else smoothed.coerceIn(-1f, 1f)
     }
 
+    override suspend fun renderClip(
+        clipId: Long,
+        editState: ClipEditState,
+        onProgress: (Int) -> Unit
+    ): Result<File> = runCatching {
+        exportClipToFile(
+            clipId = clipId,
+            burnInSubtitles = editState.captionsEnabled,
+            removeWatermark = false,
+            aspectRatioName = editState.aspectRatio,
+            smartReframe = editState.cropCenterX != 0f,
+            editState = editState,
+            onProgress = onProgress
+        )
+    }
+
+    suspend fun enqueueClipRender(clipId: Long, editState: ClipEditState): UUID {
+        require(editState.endTimeSec > editState.startTimeSec) { "نطاق المقطع غير صالح." }
+        val input = workDataOf(
+            ClipRenderWorker.KEY_CLIP_ID to clipId,
+            ClipRenderWorker.KEY_START_SEC to editState.startTimeSec,
+            ClipRenderWorker.KEY_END_SEC to editState.endTimeSec,
+            ClipRenderWorker.KEY_ASPECT_RATIO to editState.aspectRatio,
+            ClipRenderWorker.KEY_CROP_CENTER_X to editState.cropCenterX,
+            ClipRenderWorker.KEY_CAPTIONS_ENABLED to editState.captionsEnabled,
+            ClipRenderWorker.KEY_CAPTION_PRESET to editState.captionPreset,
+            ClipRenderWorker.KEY_CAPTION_POSITION to editState.captionPosition,
+            ClipRenderWorker.KEY_CAPTION_STYLE to editState.captionStyle
+        )
+        val request = OneTimeWorkRequestBuilder<ClipRenderWorker>()
+            .setInputData(input)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.NOT_REQUIRED).build())
+            .addTag("opus_clip_render")
+            .build()
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            "opus_clip_render_${clipId}_${editState.startTimeSec}_${editState.endTimeSec}",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+        return request.id
+    }
+
     suspend fun exportClipToFile(
         clipId: Long,
         burnInSubtitles: Boolean,
         removeWatermark: Boolean,
         aspectRatioName: String = "9:16",
         smartReframe: Boolean = true,
+        editState: ClipEditState? = null,
         onProgress: (Int) -> Unit = {}
     ): File = withContext(Dispatchers.IO) {
         val clip = clipDao.getClipByIdSync(clipId) ?: error("المقطع غير موجود.")
@@ -1306,19 +1340,30 @@ class OpusRepository(context: Context) {
             "opus_clips/${clip.projectId}/manual_exports"
         )
         val output = File(exportDirectory, "clip_${clip.id}_${System.currentTimeMillis()}.mp4")
+        val renderStart = editState?.startTimeSec ?: clip.startTimeSec
+        val renderEnd = editState?.endTimeSec ?: clip.endTimeSec
+        val renderCrop = editState?.cropCenterX?.takeIf { it != 0f } ?: trackedCenterX
         videoProcessor.exportClip(
             inputUri = inputUri,
             outputFile = output,
-            startTimeSec = clip.startTimeSec,
-            endTimeSec = clip.endTimeSec,
+            startTimeSec = renderStart,
+            endTimeSec = renderEnd,
             vertical = ratio == com.example.data.video.ExportAspectRatio.VERTICAL_9_16,
             aspectRatio = ratio,
             captionCues = if (burnInSubtitles) decodeCaptionCues(clip) else emptyList(),
             watermarkText = if (removeWatermark) "" else "ISM",
-            cropCenterX = trackedCenterX,
+            cropCenterX = renderCrop,
             onProgress = onProgress
         )
-        clipDao.updateExportPath(clip.id, output.absolutePath)
+        clipDao.updateClip(
+            clip.copy(
+                startTimeSec = renderStart,
+                endTimeSec = renderEnd,
+                durationSec = renderEnd - renderStart,
+                layoutType = editState?.aspectRatio ?: clip.layoutType,
+                exportPath = output.absolutePath
+            )
+        )
         output
     }
 
