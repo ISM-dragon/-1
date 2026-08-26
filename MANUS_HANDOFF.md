@@ -2,7 +2,7 @@
 
 **المشروع:** `publikclip` داخل المستودع `ISM-dragon/-1`  
 **تاريخ التسليم:** 2026-08-26  
-**نطاق هذه الجلسة:** متابعة انتقال عميل Android إلى APK شخصي يعتمد على Gateway خاص، دمج أحدث تغييرات `origin/main` حتى commit `d7d922e`، إصلاح أعطال CI والاختبارات، ومن دون إعادة كتابة الـPython pipeline أو حذفها.
+**نطاق هذه الجلسة:** متابعة انتقال عميل Android إلى APK شخصي يعتمد على Gateway خاص، دمج أحدث تغييرات `origin/main` حتى `d7d922e`، إصلاح أعطال CI والاختبارات، ورفع النتيجة النهائية حتى commit `fe71b18`، ومن دون إعادة كتابة الـPython pipeline أو حذفها.
 
 ## الخلاصة التنفيذية
 
@@ -137,8 +137,10 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 | اختبار Android المستهدف بعد rebase | نجح: `:app:testDebugUnitTest --tests com.example.ProcessingEngineTest`؛ ترجمة Kotlin وKSP وJava و6 حالات ProcessingEngine مرّت.
 | `./gradlew :app:testDebugUnitTest` الكامل | بقي عالقًا محليًا في Test Executor ولم يُعتمد كنجاح؛ يلزم تأكيده عبر CI.
 | `git diff --check` | نجح بعد كل التعديلات الحالية.
-| Quality Gate على GitHub قبل الإصلاح | فشل بسبب FastAPI ثم `httpx` ثم اعتماد اختبار safety على FFprobe ثم غياب FFmpeg لاختبار render؛ تم إصلاح Workflow والاختبارات، ونجح Quality Gate لاحقًا للcommit `57aca4c`.
+| حالة Git النهائية | `main` نظيف ومتطابق مع `origin/main` عند `fe71b18`.
+| Quality Gate على GitHub قبل الإصلاح | فشل بسبب FastAPI ثم `httpx` ثم اعتماد اختبار safety على FFprobe ثم غياب FFmpeg لاختبار render؛ تم إصلاح Workflow والاختبارات، ونجح التشغيل `32951488814` للcommit `fe71b18`.
 | Windows CI على `57aca4c` | فشل اختبار ASR لأن runtime الحقيقي صنّف فشل تحميل/تشغيل النموذج كـ`ASR_FAILED`؛ تم عزل الاختبار بحقن runtime فاشل عند `load_model`.
+| Windows CI على `fe71b18` | نجح التشغيل `32951488733`: اختبارات pipeline، بناء NSIS، التثبيت الصامت، ورفع artifact مرّت.
 
 ## الافتراضات
 
@@ -156,7 +158,7 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 
 ## Next steps للجلسة التالية
 
-1. رفع إصلاح ASR الحالي إلى GitHub وانتظار Quality Gate وWindows CI، ثم معالجة أي failure جديد من logs بدل تجاوزه.
+1. تم رفع إصلاح ASR إلى GitHub؛ نجح Quality Gate `32951488814` وWindows CI `32951488733` على `fe71b18`.
 2. تجهيز Gateway على جهاز خاص أو خدمة دائمة، وضبط البيئة من دون وضع أي secret في Git أو APK، ثم تمرير اختبار `/health` و`/v1/processing/capabilities` وdiagnostic pipeline/Gemini.
 3. تشغيل Native Android على جهاز أو emulator، اختبار اختيار فيديو محلي، الرفع، polling، تنزيل MP4، الاستيراد إلى Room، cancel، retry، وresume على نفس `remoteGatewayJobId`.
 4. إكمال `assembleDebug` و`lint` في CI أو بيئة ذات ذاكرة كافية، وحفظ APK الناتج كartifact؛ ثم تشغيل اختبار instrumentation الأساسي على جهاز فعلي إن توفر.
