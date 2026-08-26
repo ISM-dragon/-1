@@ -19,8 +19,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -85,26 +84,18 @@ private fun RowScope.PrimaryItem(
     onTabSelected: (OpusNavTab) -> Unit
 ) {
     val selected = currentTab == tab || (tab == OpusNavTab.TOOLS && currentTab in setOf(OpusNavTab.DASHBOARD, OpusNavTab.BENCHMARK, OpusNavTab.SETTINGS))
-    NavigationBarItem(
-        selected = selected,
+    TextButton(
         onClick = { onTabSelected(tab) },
-        icon = { Icon(imageVector = icon, contentDescription = tab.label) },
-        label = {
+        modifier = Modifier.clip(RoundedCornerShape(14.dp)).testTag(tab.testTag)
+    ) {
+        androidx.compose.foundation.layout.Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+            Icon(imageVector = icon, contentDescription = tab.label, tint = if (selected) accent else OpusTextSecondary)
             Text(
                 text = tab.label,
+                color = if (selected) accent else OpusTextSecondary,
                 fontSize = 10.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
             )
-        },
-        colors = NavigationBarItemDefaults.colors(
-            selectedIconColor = accent,
-            selectedTextColor = accent,
-            indicatorColor = OpusPrimaryViolet.copy(alpha = 0.28f),
-            unselectedIconColor = OpusTextSecondary,
-            unselectedTextColor = OpusTextSecondary
-        ),
-        modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .testTag(tab.testTag)
-    )
+        }
+    }
 }

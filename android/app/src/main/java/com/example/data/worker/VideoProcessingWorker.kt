@@ -6,23 +6,17 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.data.db.OpusDatabase
-import com.example.data.engine.ProcessingEngine
 import com.example.data.model.GatewayConfig
 import com.example.data.model.ProcessingJobEntity
-import com.example.data.model.Project
 import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.repository.OpusRepository
 import com.example.data.video.MediaUriStabilizer
-import com.example.domain.model.PipelineJob
-import com.example.domain.model.PipelineStageStatus
-import com.example.domain.pipeline.ProductionVideoPipeline
 import com.example.domain.security.SecureKeyManager
 import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.Locale
-import kotlin.math.roundToInt
 import java.util.UUID
 
 class VideoProcessingWorker(
@@ -32,7 +26,6 @@ class VideoProcessingWorker(
 
     private val database = OpusDatabase.getDatabase(appContext)
     private val jobs = database.processingJobDao()
-    private val processingEngine = ProcessingEngine()
 
     override suspend fun doWork(): Result {
         var jobId = inputData.getString(KEY_JOB_ID).orEmpty()
@@ -91,81 +84,37 @@ class VideoProcessingWorker(
         return try {
             val repository = OpusRepository(applicationContext)
             val gatewayConfig = loadGatewayConfig()
-            val enginePlan = processingEngine.plan(sourceUri, gatewayConfig).getOrThrow()
-            if (enginePlan.route == ProcessingEngine.Route.REMOTE_GATEWAY) {
-                val remoteProjectId = runRemoteGateway(
-                    repository = repository,
-                    config = gatewayConfig,
-                    jobId = jobId,
-                    title = title,
-                    sourceUri = sourceUri,
-                    durationMinutes = durationMinutes,
-                    targetPlatform = targetPlatform,
-                    captionTheme = captionTheme,
-                    processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" }
-                )
-                jobs.updateState(
-                    jobId = jobId,
-                    status = ProcessingJobEntity.STATUS_SUCCEEDED,
-                    progress = 100,
-                    stage = "COMPLETED",
-                    outputProjectId = remoteProjectId
-                )
-                ProcessingNotification.show(
-                    applicationContext,
-                    jobId,
-                    "اكتملت معالجة Gateway",
-                    "تم تنزيل المقاطع وحفظ المشروع رقم $remoteProjectId.",
-                    success = true
-                )
-                setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to remoteProjectId))
-                MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
-                return Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to remoteProjectId))
+            require(gatewayConfig.baseUrl.isNotBlank()) {
+                "Gateway URL غير مضبوط؛ Android client لا يشغّل محرك Python محلياً."
             }
-            val project = Project(
+            val remoteProjectId = runRemoteGateway(
+                repository = repository,
+                config = gatewayConfig,
+                jobId = jobId,
                 title = title,
-                sourceUrl = sourceUri,
-                sourceDurationSec = durationMinutes * 60,
+                sourceUri = sourceUri,
+                durationMinutes = durationMinutes,
                 targetPlatform = targetPlatform,
                 captionTheme = captionTheme,
-                status = "QUEUED"
+                processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" }
             )
-            val pipeline = ProductionVideoPipeline(
-                repository = repository,
-                context = applicationContext,
-                onStageChanged = { pipelineJob -> syncPipelineState(jobId, pipelineJob) }
-            )
-            val result = pipeline.executePipeline(
-                project = project,
-                userNicheHint = "",
-                targetPlatform = targetPlatform,
-                captionStyle = captionTheme,
+            jobs.updateState(
                 jobId = jobId,
-                transcriptOrPrompt = transcriptOrPrompt
+                status = ProcessingJobEntity.STATUS_SUCCEEDED,
+                progress = 100,
+                stage = "COMPLETED",
+                outputProjectId = remoteProjectId
             )
-            if (result.isSuccess) {
-                val projectId = result.getOrNull()?.firstOrNull()?.projectId ?: 0L
-                require(projectId > 0L) { "اكتملت المعالجة دون مشروع محفوظ صالح." }
-                jobs.updateState(
-                    jobId = jobId,
-                    status = ProcessingJobEntity.STATUS_SUCCEEDED,
-                    progress = 100,
-                    stage = "COMPLETED",
-                    outputProjectId = projectId
-                )
-                ProcessingNotification.show(
-                    applicationContext,
-                    jobId,
-                    "اكتملت معالجة ISM",
-                    "تم إنشاء المقاطع وحفظ المشروع رقم $projectId.",
-                    success = true
-                )
-                setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to projectId))
-                MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
-                Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to projectId))
-            } else {
-                throw result.exceptionOrNull() ?: IllegalStateException("فشل خط المعالجة الموحد")
-            }
+            ProcessingNotification.show(
+                applicationContext,
+                jobId,
+                "اكتملت معالجة Gateway",
+                "تم تنزيل المقاطع وحفظ المشروع رقم $remoteProjectId.",
+                success = true
+            )
+            setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to remoteProjectId))
+            MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
+            Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to remoteProjectId))
         } catch (cancelled: CancellationException) {
             jobs.updateState(
                 jobId = jobId,
@@ -274,37 +223,6 @@ class VideoProcessingWorker(
             captionTheme = captionTheme,
             clips = remote.clips,
             exportedPaths = exportedPaths
-        )
-    }
-
-    private suspend fun syncPipelineState(jobId: String, pipelineJob: PipelineJob) {
-        val stage = pipelineJob.currentStage
-        val stageProgress = pipelineJob.stages[stage]
-        val status = when (pipelineJob.overallStatus) {
-            PipelineStageStatus.COMPLETED -> ProcessingJobEntity.STATUS_SUCCEEDED
-            PipelineStageStatus.FAILED -> ProcessingJobEntity.STATUS_FAILED
-            PipelineStageStatus.CANCELLED -> ProcessingJobEntity.STATUS_CANCELLED
-            else -> ProcessingJobEntity.STATUS_RUNNING
-        }
-        val safeOverallProgress = pipelineJob.overallProgress.takeIf { it.isFinite() } ?: 0f
-        val progress = (safeOverallProgress.coerceIn(0f, 1f) * 100f).roundToInt()
-        val message = stageProgress?.message.orEmpty().ifBlank { stage.titleEn }
-        jobs.updateState(
-            jobId = jobId,
-            status = status,
-            progress = progress,
-            stage = stage.name,
-            errorMessage = pipelineJob.errorDetails ?: stageProgress?.errorMessage.orEmpty(),
-            outputProjectId = pipelineJob.projectId
-        )
-        setProgress(
-            workDataOf(
-                KEY_JOB_ID to jobId,
-                KEY_PROGRESS to progress,
-                KEY_STAGE to stage.name,
-                KEY_MESSAGE to message,
-                KEY_PROJECT_ID to pipelineJob.projectId
-            )
         )
     }
 
