@@ -24,7 +24,7 @@ if not application_match or application_match.group(1).startswith("com.example")
     raise SystemExit("Android applicationId must not use com.example")
 
 main = (ROOT / "gateway" / "main.py").read_text(encoding="utf-8")
-if 'title="ISM Social Gateway"' not in main or 'version="0.10.1"' not in main:
+if 'title="ISM Social Gateway"' not in main or 'version="0.11.0"' not in main:
     raise SystemExit("Gateway product/version identity drift detected")
 
 print(f"identity_ok product=ISM version={VERSION} android_application_id={application_match.group(1)} api=v1")
