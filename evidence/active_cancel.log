@@ -1,0 +1,173 @@
+{
+  "checks": [
+    {
+      "name": "upload_speech",
+      "status": 200,
+      "body": {
+        "id": "upl_IHtiMe4PxaFO7vdA",
+        "status": "done",
+        "source": "http://127.0.0.1:8787/v1/sources/jobs/upl_IHtiMe4PxaFO7vdA/media/source.mp4",
+        "filename": "source.mp4",
+        "bytes": 112154,
+        "sha256": "b6f71e268983f863506504443063e24cbffdcb568d0e128c6ed68cfe7f681f2e"
+      }
+    },
+    {
+      "name": "create_active_cancel_job",
+      "status": 200,
+      "body": {
+        "id": "proc_VUBiVkDfDKe6Gq2o",
+        "job_id": "proc_VUBiVkDfDKe6Gq2o",
+        "status": "queued",
+        "state": "QUEUED",
+        "correlation_id": "cor_LZLAhsSBoOeVKg",
+        "request_id": "req_bNVLPwdhTXwKgQ"
+      }
+    },
+    {
+      "name": "cancel_active_job",
+      "status": 200,
+      "body": {
+        "id": "proc_VUBiVkDfDKe6Gq2o",
+        "pipeline_job_id": null,
+        "source": "http://127.0.0.1:8787/v1/sources/jobs/upl_IHtiMe4PxaFO7vdA/media/source.mp4",
+        "llm": "ollama",
+        "captions": "classic",
+        "mode": "balanced",
+        "status": "cancelled",
+        "state": "CANCELLED",
+        "stage": null,
+        "fraction": null,
+        "message": "Cancellation requested",
+        "error": null,
+        "error_code": "JOB_CANCELLED",
+        "recoverable": false,
+        "retry_count": 0,
+        "cancel_requested": true,
+        "correlation_id": "cor_LZLAhsSBoOeVKg",
+        "idempotency_key": "final-acceptance-cancel-active-001",
+        "created_at": "2026-08-26T09:16:47.527728+00:00",
+        "updated_at": "2026-08-26T09:16:47.548244+00:00",
+        "results": null,
+        "progress": null,
+        "transitions": [
+          {
+            "id": 12,
+            "job_id": "proc_VUBiVkDfDKe6Gq2o",
+            "from_state": null,
+            "to_state": "QUEUED",
+            "stage": null,
+            "fraction": null,
+            "message": "Job accepted",
+            "error_code": null,
+            "created_at": "2026-08-26T09:16:47.527728+00:00"
+          },
+          {
+            "id": 13,
+            "job_id": "proc_VUBiVkDfDKe6Gq2o",
+            "from_state": "QUEUED",
+            "to_state": "PREPARING",
+            "stage": null,
+            "fraction": null,
+            "message": "Pipeline started",
+            "error_code": null,
+            "created_at": "2026-08-26T09:16:47.536391+00:00"
+          },
+          {
+            "id": 14,
+            "job_id": "proc_VUBiVkDfDKe6Gq2o",
+            "from_state": "PREPARING",
+            "to_state": "CANCELLED",
+            "stage": null,
+            "fraction": null,
+            "message": "Cancellation requested",
+            "error_code": "JOB_CANCELLED",
+            "created_at": "2026-08-26T09:16:47.548244+00:00"
+          }
+        ],
+        "artifacts": []
+      }
+    }
+  ],
+  "before_cancel": [
+    {
+      "status": "running",
+      "state": "PREPARING",
+      "stage": null,
+      "progress": null,
+      "error_code": null
+    }
+  ],
+  "after_cancel": {
+    "terminal": {
+      "id": "proc_VUBiVkDfDKe6Gq2o",
+      "pipeline_job_id": null,
+      "source": "http://127.0.0.1:8787/v1/sources/jobs/upl_IHtiMe4PxaFO7vdA/media/source.mp4",
+      "llm": "ollama",
+      "captions": "classic",
+      "mode": "balanced",
+      "status": "failed",
+      "state": "CANCELLED",
+      "stage": null,
+      "fraction": null,
+      "message": "Processing worker stopped the job",
+      "error": "Terminal job cannot transition from CANCELLED to FAILED",
+      "error_code": "JOB_CANCELLED",
+      "recoverable": false,
+      "retry_count": 0,
+      "cancel_requested": true,
+      "correlation_id": "cor_LZLAhsSBoOeVKg",
+      "idempotency_key": "final-acceptance-cancel-active-001",
+      "created_at": "2026-08-26T09:16:47.527728+00:00",
+      "updated_at": "2026-08-26T09:16:47.552257+00:00",
+      "results": null,
+      "progress": null,
+      "transitions": [
+        {
+          "id": 12,
+          "job_id": "proc_VUBiVkDfDKe6Gq2o",
+          "from_state": null,
+          "to_state": "QUEUED",
+          "stage": null,
+          "fraction": null,
+          "message": "Job accepted",
+          "error_code": null,
+          "created_at": "2026-08-26T09:16:47.527728+00:00"
+        },
+        {
+          "id": 13,
+          "job_id": "proc_VUBiVkDfDKe6Gq2o",
+          "from_state": "QUEUED",
+          "to_state": "PREPARING",
+          "stage": null,
+          "fraction": null,
+          "message": "Pipeline started",
+          "error_code": null,
+          "created_at": "2026-08-26T09:16:47.536391+00:00"
+        },
+        {
+          "id": 14,
+          "job_id": "proc_VUBiVkDfDKe6Gq2o",
+          "from_state": "PREPARING",
+          "to_state": "CANCELLED",
+          "stage": null,
+          "fraction": null,
+          "message": "Cancellation requested",
+          "error_code": "JOB_CANCELLED",
+          "created_at": "2026-08-26T09:16:47.548244+00:00"
+        }
+      ],
+      "artifacts": []
+    },
+    "history": [
+      {
+        "status": "failed",
+        "state": "CANCELLED",
+        "stage": null,
+        "progress": null,
+        "error_code": "JOB_CANCELLED",
+        "cancel_requested": true
+      }
+    ]
+  }
+}

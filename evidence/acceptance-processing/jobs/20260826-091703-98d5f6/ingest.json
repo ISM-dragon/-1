@@ -1,0 +1,22 @@
+{
+ "stage": "ingest",
+ "schema_version": 1,
+ "created_at": 1787735823.5680394,
+ "data": {
+  "media_path": "/home/ubuntu/ISM-dragon/evidence/acceptance-sources/upl_IHtiMe4PxaFO7vdA/source.mp4",
+  "audio_path": "/home/ubuntu/ISM-dragon/evidence/acceptance-processing/jobs/20260826-091703-98d5f6/audio16k.wav",
+  "title": "source",
+  "probe": {
+   "duration_sec": 8.122993,
+   "width": 320,
+   "height": 180,
+   "fps": 24.0,
+   "vfr": false,
+   "start_time": 0.0,
+   "video_codec": "h264",
+   "has_audio": true
+  },
+  "heatmap": null,
+  "source_hash": "705df296793a7c60"
+ }
+}

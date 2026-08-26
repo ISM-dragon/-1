@@ -1,61 +1,74 @@
-# MANUS HANDOFF — ISM Android / Backend
+# MANUS HANDOFF
 
-**المشروع:** ISM
+**المشروع:** ISM / PERSONAL ANDROID APK + PRIVATE BACKEND + PUBLIKCLIP ENGINE
 **المستودع:** `ISM-dragon/-1`
-**الحالة:** تم دمج إصلاحات Android/Gateway مع تحسينات engine وmedia lifecycle وpipeline stability؛ لم يبدأ rebuild كبير.
+**تاريخ التسليم:** 2026-08-26
+**حالة التسليم:** **FINAL ACCEPTANCE BLOCKED — evidence and build artifacts committed for internal QA only**
 
-## ما تم تنفيذه
+## نطاق الجلسة
 
-تم تصحيح عقد source في Native Android. يقبل `ProcessingEngine` الآن `content://` و`file://` للمعالجة المحلية، ويقبل `http://` و`https://` عندما يكون Gateway مضبوطًا. لم يعد `VideoProcessingWorker` يرفض URL قبل اختيار المسار، و`ProcessingGatewayClient` يرفع المصادر المحلية فقط ويرسل URL البعيد مباشرة إلى `/v1/processing/jobs`.
+لم تُضف features ولم تُعدّل المعمارية أو خوارزميات المعالجة. نُفذت اختبارات تشغيلية فعلية للـ Gateway وPublikClip، وتم توفير JDK compiler وAndroid SDK محليًا، ثم إعادة تشغيل Android unit tests وتجميع release. لم يوجد جهاز Android حقيقي متصل؛ لذلك لم يُعلن نجاح أي تفاعل Android أو E2E من APK حتى export.
 
-تم إصلاح نتائج Gateway بحيث تُستكمل metadata لكل output من score checkpoint، بما في ذلك `start` و`end` و`title` و`transcript` عندما لا تكون موجودة في render output. أضيفت regression coverage لعقد URL routing وmetadata وmedia upload path.
+## نتائج البناء والتحقق
 
-تم دمج `PipelineEngine` العام في `pipeline/publikclip_pipeline/engine/` بعقد ثابت للـ jobs والنتائج والأخطاء والتقدم، مع إبقاء CLI JSONL كطبقة توافق. كما تم دمج media lifecycle reliability في Gateway: resumable uploads، offset/checksum validation، atomic finalize، duplicate detection، cleanup، وoutput integrity metadata.
+| الفحص | النتيجة | الدليل |
+|---|---:|---|
+| Android unit tests | 33 passed | `evidence/android_unit_test.log` |
+| Gateway tests | 40 passed, 1 skipped | `evidence/gateway_pytest.log` |
+| PublikClip tests | 117 passed | `evidence/pipeline_pytest.log` |
+| Root regression | 157 passed, 1 skipped | `evidence/root_pytest.log` |
+| Targeted failure regression | 51 passed, 1 skipped | `evidence/targeted_failure_tests.log` |
+| Identity | PASS: ISM / 0.10.1 / application ID / v1 | `evidence/identity.log` |
+| Python compile | PASS | `evidence/py_compile.log` |
+| Git whitespace | PASS | `evidence/git_diff_check.log` |
+| Release assembly | PASS | `evidence/android_release_build.log` |
+| APK metadata/ZIP | PASS | `evidence/release_apk_badging.txt`, `evidence/release_apk_zip_test.txt` |
+| APK signing | BLOCKED | `evidence/release_apk_signing_check.txt` — unsigned |
+| Final root regression retest | 157 passed, 1 skipped | `evidence/final_root_retest.log` |
+| Final Android unit retest | 33 passed | `evidence/final_android_unit_retest.log` |
 
-آخر تغييرات remote أضافت pipeline-stage stability hardening دون تغيير algorithms: validation للمدخلات والـartifacts، recovery للـcheckpoint/cache الفاسد، معالجة timeout وFFmpeg/ffprobe errors، cleanup للملفات المؤقتة، ورسائل آمنة لأخطاء LLM/provider.
+**APK الناتج:** `android/app/build/outputs/apk/release/app-release-unsigned.apk`
+**SHA-256:** `f0ae2936f6dc10242c864460081151395fc9f621270d742639a67cb1159dc9ab`
+**Application ID:** `com.aistudio.opuspro.apk`
+**Version:** `0.10.1` / versionCode `5`
 
-## المعمارية المؤقتة
+## Evidence تشغيلي فعلي
 
-| المكوّن | المسؤولية |
+| المسار | النتيجة |
 |---|---|
-| Android client | local URI أو remote URL، حفظ Gateway job ID، WorkManager، polling، تنزيل النتائج والكاش |
-| Gateway | auth، SQLite state، media boundary، queue، retry/cancel/resume، provider secrets، artifact serving |
-| Pipeline Engine | public lifecycle adapter فوق stage graph الحالي |
-| Python pipeline | ingest، ASR، diarization، events، candidates، scoring، camera، captions، FFmpeg rendering |
-| Social providers | تبقى منفصلة؛ live publishing غير جاهز خارج mock mode |
+| Gateway health/auth/capabilities | PASS محليًا؛ health وcapabilities نجحت، وroute خاص بلا token أعاد 401 |
+| Valid video upload | PASS؛ `short.mp4` رُفع وأعيد source URL مع bytes وSHA-256 |
+| Invalid video | PASS؛ `corrupted.mp4` رُفض HTTP 422 مع `MEDIA_INVALID` |
+| Gemini create job | BLOCKED بأمان؛ 503 مع `GEMINI_NOT_CONFIGURED` |
+| Real pipeline attempt | بدأ فعليًا ووصل إلى ingest/ASR، لكنه لم يصل إلى downstream artifact |
+| Active cancel | PASS على Gateway؛ `CANCELLED` مع `JOB_CANCELLED` |
+| Backend restart | PASS جزئيًا؛ job ID وtransition history بقيا durable بعد restart |
+| Network loss | PASS جزئيًا؛ connection refusal أثناء التوقف ثم قراءة الوظيفة بعد عودة الخدمة |
+| Retry | PASS جزئيًا؛ أعاد إدراج الوظيفة مع retry metadata، بينما ظل فشل pipeline الحقيقي قائمًا |
+| Android install/open/picker/preview/edit/export | BLOCKED؛ لا جهاز حقيقي متصل وAPK unsigned |
 
-المسار الموصى به لمعالجة YouTube على Android هو تشغيل Python/FFmpeg والنماذج في Gateway، وليس داخل APK. Tauri Android لا يشغّل desktop runtime المحلي، وNative Android لا يملك parity كاملة مع WhisperX أو diarization أو active-speaker أو ASS/libass rendering.
+الأدلة التفصيلية موجودة في `evidence/`، وأحكام القبول في `docs/FINAL_ACCEPTANCE.md`، وتصنيف الحواجز في `docs/RELEASE_BLOCKERS.md`.
 
-## الاختبارات
+## حواجز الإصدار
 
-| الفحص | النتيجة |
-|---|---|
-| `python3 -m pytest gateway backend -q` | **44 passed, 1 skipped** لاختبار large-media، مع تحذيرات deprecation |
-| `cd pipeline && python3 -m pytest tests -q` | **97 passed**؛ suite الجذر الكاملة أعادت **154 passed, 1 skipped** |
-| `python3 -m compileall -q gateway pipeline/publikclip_pipeline` | نجح |
-| `python3 scripts/check_identity.py` | نجح |
-| `git diff --check` | نجح قبل آخر merge |
-| `cd android && ./gradlew :app:testDebugUnitTest --no-daemon` | متوقف قبل الاختبارات بسبب غياب Android SDK |
+**P0:** لا يوجد جهاز Android حقيقي للاختبار، والمسار الكامل APK → Gateway → Pipeline → artifact → preview/edit/render-again/export غير مثبت.
+**P1:** APK غير موقّع؛ Gemini غير مهيأ؛ اكتمال ASR/diarization/LLM production غير مثبت؛ private HTTPS/Docker deployment غير متاح في sandbox.
+**P2:** large-media test skipped وdevice instrumentation غير مشغّل.
+**P3:** deprecation warnings وصيانة namespace التاريخي موثقتان ولا تمنعان البناء.
 
-لم يُثبت بعد تشغيل E2E حقيقي من APK إلى Gateway إلى pipeline إلى MP4، ولم تُشغّل النماذج الثقيلة في هذه البيئة. Android unit tests ما زالت متوقفة بسبب غياب Android SDK.
+هذه الحواجز ليست عيوبًا يجوز تجاوزها بإضافة mock success. لم يتم الادعاء بإغلاق P0/P1، ولم يُجرَ تغيير source code لإخفائها.
 
-## العوائق المتبقية
+## كيفية إعادة التحقق
 
-أهم عائق هو عدم وجود APK-to-Gateway E2E موثق. Android CI يبني debug APK فقط ولا يغطي release signing أو device/instrumentation tests. يجب اختيار Android surface رسمي واحد بين Tauri-generated APK وNative Compose APK قبل الاستثمار في parity أو publishing.
+لإغلاق القبول، استخدم APK موقّعًا على جهاز Android حقيقي متصل مع USB debugging، واضبط Gateway خاصًا عبر HTTPS مع token، ثم نفّذ diagnostics قبل إنشاء job. يجب أن تكون pipeline وFFmpeg/storage وASR/diarization وLLM جاهزة. بعد ذلك أعد سيناريو `docs/FINAL_ACCEPTANCE.md` كاملًا، واجمع screenshots/logcat/job IDs/transition history وSHA-256 لكل artifact، ثم حدّث الحكم إلى PASS فقط بعد تحقق export وrender again من التطبيق نفسه.
 
-Gateway live social adapters وOAuth ما زالت غير منفذة خارج `PROVIDER_MODE=mock`. كما أن readiness probe يحتاج فصل structural readiness عن runtime ML/model readiness.
+## ملفات التسليم
 
-## الخطوة التالية
+- `docs/FINAL_ACCEPTANCE.md`
+- `docs/RELEASE_BLOCKERS.md`
+- `evidence/` وسجلات الاختبارات والـ smoke tests
+- `android/app/build/outputs/apk/release/app-release-unsigned.apk` للاختبار الداخلي فقط
 
-1. تثبيت Android SDK 36 وJava/Gradle المطلوبة وتشغيل unit tests وlint و`assembleDebug`.
-2. تشغيل Gateway حقيقي مع Python 3.12 وFFmpeg/ffprobe وmodel cache وGemini server key.
-3. اختبار Native remote URL وlocal upload مع cancel/retry/resume على جهاز أو emulator.
-4. اختيار package/application ID الرسمي وإضافة release signing وE2E smoke test.
-5. إبقاء Instagram publishing خارج نطاق الإصلاح الحالي حتى تُنفذ adapters وOAuth والإدارة الآمنة للأسرار.
+## ملاحظة عن الوثائق المطلوبة
 
-التوثيق التفصيلي موجود في:
-
-- [`docs/ANDROID_AUDIT.md`](docs/ANDROID_AUDIT.md)
-- [`docs/ENGINE_ARCHITECTURE.md`](docs/ENGINE_ARCHITECTURE.md)
-- [`docs/MEDIA_PIPELINE.md`](docs/MEDIA_PIPELINE.md)
-- [`docs/ENGINE_STABILITY.md`](docs/ENGINE_STABILITY.md)
+الملفات الحرفية `docs/ARCHITECTURE.md`, `docs/AUDIT.md`, `docs/API.md`, `docs/INTEGRATION_STATUS.md`, `docs/TEST_MATRIX.md`, `docs/PERFORMANCE.md`, و`docs/SECURITY.md` غير موجودة في repository الحالي. تمت مراجعة البدائل canonical الموجودة، ومنها `docs/MASTER-ARCHITECTURE.md`, `docs/API-CONTRACT.md`, `docs/FINAL-PRODUCTION-AUDIT.md`, `docs/ENGINE_STABILITY.md`, `docs/ANDROID_AUDIT.md`, و`docs/CLIENT-RESPONSIBILITIES.md`.

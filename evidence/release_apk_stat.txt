@@ -1,0 +1,1 @@
+size=60073954 bytes mode=644 path=android/app/build/outputs/apk/release/app-release-unsigned.apk

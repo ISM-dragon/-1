@@ -1,0 +1,4 @@
+package: name='com.aistudio.opuspro.apk' versionCode='5' versionName='0.10.1' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'
+sdkVersion:'24'
+targetSdkVersion:'36'
+uses-permission: name='android.permission.INTERNET'

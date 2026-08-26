@@ -1,0 +1,19 @@
+{
+  "upload": {
+    "id": "upl_IHtiMe4PxaFO7vdA",
+    "status": "done",
+    "source": "http://127.0.0.1:8787/v1/sources/jobs/upl_IHtiMe4PxaFO7vdA/media/source.mp4",
+    "filename": "source.mp4",
+    "bytes": 112154,
+    "sha256": "b6f71e268983f863506504443063e24cbffdcb568d0e128c6ed68cfe7f681f2e",
+    "reused": true
+  },
+  "create": {
+    "id": "proc_LWzKaCbiQ0m_eTE5",
+    "job_id": "proc_LWzKaCbiQ0m_eTE5",
+    "status": "queued",
+    "state": "QUEUED",
+    "correlation_id": "cor_slmugnLJW4i9Jw",
+    "request_id": "req_7RkIqkhvN6Gfzg"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "endpoint": "http://127.0.0.1:8787/v1/processing/jobs",
+  "reachable": false,
+  "error_type": "ConnectionError",
+  "error": "HTTPConnectionPool(host='127.0.0.1', port=8787): Max retries exceeded with url: /v1/processing/jobs (Caused by NewConnectionError(\"HTTPConnection(host='127.0.0.1', port=8787): Failed to establish a new connection: [Errno 111] Connection refused\"))"
+}

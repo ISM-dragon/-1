@@ -1,0 +1,190 @@
+/home/ubuntu/ISM-dragon/evidence/gateway_smoke.json
+[
+  {
+    "name": "health",
+    "status": 200,
+    "expected": [
+      200
+    ],
+    "pass": true,
+    "body": {
+      "status": "ok",
+      "ok": true,
+      "provider_mode": "mock",
+      "auth_configured": true,
+      "auth_required": true,
+      "pipeline": true,
+      "python": true,
+      "ffmpeg": true,
+      "gemini_configured": false,
+      "storage": true,
+      "scheduler_interval_seconds": 30,
+      "processing_active": 0,
+      "source_active": 0,
+      "workers": {
+        "processing": {
+          "worker_id": "processing_ae03f2a288",
+          "hostname": "bd76b5bace51",
+          "platform": "Linux-6.1.102-x86_64-with-glibc2.39",
+          "cpu_count": 6,
+          "max_workers": 1,
+          "status": "RUNNING",
+          "current_jobs": [],
+          "last_heartbeat": 1787735500.9111588,
+          "last_error": null
+        },
+        "sources": {
+          "worker_id": "sources_77a9ed36ab",
+          "hostname": "bd76b5bace51",
+          "platform": "Linux-6.1.102-x86_64-with-glibc2.39",
+          "cpu_count": 6,
+          "max_workers": 2,
+          "status": "RUNNING",
+          "current_jobs": [],
+          "last_heartbeat": 1787735500.9111788,
+          "last_error": null
+        }
+      },
+      "min_free_disk_gb": 0.0
+    }
+  },
+  {
+    "name": "private_route_without_token",
+    "status": 401,
+    "expected": [
+      401,
+      403
+    ],
+    "pass": true,
+    "body": {
+      "detail": "Invalid Gateway token"
+    }
+  },
+  {
+    "name": "capabilities",
+    "status": 200,
+    "expected": [
+      200
+    ],
+    "pass": true,
+    "body": {
+      "pipeline": true,
+      "pipeline_dir_configured": true,
+      "python": true,
+      "uv": true,
+      "ffmpeg": true,
+      "ffprobe": true,
+      "storage": true,
+      "gemini_configured": false,
+      "ollama": false,
+      "youtube_urls": true,
+      "https_urls": true,
+      "android_remote_processing": true,
+      "gateway": true,
+      "gemini": false,
+      "details": {
+        "pipeline": {
+          "ready": true,
+          "message": "Pipeline CLI is present; runtime dependencies are checked when the worker starts."
+        },
+        "gemini": {
+          "configured": false,
+          "provider": "gemini",
+          "status": "not_configured"
+        },
+        "ffmpeg": {
+          "ready": true,
+          "captions": true,
+          "message": "FFmpeg is available."
+        }
+      }
+    }
+  },
+  {
+    "name": "pipeline_diagnostic",
+    "status": 200,
+    "expected": [
+      200,
+      503
+    ],
+    "pass": true,
+    "body": {
+      "pipeline": true,
+      "pipeline_dir_configured": true,
+      "python": true,
+      "uv": true,
+      "ffmpeg": true,
+      "ffprobe": true,
+      "storage": true,
+      "gemini_configured": false,
+      "ollama": false,
+      "youtube_urls": true,
+      "https_urls": true,
+      "android_remote_processing": true,
+      "pipeline_importable": true,
+      "ffmpeg_usable": true,
+      "ready": true
+    }
+  },
+  {
+    "name": "gemini_diagnostic",
+    "status": 200,
+    "expected": [
+      200,
+      503
+    ],
+    "pass": true,
+    "body": {
+      "configured": false,
+      "reachable": false,
+      "model": "gemini-flash-latest",
+      "latency_ms": null,
+      "error_code": "GEMINI_NOT_CONFIGURED"
+    }
+  },
+  {
+    "name": "upload_valid_video",
+    "status": 200,
+    "expected": [
+      200,
+      201
+    ],
+    "pass": true,
+    "body": {
+      "id": "upl_svxCrb-pgBxG3twm",
+      "status": "done",
+      "source": "http://127.0.0.1:8787/v1/sources/jobs/upl_svxCrb-pgBxG3twm/media/source.mp4",
+      "filename": "source.mp4",
+      "bytes": 84606,
+      "sha256": "7def40c225d46eb1a02fcbaaffb683d7a7e3384794bbbf7bdef02a072e847572"
+    }
+  },
+  {
+    "name": "upload_invalid_video",
+    "status": 422,
+    "expected": [
+      400,
+      409,
+      415,
+      422
+    ],
+    "pass": true,
+    "body": {
+      "detail": "MEDIA_INVALID: Uploaded file is not a readable video."
+    }
+  },
+  {
+    "name": "create_processing_job",
+    "status": 503,
+    "expected": [
+      200,
+      201,
+      202,
+      503
+    ],
+    "pass": true,
+    "body": {
+      "detail": "GEMINI_NOT_CONFIGURED: Configure Gemini on the personal Gateway."
+    }
+  }
+]
