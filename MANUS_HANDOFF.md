@@ -175,3 +175,22 @@ Existing Python pipeline + FFmpeg + WhisperX/AI models
 - `gateway/README.md`
 - `ANDROID.md`
 - `android/README.md`
+
+
+## Private Backend Android — إضافة 2026-08-26
+
+تمت إضافة واجهة FastAPI شخصية لتطبيق Android فوق Gateway الحالي، من دون إنشاء backend ثانٍ أو إضافة accounts أو billing أو public authentication أو multi-user infrastructure. المسار المنفذ هو:
+
+```text
+Android → /jobs/* → SQLite + PersistentWorkerQueue → publikclip checkpoints → output
+```
+
+المسارات الجديدة هي `POST /jobs` لرفع فيديو multipart وإنشاء job، و`GET /jobs/{job_id}` لعرض `current_stage` و`progress` و`status` و`errors`، و`POST /jobs/{job_id}/cancel` و`POST /jobs/{job_id}/resume` للتحكم، و`GET /jobs/{job_id}/results` للنتائج، و`GET /jobs/{job_id}/clips/{clip_id}` لتفاصيل المقطع، و`POST /jobs/{job_id}/clips/{clip_id}/render` لإعادة الرندر. هذه aliases فوق نفس صفوف SQLite والـ checkpoints المستخدمة في `/v1/processing/*`.
+
+يدعم الرفع امتدادات MP4 وMOV وMKV وWebM، ويُنفّذ streaming بقطع 1 MiB مع حد افتراضي 2 GiB قابل للضبط عبر `ISM_MAX_UPLOAD_BYTES`. أضيفت `python-multipart==0.0.20` إلى `gateway/requirements.txt`. تشمل الحماية bearer token عند تفعيل `REQUIRE_GATEWAY_TOKEN=true`، containment checks للمسارات، إزالة الملفات الجزئية عند الفشل، والتحقق من artifacts قبل عرضها. لا تُعاد مسارات النظام أو traceback أو أسرار المحرك إلى Android.
+
+أُضيفت اختبارات `gateway/tests/test_private_backend.py` للـ HTTP upload والمصادقة والحدود وpersistence والتقدم والأخطاء وpath escape. اختبار `PYTHONPATH=. pytest -q gateway` مرّ بنتيجة `42 passed`، واختبارات pipeline عبر `uv run --project pipeline --offline pytest -q pipeline/tests` مرّت بنتيجة `91 passed`.
+
+يوجد اختبار E2E قابل للإعادة في `scripts/e2e_private_backend.sh`. أنشأ الاختبار MP4 حقيقياً عبر FFmpeg مع video وaudio، ومرّر الملف عبر Uvicorn و`POST /jobs` والـ worker ومحرك publikclip حتى ASR. انتهى الاختبار بحالة `FAILED` آمنة مع `PIPELINE_STAGE_FAILED` لأن الصوت الاصطناعي نغمة بلا كلام؛ لم يُدّعَ نجاح كامل للرندر. يتطلب النجاح الكامل فيديو كلامياً واعتماديات ASR/LLM والنماذج اللازمة.
+
+المرجع التفصيلي هو [`docs/BACKEND.md`](docs/BACKEND.md). كان `ENGINE_ARCHITECTURE.md` غير موجود في الفرع عند التنفيذ، لذلك استُخدم `docs/MASTER-ARCHITECTURE.md` بوصفه المرجع المعماري الموجود.

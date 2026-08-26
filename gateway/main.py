@@ -25,10 +25,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, ValidationError
 
 try:
     from .processing_service import classify_gemini_error, pipeline_available, pipeline_command as build_pipeline_command, pipeline_environment
@@ -1716,9 +1716,10 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Source media is not ready")
     base = (SOURCE_ROOT / job_id).resolve()
     target = (base / filename).resolve()
-    if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
+    if base not in target.parents or not target.is_file() or target.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
         raise HTTPException(status_code=404, detail="Source media not found")
-    return FileResponse(target, media_type="video/mp4", filename=target.name)
+    media_type = {".mp4": "video/mp4", ".mov": "video/quicktime", ".mkv": "video/x-matroska", ".webm": "video/webm"}.get(target.suffix.lower(), "application/octet-stream")
+    return FileResponse(target, media_type=media_type, filename=target.name)
 
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
@@ -1839,6 +1840,242 @@ async def processing_media(job_id: str, filename: str) -> FileResponse:
     if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
         raise HTTPException(status_code=404, detail="Media not found")
     return FileResponse(target, media_type="video/mp4", filename=target.name)
+
+
+# ---------------------------------------------------------------------------
+# Private Android API
+#
+# These concise routes intentionally reuse the canonical Gateway job store and
+# worker queue. They are not a second backend: the /v1/processing/* routes and
+# the Android-facing /jobs/* routes address the same SQLite rows and pipeline
+# checkpoints.
+
+PRIVATE_UPLOAD_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
+PRIVATE_MAX_CLIP_ID = 10000
+
+
+def _private_job_response(job: dict[str, Any]) -> dict[str, Any]:
+    error = job.get("error")
+    return {
+        "job_id": job.get("id"),
+        "status": job.get("status"),
+        "state": job.get("state"),
+        "current_stage": job.get("stage"),
+        "progress": job.get("progress"),
+        "message": job.get("message"),
+        "errors": ([{"code": job.get("error_code") or "JOB_FAILED", "message": error}] if error else []),
+        "recoverable": bool(job.get("recoverable")),
+        "cancel_requested": bool(job.get("cancel_requested")),
+        "retry_count": int(job.get("retry_count") or 0),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "correlation_id": job.get("correlation_id"),
+        "results_available": bool(job.get("results")),
+    }
+
+
+def _private_clip_index(clip_id: str) -> int:
+    raw = clip_id.strip()
+    if raw.lower().startswith("clip_"):
+        raw = raw[5:]
+    if not raw.isdigit():
+        raise HTTPException(status_code=422, detail={"code": "INVALID_CLIP_ID", "message": "clip_id must be a non-negative integer."})
+    index = int(raw)
+    if index > PRIVATE_MAX_CLIP_ID:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_CLIP_ID", "message": "clip_id is outside the supported range."})
+    return index
+
+
+def _private_processing_row(job_id: str) -> sqlite3.Row:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": "Processing job not found."})
+    return row
+
+
+def _private_result_for_job(job_id: str, row: sqlite3.Row) -> dict[str, Any]:
+    if canonical_state(row) != "COMPLETED":
+        raise HTTPException(status_code=409, detail={"code": "RESULTS_NOT_READY", "message": "Results are available only after the job is completed."})
+    job = processing_dict(row)
+    results = job.get("results") or {}
+    artifacts = results.get("artifacts", []) if isinstance(results, dict) else []
+    return {"job_id": job_id, "status": "completed", "clips": artifacts, "artifacts": artifacts, "results": results}
+
+
+def _private_safe_clip_entry(job_id: str, pipeline_job_id: str, entry: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        return None
+    raw_path = Path(str(entry.get("path", ""))).resolve()
+    clip_root = (PROCESSING_ROOT / "jobs" / pipeline_job_id / "clips").resolve()
+    if clip_root not in raw_path.parents or not raw_path.is_file():
+        return None
+    valid, _reason = validate_media_artifact(raw_path)
+    if not valid:
+        return None
+    safe = {key: value for key, value in entry.items() if key not in {"path", "ass"}}
+    safe["url"] = f"{PUBLIC_BASE_URL}/jobs/{job_id}/clips/{safe.get('clip', raw_path.stem)}"
+    safe["download_url"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{job_id}/media/{quote(raw_path.name, safe='')}"
+    return safe
+
+
+async def _private_upload_to_source(upload: UploadFile) -> tuple[str, int]:
+    filename = Path(upload.filename or "").name
+    suffix = Path(filename).suffix.lower()
+    content_type = (upload.content_type or "").lower()
+    if suffix not in PRIVATE_UPLOAD_EXTENSIONS and not content_type.startswith("video/"):
+        raise HTTPException(status_code=415, detail={"code": "UNSUPPORTED_VIDEO", "message": "Upload a supported video file (mp4, mov, mkv, or webm)."})
+    upload_id = f"upl_{secrets.token_urlsafe(12)}"
+    directory = (SOURCE_ROOT / upload_id).resolve()
+    source_root = SOURCE_ROOT.resolve()
+    if source_root not in directory.parents:
+        raise HTTPException(status_code=500, detail={"code": "UPLOAD_PATH_INVALID", "message": "Upload storage path is invalid."})
+    directory.mkdir(parents=True, exist_ok=False)
+    target = directory / ("source" + (suffix if suffix in PRIVATE_UPLOAD_EXTENSIONS else ".mp4"))
+    size = 0
+    try:
+        with target.open("wb") as output:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail={"code": "UPLOAD_TOO_LARGE", "message": "Uploaded video exceeds the configured size limit."})
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail={"code": "EMPTY_UPLOAD", "message": "Uploaded video is empty."})
+        timestamp = now_iso()
+        source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/{quote(target.name, safe='')}"
+        items = [{"index": 0, "title": filename or target.name, "url": source_url, "filename": target.name, "bytes": size}]
+        with closing(db()) as connection:
+            connection.execute(
+                "INSERT INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, ?, ?)",
+                (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), timestamp, timestamp),
+            )
+            connection.commit()
+        return source_url, size
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    except Exception as error:  # noqa: BLE001 — never expose filesystem details to clients
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=500, detail={"code": "UPLOAD_FAILED", "message": "Video upload failed."}) from error
+    finally:
+        await upload.close()
+
+
+@app.post("/jobs", dependencies=[Depends(auth)])
+async def private_create_job(
+    request: Request,
+    file: UploadFile | None = File(default=None),
+    source_url: str | None = Form(default=None),
+    llm: str = Form(default="gemini"),
+    captions: str = Form(default="classic"),
+    mode: str = Form(default="balanced"),
+    idempotency_key: str | None = Form(default=None),
+) -> dict[str, Any]:
+    """Create a personal processing job, normally with one multipart video file."""
+    if file is None and not source_url:
+        raise HTTPException(status_code=400, detail={"code": "VIDEO_REQUIRED", "message": "Provide a video file or source_url."})
+    uploaded_bytes = 0
+    source = source_url
+    if file is not None:
+        source, uploaded_bytes = await _private_upload_to_source(file)
+    assert source is not None
+    try:
+        payload = ProcessingPayload(source=source, llm=llm, captions=captions, mode=mode, idempotency_key=idempotency_key)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail={"code": "INVALID_JOB_OPTIONS", "message": "Invalid processing options."}) from error
+    created = await start_processing(payload, request)
+    current = await processing_status(created["id"])
+    response = _private_job_response(current)
+    response["uploaded_bytes"] = uploaded_bytes
+    return response
+
+
+@app.get("/jobs/{job_id}", dependencies=[Depends(auth)])
+async def private_get_job(job_id: str) -> dict[str, Any]:
+    row = _private_processing_row(job_id)
+    return _private_job_response(processing_dict(row))
+
+
+@app.post("/jobs/{job_id}/cancel", dependencies=[Depends(auth)])
+async def private_cancel_job(job_id: str) -> dict[str, Any]:
+    result = await cancel_processing(job_id)
+    return _private_job_response(result)
+
+
+@app.post("/jobs/{job_id}/resume", dependencies=[Depends(auth)])
+async def private_resume_job(job_id: str) -> dict[str, Any]:
+    result = await resume_processing(job_id)
+    return _private_job_response(result)
+
+
+@app.get("/jobs/{job_id}/results", dependencies=[Depends(auth)])
+async def private_job_results(job_id: str) -> dict[str, Any]:
+    row = _private_processing_row(job_id)
+    return _private_result_for_job(job_id, row)
+
+
+@app.get("/jobs/{job_id}/clips/{clip_id}", dependencies=[Depends(auth)])
+async def private_clip_details(job_id: str, clip_id: str) -> dict[str, Any]:
+    index = _private_clip_index(clip_id)
+    row = _private_processing_row(job_id)
+    if canonical_state(row) != "COMPLETED" or not row["pipeline_job_id"]:
+        raise HTTPException(status_code=409, detail={"code": "CLIP_NOT_READY", "message": "Clip details are available after processing completes."})
+    job_dir = (PROCESSING_ROOT / "jobs" / str(row["pipeline_job_id"])).resolve()
+    jobs_root = (PROCESSING_ROOT / "jobs").resolve()
+    if jobs_root not in job_dir.parents:
+        raise HTTPException(status_code=500, detail={"code": "JOB_PATH_INVALID", "message": "Job storage path is invalid."})
+    try:
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        from publikclip_pipeline.edits.render_clip import context_for_clip
+        context = await asyncio.to_thread(context_for_clip, job_dir, index)
+    except (IndexError, KeyError, FileNotFoundError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=404, detail={"code": "CLIP_NOT_FOUND", "message": "Clip was not found."}) from error
+    except Exception as error:  # noqa: BLE001 — stable client-facing error
+        raise HTTPException(status_code=422, detail={"code": "CLIP_DETAILS_FAILED", "message": "Clip details could not be loaded."}) from error
+    context["media_path"] = None
+    edit = context.get("edit")
+    if isinstance(edit, dict):
+        for overlay in edit.get("overlays", []) if isinstance(edit.get("overlays"), list) else []:
+            if isinstance(overlay, dict):
+                overlay["image_path"] = None
+    score = ((read_pipeline_checkpoint(job_dir, "score") or {}).get("clips") or [])
+    if not 0 <= index < len(score):
+        raise HTTPException(status_code=404, detail={"code": "CLIP_NOT_FOUND", "message": "Clip was not found."})
+    render = read_pipeline_checkpoint(job_dir, "render") or {}
+    output = next((item for item in render.get("outputs", []) if int(item.get("clip", -1)) == index), None)
+    return {"job_id": job_id, "clip_id": str(index), "clip": score[index], "details": context, "artifact": _private_safe_clip_entry(job_id, str(row["pipeline_job_id"]), output)}
+
+
+@app.post("/jobs/{job_id}/clips/{clip_id}/render", dependencies=[Depends(auth)])
+async def private_render_clip(job_id: str, clip_id: str) -> dict[str, Any]:
+    index = _private_clip_index(clip_id)
+    row = _private_processing_row(job_id)
+    if canonical_state(row) != "COMPLETED" or not row["pipeline_job_id"]:
+        raise HTTPException(status_code=409, detail={"code": "CLIP_NOT_READY", "message": "A completed job is required before rendering a clip."})
+    job_dir = (PROCESSING_ROOT / "jobs" / str(row["pipeline_job_id"])).resolve()
+    jobs_root = (PROCESSING_ROOT / "jobs").resolve()
+    if jobs_root not in job_dir.parents:
+        raise HTTPException(status_code=500, detail={"code": "JOB_PATH_INVALID", "message": "Job storage path is invalid."})
+    try:
+        if str(PIPELINE_DIR) not in sys.path:
+            sys.path.insert(0, str(PIPELINE_DIR))
+        from publikclip_pipeline.edits.render_clip import render_clip_edit
+        entry = await asyncio.to_thread(render_clip_edit, job_dir, index, lambda _fraction, _message: None)
+    except (IndexError, KeyError, FileNotFoundError) as error:
+        raise HTTPException(status_code=404, detail={"code": "CLIP_NOT_FOUND", "message": "Clip was not found."}) from error
+    except Exception as error:  # noqa: BLE001 — do not expose ffmpeg paths or traces
+        raise HTTPException(status_code=422, detail={"code": "CLIP_RENDER_FAILED", "message": "Clip render failed."}) from error
+    safe_entry = _private_safe_clip_entry(job_id, str(row["pipeline_job_id"]), entry)
+    if safe_entry is None:
+        raise HTTPException(status_code=500, detail={"code": "ARTIFACT_INVALID", "message": "Rendered clip failed artifact validation."})
+    return {"job_id": job_id, "clip_id": str(index), "status": "rendered", "artifact": safe_entry}
 
 
 @app.post("/v1/analytics/snapshots", dependencies=[Depends(auth)])
