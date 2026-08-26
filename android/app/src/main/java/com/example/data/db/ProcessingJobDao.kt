@@ -35,6 +35,9 @@ interface ProcessingJobDao {
     @Query("UPDATE processing_jobs SET remoteGatewayJobId = :remoteJobId, updatedAt = :updatedAt WHERE jobId = :jobId")
     suspend fun setRemoteGatewayJobId(jobId: String, remoteJobId: String, updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE processing_jobs SET remoteGatewayJobId = NULL, updatedAt = :updatedAt WHERE jobId = :jobId")
+    suspend fun clearRemoteGatewayJobId(jobId: String, updatedAt: Long = System.currentTimeMillis())
+
     @Query("DELETE FROM processing_jobs WHERE updatedAt < :olderThan")
     suspend fun deleteOlderThan(olderThan: Long): Int
 }

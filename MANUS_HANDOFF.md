@@ -1,73 +1,80 @@
-# MANUS HANDOFF
+# MANUS HANDOFF — publikclip / Android private processing
 
 ## الحالة الحالية
 
-تم تجهيز تطبيق Android أصلي مستقل داخل `android/` ليكون عميل release خفيفاً أمام private Processing Gateway. لا يوجد `MANUS_HANDOFF.md` في نقطة البداية التي تم استلامها؛ لذلك أُنشئت هذه الوثيقة لتثبيت الحالة الحالية ومتطلبات المتابعة.
+اكتملت مراجعة المستودع الأساسي والأرشيف المرجعي، ولم يُنسخ أي ملف من المشروع المرجعي. المسار المعتمد هو تطبيق Android أصلي يتصل بـGateway خاص، بينما تبقى PublikClip Engine وPython وFFmpeg والنماذج على الخادم. تم توصيل العامل الفعلي الذي يطلقه `VideoUploadScreen` بعميل private-backend يستخدم عقد `/jobs/*` المختصر، مع الحفاظ على Room وWorkManager ونتائج Project/Clip.
 
-التطبيق لا يشغّل Python أو `uv` أو Node أو Rust أو FFmpeg داخله. `ProcessingEngine` أصبح remote-only، و`VideoProcessingWorker` ينفذ الرفع والاستطلاع والتنزيل عبر Gateway داخل `CoroutineWorker`، بينما تبقى Python pipeline ومفاتيح Gemini وFFmpeg في backend الخاص.
+## القرارات
 
-## Artifact
-
-المسار الناتج:
-
-```text
-android/app/build/outputs/apk/release/app-release.apk
-```
-
-| الخاصية | القيمة |
+| القرار | الحالة |
 |---|---|
-| Package | `com.aistudio.opuspro.apk` |
-| Version | `0.10.1` |
-| Version code | `5` |
-| Min SDK | `24` |
-| Target/Compile SDK | `36` |
-| APK size | `55,596,707` bytes |
-| SHA-256 الحالي | `deceadddb138251acd6da62478f8b8913f7620c3f25140d2e3c108805c5faf5a` |
-| Signature | APK Signature Scheme v2، بمفتاح اختبار خارج المستودع |
+| عدم إعادة كتابة pipeline | مطبق؛ engine والمراحل الحالية باقية. |
+| عدم تشغيل Python/FFmpeg/WhisperX داخل APK | مطبق؛ Android يرفع ويستطلع وينزل فقط. |
+| استخدام private `/jobs/*` بدل internal `/v1/processing/*` لمسار Android | مطبق في العامل الرئيسي. |
+| حفظ remote job ID وإعادة polling بعد restart | مطبق عبر `ProcessingJobEntity.remoteGatewayJobId`. |
+| resume للمهمات interrupted/retry-wait | مطبق في `PrivateBackendClient`. |
+| retry لمهمة cancelled | يبدأ job جديدًا بعد مسح المعرف البعيد. |
+| نسخ كود المرجع | لم يحدث؛ ترخيص المرجع غير واضح رغم إعلان MIT النصي. |
 
-مفتاح الاختبار ليس مفتاح النشر العام. يجب قبل النشر تمرير keystore مملوك للمنتج عبر `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD`، وعدم تخزينه في Git أو تضمين أسراره في APK.
-
-## قرارات الإصدار
-
-يجب ضبط private Gateway بعنوان HTTPS ورمز وصول غير فارغ. في مسار معالجة الفيديو، يرسل Android الفيديو ورمز Gateway فقط؛ Gateway يدير Python pipeline وFFmpeg ومفاتيح Gemini. قد تستخدم بعض أدوات الذكاء الاختيارية مفتاحاً يضيفه المستخدم بنفسه، لكن لا يوجد مفتاح مضمّن في APK. التخزين العام غير مطلوب: Photo Picker يعيد `content://` أو URI محلياً، ثم ينسخ التطبيق المصدر إلى `filesDir/source_media` قبل جدولة العمل. النتائج البعيدة تُنزّل إلى `filesDir/gateway_exports/<jobId>`.
-
-يستخدم التطبيق `WorkManager` مع `CoroutineWorker` و`setForeground()` ونوع خدمة `dataSync` للمهام الطويلة. حالة job محفوظة في Room، ويستخدم العمل الفريد network constraint وexponential backoff؛ كما يدعم الإلغاء وإعادة المحاولة والاستئناف عبر `remoteGatewayJobId`. `POST_NOTIFICATIONS` يُطلب وقت التشغيل على Android 13+، وتوجد قناة تقدم وقناة نتيجة. معالج `OpusApplication` يحفظ آخر crash في `filesDir/last_crash.txt` ثم يعيد تمرير الاستثناء إلى handler السابق.
-
-## الملفات الرئيسية التي تغيرت
+## الملفات التي تغيرت أو أضيفت
 
 | الملف | التغيير |
 |---|---|
-| `android/app/src/main/java/com/example/data/engine/ProcessingEngine.kt` | إزالة fallback المحلي وفرض Gateway HTTPS + token. |
-| `android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt` | حذف استدعاء `ProductionVideoPipeline` المحلي، إضافة foreground progress، والإبقاء على remote processing. |
-| `android/app/src/main/java/com/example/data/repository/OpusRepository.kt` | تحويل `processNewVideo` إلى enqueue وانتظار terminal Room state بدلاً من تنفيذ محرك محلي. |
-| `android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt` | فرض HTTPS للـ Gateway. |
-| `android/app/src/main/java/com/example/data/worker/ProcessingNotification.kt` | foreground notification وتحديث progress وقناة النتائج. |
-| `android/app/src/main/java/com/example/MainActivity.kt` | طلب إذن الإشعارات على Android 13+. |
-| `android/app/src/main/java/com/example/OpusApplication.kt` | crash handler يحفظ آخر stack trace. |
-| `android/app/src/main/AndroidManifest.xml` | أقل صلاحيات صريحة، وإضافة foreground service type `dataSync`. |
-| `android/app/build.gradle.kts` | إزالة Firebase/Google Services/Secrets plugin غير المستخدمة من APK. |
-| `android/app/src/test/java/com/example/ProcessingEngineTest.kt` | اختبار Gateway-only ورفض المصدر/العنوان/token غير الصالح. |
-| `docs/RELEASE.md` | تقرير الإصدار ومصفوفة التحقق وحدود اختبار الجهاز. |
+| `android/app/src/main/java/com/example/data/remote/PrivateBackendClient.kt` | عميل multipart للـprivate `/jobs`، polling، resume، cancel، parsing، وتنزيل artifact مع HTTPS/host validation. |
+| `android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt` | العامل الرئيسي يستخدم `PrivateBackendClient` ويحافظ على Room notifications وimport. |
+| `android/app/src/main/java/com/example/data/repository/OpusRepository.kt` | الاستيراد والإلغاء يستخدمان نوع وعميل private backend، وcancelled retry يمسح remote ID. |
+| `android/app/src/main/java/com/example/data/db/ProcessingJobDao.kt` | إضافة `clearRemoteGatewayJobId`. |
+| `android/app/src/test/java/com/example/PrivateBackendClientTest.kt` | اختبارات multipart/private job وresume من checkpoint. |
+| `docs/REFERENCE_COMPARISON.md` | مقارنة code/feature-level وقرارات الأوزان. |
+| `docs/REFERENCE_MIGRATION_PLAN.md` | خطة Wave 1–5 وبوابات الانتقال. |
+| `docs/MIGRATION_DECISIONS.md` | سجل KEEP/ADD/IMPROVE/IGNORE/MANUAL_REVIEW. |
+| `docs/THIRD_PARTY_LICENSES.md` | فحص provenance والترخيص وعدم النسخ. |
+| `docs/API.md`, `docs/ENGINE.md`, `docs/AI_RUNTIME.md`, `docs/MEDIA_RUNTIME.md`, `docs/ANDROID_UI.md`, `docs/TEST_MATRIX.md`, `docs/PERFORMANCE.md` | عقود ومسؤوليات واختبارات وخطة قياس مطلوبة. |
 
-## نتائج التحقق
+## أدلة الاختبار
 
-نجحت `:app:testDebugUnitTest` و`:app:lint` و`:app:assembleRelease`. أكد `apksigner` توقيع v2، وأكد `aapt2` package والـ SDK والصلاحيات. فحص أرشيف APK لم يجد Python أو `uv` أو Node أو Rust أو Cargo أو FFmpeg runtime، ولم يجد Gemini API key أو placeholder key مضمّناً في DEX.
+| الاختبار | النتيجة |
+|---|---|
+| `pytest -q backend/tests` | **6 passed**. |
+| `pytest -q gateway/tests gateway/test_personal_taste.py gateway/test_processing_bridge.py gateway/test_provider_quality.py` | **47 passed, 1 skipped**؛ التخطي لاختبار وسائط كبير مشروط بـ`RUN_LARGE_MEDIA_TESTS=1`. |
+| `PYTHONPATH=pipeline pytest -q pipeline/tests` | **117 passed** بعد تثبيت dependencies المعلنة. |
+| Gradle Kotlin/Java compilation | نجح حتى `compileDebugUnitTestKotlin` و`compileDebugJavaWithJavac` ضمن تشغيل Android. |
+| `PrivateBackendClientTest.interruptedExistingJobIsResumedWithoutUploadingAgain` | نجح مع `BUILD SUCCESSFUL`. |
+| اختبار `processUsesPrivateJobsContractAndDownloadsResult` | لم يكتمل ضمن timeout في Robolectric؛ لا يُسجل كنجاح. |
+| full `:app:testDebugUnitTest` | بدأ compilation، ثم أُوقف لحماية ذاكرة sandbox بعد توقف runner؛ لا يُسجل كنجاح كامل. |
+| APK release/lint/device E2E | لم يُثبت في هذه الجولة. يلزم تشغيلها على بيئة Android مستقرة. |
 
-تم إنشاء AVD نظيف Android 15 باسم `clean_api35` ومحاولة تثبيت وتشغيل الـ APK. المحاكي يعمل في بيئة TCG بلا acceleration؛ ظهر online مؤقتاً ثم خرج قبل اكتمال `sys.boot_completed=1`. لذلك لم يتم اعتماد install/launch/restart/file-picker/background على جهاز حقيقي كاختبار ناجح، ويجب إكمالها على هاتف Android أو emulator مستقر مزود بتسريع قبل النشر العام.
+## قيود معروفة
+
+الاختبار الميداني على هاتف أو emulator مستقر لم يُنفذ هنا. كما أن upload multipart في اختبار Robolectric يحتاج تشخيصًا منفصلًا؛ compilation ناجح، لكن test runner توقف أثناء تنفيذ الاختبار. لا يوجد benchmark حقيقي لفيديو طويل أو نماذج AI في هذه البيئة، ولا ينبغي اعتبار وجود ملفات evidence التاريخية بديلًا عن إعادة القياس.
+
+يتطلب الإنتاج ضبط `PUBLIC_BASE_URL` القابل للوصول من الهاتف، `REQUIRE_GATEWAY_TOKEN=true`، `GATEWAY_TOKEN` خارج Git، volume دائمًا للـSQLite/sources/processing/models، وHTTPS أو VPN. يجب بناء APK release وتوقيعه بمفتاح مملوك للمستخدم عبر متغيرات بيئية، دون حفظ keystore في المستودع.
 
 ## أوامر إعادة الإنتاج
 
 ```bash
 cd android
-export JAVA_HOME=/path/to/jdk-21
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 export ANDROID_HOME=/path/to/android-sdk
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export KEYSTORE_PATH=/secure/path/release.jks
-export STORE_PASSWORD='***'
-export KEY_PASSWORD='***'
-./gradlew :app:testDebugUnitTest :app:lint :app:assembleRelease
+./gradlew :app:compileDebugUnitTestKotlin
+./gradlew :app:testDebugUnitTest --tests com.example.PrivateBackendClientTest.interruptedExistingJobIsResumedWithoutUploadingAgain
+./gradlew :app:lint :app:assembleRelease
 ```
 
-## مراجع التسليم
+## المراجع
 
-التفاصيل التشغيلية، مصفوفة الصلاحيات، بصمة APK، وقيود اختبار الجهاز موجودة في [`docs/RELEASE.md`](docs/RELEASE.md). يجب أن يكون أي backend مستخدم في الإنتاج خاصاً ومحمياً بـ HTTPS وGateway token، ويجب عدم نقل محرك Python أو أسراره إلى تطبيق Android.
+[1]: docs/REFERENCE_COMPARISON.md "Reference comparison"
+[2]: docs/REFERENCE_MIGRATION_PLAN.md "Migration plan"
+[3]: docs/API.md "Android private API contract"
+[4]: android/app/src/main/java/com/example/data/remote/PrivateBackendClient.kt "Private backend client"
+[5]: android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt "Live Android worker"
+[6]: gateway/main.py "Canonical Gateway and private routes"
+[7]: evidence/current_python_tests.log "Initial dependency-related test evidence"
+[8]: evidence/backend_tests.log "Backend test evidence"
+[9]: evidence/gateway_tests.log "Gateway test evidence"
+[10]: evidence/pipeline_tests.log "Pipeline test evidence"
+
+## References
+
+المراجع ملفات محلية داخل المستودع. هذه الوثيقة تسجل ما ثبت وما لم يثبت، ولا تستخدم عبارة «كل شيء يعمل» دون دليل.

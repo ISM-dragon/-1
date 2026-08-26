@@ -9,7 +9,7 @@ import com.example.data.db.OpusDatabase
 import com.example.data.engine.ProcessingEngine
 import com.example.data.model.GatewayConfig
 import com.example.data.model.ProcessingJobEntity
-import com.example.data.remote.ProcessingGatewayClient
+import com.example.data.remote.PrivateBackendClient
 import com.example.data.repository.OpusRepository
 import com.example.data.video.MediaUriStabilizer
 import com.example.domain.security.SecureKeyManager
@@ -96,7 +96,7 @@ class VideoProcessingWorker(
             val repository = OpusRepository(applicationContext)
             val gatewayConfig = loadGatewayConfig()
             val enginePlan = processingEngine.plan(sourceUri, gatewayConfig).getOrThrow()
-            val remoteProjectId = runRemoteGateway(
+            val remoteProjectId = runPrivateBackend(
                 repository = repository,
                 config = gatewayConfig,
                 jobId = jobId,
@@ -186,7 +186,7 @@ class VideoProcessingWorker(
         )
     }
 
-    private suspend fun runRemoteGateway(
+    private suspend fun runPrivateBackend(
         repository: OpusRepository,
         config: GatewayConfig,
         jobId: String,
@@ -197,12 +197,15 @@ class VideoProcessingWorker(
         captionTheme: String,
         processingMode: String
     ): Long {
-        val client = ProcessingGatewayClient(applicationContext.contentResolver)
+        val client = PrivateBackendClient(applicationContext.contentResolver)
+        val persistedRemoteJobId = jobs.get(jobId)?.remoteGatewayJobId
         val remote = client.process(
             config = config,
             sourceUri = sourceUri,
             captionTheme = captionTheme,
             mode = processingMode,
+            idempotencyKey = jobId,
+            existingRemoteJobId = persistedRemoteJobId,
             onJobCreated = { remoteJobId ->
                 jobs.setRemoteGatewayJobId(jobId, remoteJobId)
             },

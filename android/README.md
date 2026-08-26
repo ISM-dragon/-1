@@ -8,9 +8,9 @@
 
 ## محرك المعالجة
 
-يستخدم التطبيق طبقة `ProcessingEngine` بمسار واحد فقط هو `REMOTE_GATEWAY`. لا توجد معالجة فيديو محلية ولا fallback محلي. بعد اختيار الملف ينسخ التطبيق URI إلى مساحة خاصة، ويحفظ job في Room، ثم يجدول `VideoProcessingWorker` عبر WorkManager. العامل يرفع الفيديو إلى private Processing Gateway، ينشئ job بعيداً، يستطلع الحالة، ينزّل MP4 الناتج، ويحفظ المشروع والمقاطع محلياً.
+يستخدم التطبيق طبقة `ProcessingEngine` بمسار واحد فقط هو `REMOTE_GATEWAY`. لا توجد معالجة فيديو محلية ولا fallback محلي. بعد اختيار الملف ينسخ التطبيق URI إلى مساحة خاصة، ويحفظ job في Room، ثم يجدول `VideoProcessingWorker` عبر WorkManager. العامل يستخدم عميل private backend بعقد `/jobs/*` multipart، يرفع الفيديو، ينشئ job بعيداً بمفتاح idempotency، يستطلع الحالة، يستأنف checkpoint عند الحاجة، ينزّل MP4 الناتج، ويحفظ المشروع والمقاطع محلياً. تفاصيل العقد في [`../docs/API.md`](../docs/API.md).
 
-يملك Gateway محرك Python وFFmpeg ومفاتيح Gemini ومفاتيح المزودين. لا يحتوي APK على Python أو `uv` أو Node أو Rust أو desktop FFmpeg runtime، ولا يضمّن Android أي Gemini secret؛ وقد تستخدم بعض أدوات الذكاء الاختيارية مفتاحاً يضيفه المستخدم بنفسه. لا تُقبل عناوين Gateway إلا عبر HTTPS مع Gateway token غير فارغ.
+يملك Gateway محرك Python وFFmpeg ومفاتيح Gemini ومفاتيح المزودين. لا يحتوي APK على Python أو `uv` أو Node أو Rust أو desktop FFmpeg runtime، ولا يضمّن Android أي Gemini secret؛ وقد تستخدم بعض أدوات الذكاء الاختيارية مفتاحاً يضيفه المستخدم بنفسه. لا تُقبل عناوين private backend إلا عبر HTTPS مع token غير فارغ، ويُسمح بـHTTP فقط لـlocalhost في الاختبارات المحلية.
 
 ## البناء والتحقق
 
