@@ -18,14 +18,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -33,7 +35,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
@@ -62,21 +63,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
-import com.example.data.model.AutoPublishResult
 import com.example.data.model.Clip
 import com.example.data.repository.OpusRepository
 import com.example.ui.components.AutoCaptionStudioCard
-import com.example.ui.components.AutoPublishResultDialog
-import com.example.ui.components.AutoPublishSettingsDialog
-import com.example.ui.components.BRollSuggestionCard
-import com.example.ui.components.CaptionStylePicker
-import com.example.ui.components.DedicatedCaptionGeneratorCard
-import com.example.ui.components.DirectPublisherDialog
-import com.example.ui.components.SocialCopyCard
 import com.example.ui.components.VideoSimPlayer
-import com.example.ui.components.ViralityRadarCard
 import com.example.ui.theme.OpusBorder
 import com.example.ui.theme.OpusDarkCanvas
 import com.example.ui.theme.OpusDarkSurface
@@ -89,7 +79,6 @@ import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusViralEmerald
 import com.example.ui.theme.OpusVioletGlow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -100,107 +89,34 @@ fun ClipStudioScreen(
     onOpenComparison: ((Long) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
     val allClips by repository.allClips.collectAsState(initial = emptyList())
-
     val displayedClips = remember(allClips, initialProjectId) {
-        if (initialProjectId != null && initialProjectId > 0) {
-            allClips.filter { it.projectId == initialProjectId }
-        } else {
-            emptyList()
-        }
+        if (initialProjectId != null && initialProjectId > 0) allClips.filter { it.projectId == initialProjectId } else emptyList()
     }
 
     var selectedClipIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(initialProjectId, displayedClips.size) {
         if (selectedClipIndex !in displayedClips.indices) selectedClipIndex = 0
     }
-    val activeClip = displayedClips.getOrNull(selectedClipIndex) ?: displayedClips.firstOrNull()
+    val activeClip = displayedClips.getOrNull(selectedClipIndex)
 
+    var activeTab by remember { mutableIntStateOf(0) }
     var selectedCaptionTheme by remember { mutableStateOf("Opus Neon") }
-    var selectedLayout by remember { mutableStateOf("9:16 Full Screen") }
-    var activeTab by remember { mutableIntStateOf(1) } // Default to Auto-Captions tab for direct editing
+    var selectedLayout by remember { mutableStateOf(activeClip?.layoutType ?: "9:16 Full Screen") }
     var captionPosition by remember { mutableStateOf("Bottom (Safe Zone)") }
     var fontSizeSp by remember { mutableIntStateOf(14) }
     var showAutoEmojis by remember { mutableStateOf(true) }
     var isUppercase by remember { mutableStateOf(false) }
     var externalSeekSec by remember { mutableStateOf<Float?>(null) }
-    var burnInSubtitles by remember { mutableStateOf(true) }
-
     var showExportModal by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
     var exportProgress by remember { mutableIntStateOf(0) }
-    var exportResolution by remember { mutableStateOf("1080p (Full HD)") }
-    var removeWatermark by remember { mutableStateOf(true) }
+    var exportError by remember { mutableStateOf<String?>(null) }
+    var exportCompleted by remember { mutableStateOf(false) }
 
-    var showAutoPublishSettingsDialog by remember { mutableStateOf(false) }
-    var autoPublishDialogData by remember { mutableStateOf<Pair<Clip, AutoPublishResult>?>(null) }
-    var isPublishingNow by remember { mutableStateOf(false) }
-
-    var showDirectPublisherDialog by remember { mutableStateOf(false) }
-    var directPubPlatform by remember { mutableStateOf("TikTok") }
-    var directPubCaption by remember { mutableStateOf("") }
-
-    if (showAutoPublishSettingsDialog) {
-        AutoPublishSettingsDialog(
-            repository = repository,
-            onDismiss = { showAutoPublishSettingsDialog = false }
-        )
-    }
-
-    if (showDirectPublisherDialog && activeClip != null) {
-        DirectPublisherDialog(
-            clip = activeClip,
-            repository = repository,
-            initialPlatform = directPubPlatform,
-            initialCaption = directPubCaption,
-            onDismiss = { showDirectPublisherDialog = false }
-        )
-    }
-
-    autoPublishDialogData?.let { (clip, result) ->
-        AutoPublishResultDialog(
-            clip = clip,
-            publishResult = result,
-            onDismiss = { autoPublishDialogData = null },
-            onOpenStudio = { autoPublishDialogData = null }
-        )
-    }
-
-    if (displayedClips.isEmpty()) {
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(OpusDarkCanvas),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    imageVector = Icons.Default.Videocam,
-                    contentDescription = "No Clips",
-                    tint = OpusTextSecondary,
-                    modifier = Modifier.size(48.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = if (initialProjectId != null && initialProjectId > 0) "لا توجد مقاطع محفوظة لهذا المشروع" else "No Clips Generated Yet",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        color = OpusTextPrimary,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                Text(
-                    text = if (initialProjectId != null && initialProjectId > 0) {
-                        "لم يتم إنشاء ملفات مقاطع لهذا المشروع بعد. افحص حالة المعالجة أو أعد التصدير."
-                    } else {
-                        "ارفع فيديو محلياً أولاً لإنشاء مقاطعك الحقيقية."
-                    },
-                    style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary),
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
+    if (activeClip == null) {
+        EmptyStudioState(modifier = modifier)
         return
     }
 
@@ -212,468 +128,170 @@ fun ClipStudioScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Generated Viral Shorts (${displayedClips.size})",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = OpusTextPrimary
-                    )
-                )
-                Text(
-                    text = "Ranked by Virality",
-                    fontSize = 11.sp,
-                    color = OpusViralEmerald,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
             Spacer(modifier = Modifier.height(8.dp))
-
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(displayedClips.indices.toList()) { index ->
-                    val clip = displayedClips[index]
-                    val isSelected = activeClip?.id == clip.id
-                    val scoreColor = if (clip.viralityScore >= 90) OpusViralEmerald else OpusElectricCyan
-
-                    Box(
-                        modifier = Modifier
-                            .width(160.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isSelected) OpusDarkSurfaceHighlight else OpusDarkSurface)
-                            .border(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) OpusElectricCyan else OpusBorder,
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .clickable {
-                                selectedClipIndex = index
-                                selectedLayout = clip.layoutType
-                            }
-                            .padding(10.dp)
-                            .testTag("clip_item_card_${clip.id}")
-                    ) {
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(scoreColor.copy(alpha = 0.2f))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "${clip.viralityScore} Score",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = scoreColor
-                                    )
-                                }
-
-                                Text(
-                                    text = "${clip.durationSec}s",
-                                    fontSize = 10.sp,
-                                    color = OpusTextSecondary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Text(
-                                text = clip.title,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) OpusTextPrimary else OpusTextSecondary
-                                ),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
+            Text(
+                text = "أفضل المقاطع",
+                style = MaterialTheme.typography.displaySmall.copy(color = OpusTextPrimary, fontWeight = FontWeight.Black)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("اختر مقطعاً لمعاينته وتحريره ثم تصديره.", color = OpusTextSecondary, fontSize = 14.sp)
         }
 
-        if (activeClip != null) {
-            item {
-                VideoSimPlayer(
-                    clip = activeClip,
-                    selectedCaptionTheme = selectedCaptionTheme,
-                    layoutType = selectedLayout,
-                    onLayoutChange = { newLayout ->
-                        selectedLayout = newLayout
-                        coroutineScope.launch {
-                            repository.updateLayoutType(activeClip.id, newLayout)
-                        }
-                    },
-                    captionPosition = captionPosition,
-                    fontSizeSp = fontSizeSp,
-                    showAutoEmojis = showAutoEmojis,
-                    isUppercase = isUppercase,
-                    externalSeekSec = externalSeekSec,
-                    onSeekComplete = { externalSeekSec = null }
-                )
-            }
-
-            item {
-                var isExecutingAiCommand by remember { mutableStateOf(false) }
-                var lastAiCommandFeedback by remember { mutableStateOf<String?>(null) }
-
-                com.example.ui.components.AiEditingCommandBar(
-                    isProcessing = isExecutingAiCommand,
-                    lastAiFeedback = lastAiCommandFeedback,
-                    onExecuteCommand = { cmd ->
-                        isExecutingAiCommand = true
-                        coroutineScope.launch {
-                            try {
-                                val feedback = repository.executeAiEditingCommand(
-                                    commandPrompt = cmd,
-                                    clipTitle = activeClip.title,
-                                    currentTranscript = activeClip.transcript,
-                                    currentViralityScore = activeClip.viralityScore
-                                )
-                                lastAiCommandFeedback = feedback
-                                Toast.makeText(context, "تم تطبيق أمر التحرير بنجاح", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                val message = e.localizedMessage?.takeIf { it.isNotBlank() }
-                                    ?: "تعذر تنفيذ أمر التحرير."
-                                lastAiCommandFeedback = "فشل التحرير: $message"
-                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                            } finally {
-                                isExecutingAiCommand = false
-                            }
-                        }
-                    }
-                )
-            }
-
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = {
-                                coroutineScope.launch {
-                                    repository.toggleFavorite(activeClip.id, activeClip.isFavorite)
-                                }
-                            },
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(OpusDarkSurfaceVariant)
-                                .size(40.dp)
-                                .testTag("favorite_clip_button")
-                        ) {
-                            Icon(
-                                imageVector = if (activeClip.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                contentDescription = "Favorite",
-                                tint = if (activeClip.isFavorite) OpusHotPink else OpusTextSecondary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Text(
-                            text = if (activeClip.isFavorite) "Saved in Favorites" else "Save Clip",
-                            fontSize = 12.sp,
-                            color = OpusTextSecondary
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Direct In-App API Publish Action Button
-                        Button(
-                            onClick = {
-                                directPubPlatform = "TikTok"
-                                directPubCaption = ""
-                                showDirectPublisherDialog = true
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = OpusDarkSurfaceHighlight),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, OpusElectricCyan),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.testTag("direct_publish_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Send,
-                                contentDescription = "Publish",
-                                tint = OpusElectricCyan,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "نشر API مباشر",
-                                fontWeight = FontWeight.Bold,
-                                color = OpusElectricCyan,
-                                fontSize = 12.sp
-                            )
-                        }
-
-                        // Export Short Button
-                        Button(
-                            onClick = { showExportModal = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = OpusPrimaryViolet),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.testTag("open_export_modal_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Download,
-                                contentDescription = "Export",
-                                tint = Color.White,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Export",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-            }
-
-            item {
-                ScrollableTabRow(
-                    selectedTabIndex = activeTab,
-                    containerColor = OpusDarkSurface,
-                    contentColor = OpusElectricCyan,
-                    edgePadding = 0.dp,
-                    indicator = { tabPositions ->
-                        TabRowDefaults.SecondaryIndicator(
-                            Modifier.tabIndicatorOffset(tabPositions[activeTab]),
-                            color = OpusElectricCyan
-                        )
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, OpusBorder, RoundedCornerShape(10.dp))
-                ) {
-                    listOf("Virality Radar", "Auto-Captions & STT", "مولد الكابشن الذكي", "AI B-Roll", "Social Copy").forEachIndexed { index, title ->
-                        Tab(
-                            selected = activeTab == index,
-                            onClick = { activeTab = index },
-                            text = {
-                                Text(
-                                    text = title,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (activeTab == index) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (activeTab == index) OpusElectricCyan else OpusTextSecondary
-                                )
-                            },
-                            modifier = Modifier.testTag("studio_tab_$index")
-                        )
-                    }
-                }
-            }
-
-            when (activeTab) {
-                0 -> item {
-                    ViralityRadarCard(
-                        clip = activeClip,
-                        onCompareClick = {
-                            onOpenComparison?.invoke(activeClip.id)
+        item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.testTag("best_clips_row")) {
+                items(displayedClips.indices.toList(), key = { displayedClips[it].id }) { index ->
+                    ClipChoiceCard(
+                        clip = displayedClips[index],
+                        selected = displayedClips[index].id == activeClip.id,
+                        onClick = {
+                            selectedClipIndex = index
+                            selectedLayout = displayedClips[index].layoutType
                         }
                     )
-                }
-                1 -> item {
-                    AutoCaptionStudioCard(
-                        clip = activeClip,
-                        selectedCaptionTheme = selectedCaptionTheme,
-                        onThemeSelect = { selectedCaptionTheme = it },
-                        captionPosition = captionPosition,
-                        onPositionChange = { captionPosition = it },
-                        fontSizeSp = fontSizeSp,
-                        onFontSizeChange = { fontSizeSp = it },
-                        showAutoEmojis = showAutoEmojis,
-                        onShowAutoEmojisChange = { showAutoEmojis = it },
-                        isUppercase = isUppercase,
-                        onUppercaseChange = { isUppercase = it },
-                        onSeekToSec = { externalSeekSec = it },
-                        repository = repository
-                    )
-                }
-                2 -> item {
-                    DedicatedCaptionGeneratorCard(
-                        clip = activeClip,
-                        repository = repository,
-                        onDirectPublishClick = { platform, caption ->
-                            directPubPlatform = platform
-                            directPubCaption = caption
-                            showDirectPublisherDialog = true
-                        }
-                    )
-                }
-                3 -> item {
-                    BRollSuggestionCard(bRollPromptsJson = activeClip.bRollPromptsJson)
-                }
-                4 -> item {
-                    SocialCopyCard(socialCopyJson = activeClip.socialCopyJson)
                 }
             }
         }
 
         item {
-            Spacer(modifier = Modifier.height(30.dp))
+            ScoreCard(clip = activeClip)
         }
+
+        item {
+            SectionLabel(title = "Preview", supporting = "المعاينة الفعلية للمقطع المحدد")
+            VideoSimPlayer(
+                clip = activeClip,
+                selectedCaptionTheme = selectedCaptionTheme,
+                layoutType = selectedLayout,
+                onLayoutChange = { layout ->
+                    selectedLayout = layout
+                    scope.launch { repository.updateLayoutType(activeClip.id, layout) }
+                },
+                captionPosition = captionPosition,
+                fontSizeSp = fontSizeSp,
+                showAutoEmojis = showAutoEmojis,
+                isUppercase = isUppercase,
+                externalSeekSec = externalSeekSec,
+                onSeekComplete = { externalSeekSec = null },
+                modifier = Modifier.testTag("clip_preview")
+            )
+        }
+
+        item {
+            TranscriptCard(clip = activeClip)
+        }
+
+        item {
+            ScrollableTabRow(
+                selectedTabIndex = activeTab,
+                containerColor = OpusDarkSurface,
+                contentColor = OpusElectricCyan,
+                edgePadding = 0.dp,
+                indicator = { positions ->
+                    TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(positions[activeTab]), color = OpusElectricCyan)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .border(1.dp, OpusBorder, RoundedCornerShape(14.dp))
+                    .testTag("edit_tabs")
+            ) {
+                listOf("Captions", "Crop").forEachIndexed { index, title ->
+                    Tab(
+                        selected = activeTab == index,
+                        onClick = { activeTab = index },
+                        text = {
+                            Text(title, fontSize = 13.sp, fontWeight = if (activeTab == index) FontWeight.Bold else FontWeight.Medium)
+                        },
+                        icon = {
+                            Icon(
+                                if (index == 0) Icons.Default.Subtitles else Icons.Default.Crop,
+                                contentDescription = null,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        },
+                        modifier = Modifier.testTag("edit_tab_$index")
+                    )
+                }
+            }
+        }
+
+        item {
+            if (activeTab == 0) {
+                AutoCaptionStudioCard(
+                    clip = activeClip,
+                    selectedCaptionTheme = selectedCaptionTheme,
+                    onThemeSelect = { selectedCaptionTheme = it },
+                    captionPosition = captionPosition,
+                    onPositionChange = { captionPosition = it },
+                    fontSizeSp = fontSizeSp,
+                    onFontSizeChange = { fontSizeSp = it },
+                    showAutoEmojis = showAutoEmojis,
+                    onShowAutoEmojisChange = { showAutoEmojis = it },
+                    isUppercase = isUppercase,
+                    onUppercaseChange = { isUppercase = it },
+                    onSeekToSec = { externalSeekSec = it },
+                    repository = repository
+                )
+            } else {
+                CropCard(
+                    selectedLayout = selectedLayout,
+                    onLayoutChange = { layout ->
+                        selectedLayout = layout
+                        scope.launch { repository.updateLayoutType(activeClip.id, layout) }
+                    }
+                )
+            }
+        }
+
+        item {
+            Button(
+                onClick = {
+                    exportError = null
+                    exportCompleted = false
+                    showExportModal = true
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .testTag("open_export_modal_button"),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = OpusPrimaryViolet)
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, tint = Color.White)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Render & export", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        item { Spacer(modifier = Modifier.height(26.dp)) }
     }
 
     if (showExportModal) {
         AlertDialog(
             onDismissRequest = { if (!isExporting) showExportModal = false },
             containerColor = OpusDarkSurface,
-            title = {
-                Text(
-                    text = "Export High-Definition Short",
-                    fontWeight = FontWeight.Bold,
-                    color = OpusTextPrimary,
-                    fontSize = 16.sp
-                )
-            },
+            title = { Text("تصدير المقطع", color = OpusTextPrimary, fontWeight = FontWeight.Bold) },
             text = {
                 Column {
-                    Text(
-                        text = "Choose resolution & rendering parameters:",
-                        fontSize = 12.sp,
-                        color = OpusTextSecondary
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    listOf("1080p (Full HD)", "4K Ultra HD (60fps)").forEach { res ->
-                        val isSel = exportResolution == res
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isSel) OpusDarkSurfaceHighlight else OpusDarkSurfaceVariant)
-                                .border(1.dp, if (isSel) OpusElectricCyan else OpusBorder, RoundedCornerShape(8.dp))
-                                .clickable { exportResolution = res }
-                                .padding(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = res,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSel) OpusElectricCyan else OpusTextPrimary
-                                )
-                                if (isSel) {
-                                    Icon(Icons.Default.Check, contentDescription = "Selected", tint = OpusElectricCyan, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Burn-In Subtitles Switch
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(OpusDarkSurfaceVariant)
-                            .clickable { burnInSubtitles = !burnInSubtitles }
-                            .padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Burn-In AI Dynamic Subtitles",
-                                fontSize = 12.sp,
-                                color = OpusTextPrimary,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = "Theme: $selectedCaptionTheme ($captionPosition)",
-                                fontSize = 10.sp,
-                                color = OpusElectricCyan
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (burnInSubtitles) OpusElectricCyan else OpusDarkSurfaceHighlight)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = if (burnInSubtitles) "Hardcoded" else "Soft Sub",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (burnInSubtitles) Color.Black else OpusTextSecondary
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(OpusDarkSurfaceVariant)
-                            .clickable { removeWatermark = !removeWatermark }
-                            .padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Remove ISM Watermark",
-                            fontSize = 12.sp,
-                            color = OpusTextPrimary,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (removeWatermark) OpusViralEmerald else OpusDarkSurfaceHighlight)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = if (removeWatermark) "Pro Enabled" else "Free Tier",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (removeWatermark) Color.Black else OpusTextSecondary
-                            )
-                        }
-                    }
-
+                    Text("سيتم استخدام القص ${selectedLayout} مع ترجمة ${selectedCaptionTheme}.", color = OpusTextSecondary, fontSize = 13.sp)
                     if (isExporting) {
-                        Spacer(modifier = Modifier.height(14.dp))
-                        Text(
-                            text = "Encoding video: $exportProgress%",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = OpusElectricCyan
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("جارٍ التصيير… $exportProgress%", color = OpusElectricCyan, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(6.dp))
                         LinearProgressIndicator(
                             progress = { exportProgress / 100f },
-                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(4.dp)),
                             color = OpusElectricCyan,
                             trackColor = OpusDarkSurfaceHighlight
                         )
+                    }
+                    exportError?.let {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        StatusMessage(icon = Icons.Default.Error, title = "فشل التصدير", message = it, color = OpusHotPink)
+                    }
+                    if (exportCompleted) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        StatusMessage(icon = Icons.Default.CheckCircle, title = "اكتمل التصدير", message = "حُفظ الفيديو في المعرض.", color = OpusViralEmerald)
                     }
                 }
             },
@@ -681,57 +299,198 @@ fun ClipStudioScreen(
                 Button(
                     onClick = {
                         if (isExporting) return@Button
-                        val clipToExport = activeClip ?: return@Button
                         isExporting = true
                         exportProgress = 0
-                        coroutineScope.launch {
+                        exportError = null
+                        scope.launch {
                             try {
                                 val output = repository.exportClipToFile(
-                                    clipId = clipToExport.id,
-                                    burnInSubtitles = burnInSubtitles,
-                                    removeWatermark = removeWatermark,
+                                    clipId = activeClip.id,
+                                    burnInSubtitles = true,
+                                    removeWatermark = false,
                                     aspectRatioName = selectedLayout,
-                                    onProgress = { progress -> exportProgress = progress }
+                                    onProgress = { exportProgress = it }
                                 )
-                                val galleryUri = repository.saveExportToMediaStore(output)
+                                repository.saveExportToMediaStore(output)
                                 isExporting = false
-                                showExportModal = false
-                                Toast.makeText(
-                                    context,
-                                    "اكتمل التصدير وحُفظ في المعرض: $galleryUri",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                exportCompleted = true
+                                Toast.makeText(context, "حُفظ المقطع في المعرض", Toast.LENGTH_SHORT).show()
                             } catch (error: Exception) {
                                 isExporting = false
-                                Toast.makeText(
-                                    context,
-                                    "فشل التصدير: ${error.localizedMessage}",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                exportError = error.localizedMessage?.takeIf { it.isNotBlank() } ?: "تعذر تصيير الفيديو."
                             }
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = OpusPrimaryViolet),
-                    shape = RoundedCornerShape(8.dp),
                     enabled = !isExporting,
+                    colors = ButtonDefaults.buttonColors(containerColor = OpusPrimaryViolet),
                     modifier = Modifier.testTag("confirm_export_button")
                 ) {
                     if (isExporting) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Rendering...", color = Color.White, fontSize = 12.sp)
-                    } else {
-                        Text("Start Export (Instant)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
+                    Text(if (isExporting) "جارٍ التصيير" else "ابدأ التصدير", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                if (!isExporting) {
-                    TextButton(onClick = { showExportModal = false }) {
-                        Text("Cancel", color = OpusTextSecondary)
-                    }
-                }
+                if (!isExporting) TextButton(onClick = { showExportModal = false }) { Text("إغلاق", color = OpusTextSecondary) }
             }
         )
+    }
+}
+
+@Composable
+private fun EmptyStudioState(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxSize().background(OpusDarkCanvas).padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.testTag("empty_clips_state")) {
+            Box(
+                modifier = Modifier.size(68.dp).clip(RoundedCornerShape(20.dp)).background(OpusDarkSurface),
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = OpusElectricCyan, modifier = Modifier.size(32.dp)) }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text("لا توجد مقاطع جاهزة", color = OpusTextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text("بعد اكتمال المعالجة ستظهر أفضل المقاطع هنا للمعاينة والتحرير.", color = OpusTextSecondary, textAlign = TextAlign.Center, fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+private fun ClipChoiceCard(clip: Clip, selected: Boolean, onClick: () -> Unit) {
+    val scoreColor = if (clip.viralityScore >= 80) OpusViralEmerald else OpusElectricCyan
+    Column(
+        modifier = Modifier
+            .width(172.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (selected) OpusDarkSurfaceHighlight else OpusDarkSurface)
+            .border(if (selected) 2.dp else 1.dp, if (selected) OpusElectricCyan else OpusBorder, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp)
+            .testTag("clip_item_card_${clip.id}")
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("${clip.viralityScore}", color = scoreColor, fontWeight = FontWeight.Black, fontSize = 18.sp)
+            Text("${clip.durationSec}s", color = OpusTextSecondary, fontSize = 12.sp)
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(clip.title, color = if (selected) OpusTextPrimary else OpusTextSecondary, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(if (selected) "محدد للمعاينة" else "اضغط للفتح", color = if (selected) OpusElectricCyan else OpusTextSecondary, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun ScoreCard(clip: Clip) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("score_card"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, OpusBorder)
+    ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Virality score", color = OpusTextSecondary, fontSize = 12.sp)
+                Spacer(modifier = Modifier.height(2.dp))
+                Text("${clip.viralityScore}/100", color = OpusTextPrimary, fontWeight = FontWeight.Black, fontSize = 30.sp)
+                Text(clip.hookExplanation.ifBlank { "نتيجة مبنية على الهوك والاحتفاظ وقابلية المشاركة." }, color = OpusTextSecondary, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            ScoreRing(score = clip.viralityScore)
+        }
+    }
+}
+
+@Composable
+private fun ScoreRing(score: Int) {
+    Box(
+        modifier = Modifier.size(74.dp).clip(RoundedCornerShape(37.dp)).background(OpusViralEmerald.copy(alpha = 0.14f)).border(2.dp, OpusViralEmerald.copy(alpha = 0.75f), RoundedCornerShape(37.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(if (score >= 80) "قوي" else "جيد", color = OpusViralEmerald, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun TranscriptCard(clip: Clip) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("transcript_card"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, OpusBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            SectionLabel(title = "Transcript", supporting = "النص الذي بُنيت عليه الترجمة")
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = clip.transcript.ifBlank { "لا يتوفر تفريغ نصي لهذا المقطع." },
+                color = if (clip.transcript.isBlank()) OpusTextSecondary else OpusTextPrimary,
+                fontSize = 14.sp,
+                lineHeight = 22.sp,
+                maxLines = 8,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun CropCard(selectedLayout: String, onLayoutChange: (String) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("crop_card"),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, OpusBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            SectionLabel(title = "Crop & framing", supporting = "اختر أبعاد الإخراج المناسبة للمنصة")
+            Spacer(modifier = Modifier.height(12.dp))
+            listOf("9:16 Full Screen" to "عمودي", "Split Screen" to "مقسّم", "1:1 Square" to "مربّع").forEach { (layout, label) ->
+                val selected = layout == selectedLayout
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (selected) OpusPrimaryViolet.copy(alpha = 0.2f) else OpusDarkSurfaceVariant)
+                        .border(1.dp, if (selected) OpusElectricCyan else OpusBorder, RoundedCornerShape(12.dp))
+                        .clickable { onLayoutChange(layout) }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Crop, contentDescription = null, tint = if (selected) OpusElectricCyan else OpusTextSecondary, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(label, color = OpusTextPrimary, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+                        Text(layout, color = OpusTextSecondary, fontSize = 11.sp)
+                    }
+                    if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = OpusElectricCyan)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(title: String, supporting: String) {
+    Column {
+        Text(title, color = OpusTextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text(supporting, color = OpusTextSecondary, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun StatusMessage(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, message: String, color: Color) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = 0.12f)).border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(12.dp)).padding(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            Text(title, color = color, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(message, color = OpusTextSecondary, fontSize = 12.sp)
+        }
     }
 }
