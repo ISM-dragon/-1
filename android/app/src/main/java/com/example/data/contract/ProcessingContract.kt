@@ -53,7 +53,8 @@ data class ClipArtifact(
     val durationSeconds: Int,
     val score: Int,
     val transcript: String,
-    val filename: String
+    val filename: String,
+    val sha256: String? = null
 )
 
 data class ProcessingRequest(
@@ -68,7 +69,7 @@ fun JSONObject.toUploadResource(): UploadResource = UploadResource(
     id = optString("id"),
     source = optString("source"),
     filename = optString("filename", "source.mp4"),
-    bytes = optLong("bytes", 0L)
+    bytes = optLong("bytes", optLong("expected_bytes", 0L))
 )
 
 fun JSONObject.toJobResource(fallbackId: String? = null): JobResource {
@@ -114,7 +115,8 @@ private fun JSONArray?.toArtifacts(): List<ClipArtifact> = buildList {
                 durationSeconds = item.optInt("duration", (end - start).coerceAtLeast(0)),
                 score = item.optInt("score", item.optInt("final_score", 0)),
                 transcript = item.optString("transcript"),
-                filename = item.optString("filename", "clip_${index + 1}.mp4")
+                filename = item.optString("filename", "clip_${index + 1}.mp4"),
+                sha256 = item.optString("sha256").takeIf { it.isNotBlank() }
             )
         )
     }

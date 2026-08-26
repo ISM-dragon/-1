@@ -781,6 +781,9 @@ class OpusRepository(context: Context) {
     suspend fun retryVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
         val existing = processingJobDao.get(jobId) ?: error("مهمة المعالجة غير موجودة")
         require(existing.status == ProcessingJobEntity.STATUS_FAILED || existing.status == ProcessingJobEntity.STATUS_CANCELLED) { "لا يمكن إعادة محاولة هذه المهمة." }
+        if (existing.status == ProcessingJobEntity.STATUS_CANCELLED) {
+            processingJobDao.clearRemoteGatewayJobId(jobId)
+        }
         processingJobDao.updateState(jobId, ProcessingJobEntity.STATUS_QUEUED, existing.progress, "RETRY_WAIT", "إعادة المحاولة مجدولة.")
         requeuePersistedProcessing(existing)
     }

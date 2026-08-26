@@ -105,7 +105,10 @@ class VideoProcessingWorker(
                 durationMinutes = durationMinutes,
                 targetPlatform = targetPlatform,
                 captionTheme = captionTheme,
-                processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" }
+                processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" },
+                existingGatewayJobId = existingJob
+                    ?.takeUnless { it.status == ProcessingJobEntity.STATUS_CANCELLED }
+                    ?.remoteGatewayJobId
             )
             check(enginePlan.route == ProcessingEngine.Route.REMOTE_GATEWAY)
             jobs.updateState(
@@ -195,17 +198,22 @@ class VideoProcessingWorker(
         durationMinutes: Int,
         targetPlatform: String,
         captionTheme: String,
-        processingMode: String
+        processingMode: String,
+        existingGatewayJobId: String?
     ): Long {
         val client = ProcessingGatewayClient(applicationContext.contentResolver)
+        val persistedRemoteJobId = jobs.get(jobId)?.remoteGatewayJobId
         val remote = client.process(
             config = config,
             sourceUri = sourceUri,
             captionTheme = captionTheme,
             mode = processingMode,
+            idempotencyKey = jobId,
+            existingRemoteJobId = persistedRemoteJobId,
             onJobCreated = { remoteJobId ->
                 jobs.setRemoteGatewayJobId(jobId, remoteJobId)
             },
+            existingGatewayJobId = existingGatewayJobId,
             onProgress = { progress ->
                 jobs.updateState(
                     jobId = jobId,

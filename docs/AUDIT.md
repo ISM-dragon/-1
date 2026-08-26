@@ -2,14 +2,14 @@
 
 **الدور:** Agent 01 — ARCHITECT + AUDIT
 **المستودع:** `ISM-dragon/-1`
-**نطاق الفحص:** Python pipeline، Engine، Gateway وbackend، Android، Tauri/React، FFmpeg، النماذج، ASR، diarization، scoring، camera، rendering، checkpoints، jobs، dependencies، packaging، وCI.
-**حكم التدقيق:** المستودع غني بالوظائف ويحتوي نواة قابلة لإعادة الاستخدام، لكنه ليس APK شخصيًا جاهزًا end-to-end؛ المسار العملي الصحيح هو Android remote إلى Gateway خاص يشغل Engine Python.
+**نطاق الفحص:** Python pipeline، Engine، Gateway وbackend، Android، Tauri/React، FFmpeg، النماذج، ASR، diarization، scoring، camera، rendering، checkpoints، jobs، dependencies، packaging، CI، والأرشيف المرجعي المرفق `whisper.cpp-master.zip`.
+**حكم التدقيق:** المستودع غني بالوظائف ويحتوي نواة قابلة لإعادة الاستخدام، والمسار العملي الصحيح هو Android remote إلى Gateway خاص يشغل Engine Python. عينة whisper.cpp مفيدة كمرجع JNI/benchmark محدود، لكنها لا تبرر نقل ASR المحلي أو نماذج GGML إلى APK، ولا يوجد بعد دليل جهاز حقيقي يثبت release end-to-end.
 
 ## الملخص التنفيذي
 
-الموجود فعليًا هو ثلاثة مسارات متداخلة وليست منتجًا واحدًا متجانسًا: تطبيق desktop مبني بـReact/Tauri يشغل Python/uv محليًا، تطبيق Android native بـKotlin يملك مسارًا محليًا تقريبيًا ومسارًا remote إلى Gateway، وطبقتا backend متوازيتان هما `gateway/` و`backend/`. الـPython pipeline نفسها تحتوي Engine contract v1 وترتيبًا واضحًا من ingest إلى render مع checkpoint/resume، ونجحت اختبارات pipeline بعد تجهيز اعتماديات الاختبار في البيئة. هذه النواة هي أقوى جزء في المشروع ويجب أن تبقى على خادم خاص [1] [2] [3].
+الموجود فعليًا هو ثلاثة مسارات متداخلة وليست منتجًا واحدًا متجانسًا: تطبيق desktop مبني بـReact/Tauri يشغل Python/uv محليًا، تطبيق Android native بـKotlin يملك مسارًا remote إلى Gateway، وطبقتا backend متوازيتان هما `gateway/` و`backend/`. الـPython pipeline نفسها تحتوي Engine contract v1 وترتيبًا واضحًا من ingest إلى render مع checkpoint/resume. أما whisper.cpp المرفق فيضيف عينة Java/JNI محلية للـASR فقط، لا job engine ولا video pipeline. هذه النواة هي أقوى جزء في المشروع ويجب أن تبقى على خادم خاص [1] [2] [3].
 
-الجاهزية الفعلية لا تساوي ما توحي به بعض الوثائق القديمة. React build وcompileall واختبارات Python تمر، وتم إصلاح مسار Android ليستخدم upload sessions القابلة للاستئناف وSHA-256، كما أصبح Gateway يعيد error envelope موحدًا. يبقى APK/device smoke غير مثبت في هذه البيئة ما لم يتوفر Android SDK ومحاكي مستقر، والنشر الاجتماعي الحقيقي غير منفذ؛ mock OAuth وmock publisher هما development-only، وDocker/compose يقدمان أساس نشر لا إثبات تشغيل end-to-end. لذلك لا ينبغي إعلان المشروع production ready قبل اختبار smoke حقيقي على جهاز أو emulator مستقر.
+الجاهزية الفعلية لا تساوي إعلان production كاملًا. بعد تثبيت اعتماديات `gateway/` و`pipeline/` في بيئة التدقيق، نجحت suite الموحدة بنتيجة 164 اختبارًا ناجحًا واختبار واحد متخطى، لكن build/device E2E وGateway حقيقي ومزودات الإنتاج لم تُثبت في هذه الجلسة. لا تزال عينة whisper.cpp خارج APK، ولا توجد مقارنة أداء مبررة مع WhisperX. النشر الاجتماعي الحقيقي غير منفذ؛ mock OAuth وmock publisher هما development-only، وDocker/compose يقدمان أساس نشر لا إثبات تشغيل end-to-end. لذلك لا ينبغي إعلان المشروع “production ready” قبل smoke test حقيقي وتوقيع release ومراجعة device recovery.
 
 ## 1. ما الموجود فعلًا؟
 
@@ -19,10 +19,10 @@
 | Python pipeline | ingest/yt-dlp، FFmpeg probe/normalize، WhisperX ASR/alignment، CAM++ diarization، PANNs/laughter/DSP events، candidate windows، LLM/deterministic scoring، active-speaker/face camera، ASS captions، FFmpeg render | **الوظيفة الأساسية موجودة**، لكن first-run يحتاج Python 3.12 ونماذج وCPU/disk وشبكة |
 | Gateway | FastAPI، bearer auth اختياري حسب env، SQLite، upload sessions، source downloads، worker queues، processing jobs، diagnostics، provider registry، secret vault، media serving | **أفضل backend للمسار المستهدف**، لكن يحتاج hardening وتوحيد error contract واختبار deployment |
 | Backend البديل | FastAPI آخر، DB/storage، device binding، JobManager، adapter إلى CLI، results/download/render | **اختبار/stack بديل**؛ ليس ما يستعمله Android الحالي |
-| Native Android | Compose، Room، WorkManager، Media3، ML Kit face detection، local URI import، remote Gateway client، notifications، local Kotlin pipeline | **يبني conceptual client**، لكن لا يوجد إثبات APK من هذه البيئة ولا parity مع Python |
+| Native Android | Compose، Room، WorkManager، Media3، local URI import، remote Gateway client، notifications | **عميل remote قابل للبناء نظريًا**؛ لا parity محلي مع Python ولا حاجة إلى whisper.cpp في المسار الأساسي |
 | Tauri/React | واجهة Studio/Review/Social/Analytics/Providers/Source Library، Tauri commands، local checkpoints/secrets، remote Gateway calls | **Desktop path هو الأكثر تكاملًا**؛ Android Tauri generated مسار ثالث يجب عدم خلطه بالnative Android |
 | Social/OAuth | provider registry وواجهات وحالات وسياسة نشر، mock account/OAuth/publisher، Instagram feedback loop محلي | **التصميم جزئي؛ live adapters غير منفذة** |
-| Packaging/CI | npm build، Windows NSIS workflow، Android CI workflow، Dockerfile وcompose، resource staging لـTauri | **desktop CI موثق، Android CI موجود؛ deployment الفعلي غير مثبت في هذه البيئة** |
+| Packaging/CI | npm build، Windows NSIS workflow، Android CI workflow، Dockerfile وcompose، resource staging لـTauri | **desktop CI موثق؛ Android build/device وdeployment الفعليان يحتاجان بيئة release كاملة** |
 
 ## 2. ما يعمل فقط في development؟
 
@@ -36,7 +36,7 @@
 
 المشكلة ليست سببًا واحدًا، بل سلسلة dependencies وقرارات هوية ومسارات متنافسة. على سطح المكتب، أول تشغيل يحتاج Node/Rust للبناء أو حزمة بنيت مسبقًا، ثم Python 3.12/uv، تنزيل عدة نماذج كبيرة، وFFmpeg قادرًا على captions. على Android، لا يمكن نسخ هذه الافتراضات إلى APK: لا يوجد Python/uv/WhisperX/PyTorch داخل التصميم، والـTauri shell نفسه يرفض local Python processing على Android [6].
 
-على الهاتف، المسار remote يحتاج Gateway قابلًا للوصول من الشبكة، `PUBLIC_BASE_URL` صحيحًا، token صالحًا، storage دائمًا، FFmpeg، pipeline dependencies، model downloads، وGemini key server-side عند اختيار Gemini. القيم الافتراضية مثل `127.0.0.1` تصل إلى الخادم نفسه لا إلى الهاتف، و`REQUIRE_GATEWAY_TOKEN` في المثال المحلي false. أصبح Android client يستخدم contract الرفع المتقطع `/v1/sources/uploads` مع offset وchecksum؛ يبقى endpoint one-shot للتوافق الخلفي فقط.
+على الهاتف، المسار remote يحتاج Gateway قابلًا للوصول من الشبكة، `PUBLIC_BASE_URL` صحيحًا، token صالحًا، storage دائمًا، FFmpeg، pipeline dependencies، model downloads، وGemini key server-side عند اختيار Gemini. القيم الافتراضية مثل `127.0.0.1` تصل إلى الخادم نفسه لا إلى الهاتف، و`REQUIRE_GATEWAY_TOKEN` في المثال المحلي false. كما أن Android client يرفع عبر endpoint one-shot قديم، رغم وجود contract أحدث للرفع المتقطع.
 
 إضافة إلى ذلك، توجد هويتان Android native/generated: `android/` يستخدم `applicationId=com.aistudio.opuspro.apk` وnamespace `com.example`، بينما Tauri generated يستخدم `com.publikhq.publikclip`. هذا ليس فشل compile بحد ذاته، لكنه يجعل “APK الحالي” غير محدد ويمنع release contract واحدًا. signing release اختياري؛ إذا لم توجد keystore ومتغيرات كلمات المرور ينتج البناء غير موقع أو غير صالح لمسار توزيع production.
 
@@ -67,7 +67,7 @@
 
 ## 7. ما الذي يجب إعادة تصميمه؟
 
-تم تثبيت Gateway كـcanonical backend دون إعادة كتابة pipeline، مع إبقاء adapter المباشر إلى `ProcessingEngine` وJSONL fallback. وتمت مواءمة عملاء Android النشطين مع resumable upload وإضافة error envelope موحد. ما يزال `llm=gemini` اختيارًا server-side افتراضيًا في بعض مسارات Android، ويجب توحيد اختيار APK identity وrelease signing قبل التوزيع النهائي.
+يجب أولًا توحيد backend على Gateway، لا إعادة كتابة pipeline. ثم يُعرّف adapter مباشر من Gateway إلى `ProcessingEngine` مع إبقاء JSONL fallback أثناء migration. يجب مواءمة Android مع resumable upload أو توثيق one-shot كعقد مقصود، وإضافة error envelope واحد، وإزالة hardcoded `llm=gemini` من عميل Android. يجب أيضًا اختيار APK واحد: native Android أو Tauri generated، ثم توحيد application identity وrelease signing.
 
 لا يُحذف `ProductionVideoPipeline.kt` ولا social functionality في هذه المرحلة؛ لكن يجب وسمها بوضوح كـfallback/optional، ومنعها من تقديم نفسها كبديل production عن Python Engine. كما يجب ألا تُضاف dependencies جديدة إلا إذا أغلقت فجوة مثبتة في build أو runtime.
 
@@ -86,9 +86,9 @@
 
 | ID | المشكلة والدليل | الأثر | الإصلاح المقترح |
 |---|---|---|---|
-| P1-1 | كان Android يستخدم `/v1/sources/upload` one-shot | كان انقطاع الرفع يعيد العملية من الصفر | **RESOLVED**: العملاء النشطون يستخدمون session + offset + SHA-256؛ يلزم device/network smoke لاحقًا. |
-| P1-2 | كانت `gateway/main.py` تحتوي تعريفات متكررة لمسارات AI providers | route ambiguity واحتمال اختلاف behavior | **RESOLVED**: بقيت routes registry-backed الفعلية فقط، مع نجاح فحص route uniqueness. |
-| P1-3 | كان Gateway يعيد FastAPI `detail` الخام في بعض الأخطاء | العميل لا يملك parsing ثابتًا ولا رسائل مستقرة | **RESOLVED**: global HTTP/validation handlers تعيد `code`, `message`, `request_id`, و`retryable` مع HTTP codes الأصلية. |
+| P1-1 | كان Android يستخدم `/v1/sources/upload` one-shot بينما العقد الحديث resumable `/v1/sources/uploads` | انقطاع رفع فيديو طويل كان يعيد العملية من الصفر | **أُصلح في هذه الدفعة:** client يحسب SHA-256، ينشئ session، يرسل chunks مع `X-Upload-Offset` و`Content-Range` ويستفيد من dedupe عند retry؛ يبقى اختبار interruption على جهاز/Gateway فعلي مطلوبًا. |
+| P1-2 | `gateway/main.py` يحتوي تعريفات متكررة لمسارات AI providers في موضعين | route ambiguity واحتمال اختلاف behavior بين registry والcompatibility | إزالة التكرار بعد اختبار contract، دون حذف capability |
+| P1-3 | وثيقة API تعد بخطأ `{error:{code,message,request_id,retryable}}`، بينما Gateway غالبًا يعيد FastAPI `detail` الخام | العميل لا يملك parsing ثابتًا ولا رسائل مستقرة | global exception handler/envelope في Gateway مع الحفاظ على HTTP codes |
 | P1-4 | pipeline weights الثقيلة تُنزّل runtime، وعدة `ModelSpec` بلا sha256 مثبت | first-run طويل ومخاطر integrity/عدم reproducibility | pin hashes حيث يمكن، وإظهار manifest/version/size وتخزينها في readiness |
 | P1-5 | queue Gateway داخل الذاكرة مع SQLite bookkeeping | آمن لمثيل واحد فقط؛ غير آمن للتوسع الأفقي أو claim متزامن | توثيق single-instance deployment وإضافة DB lease قبل أي replica |
 | P1-6 | source/media validation ليست موحدة بين one-shot وresumable والـffprobe validation مؤجلة | bytes غير صالحة قد تستهلك التخزين وتفشل متأخرًا | فحص container/stream مبكرًا وتنظيف orphan artifacts |
@@ -97,7 +97,7 @@
 
 | ID | المشكلة والدليل | الأثر | الإصلاح المقترح |
 |---|---|---|---|
-| P2-1 | كان full `pytest gateway` يفشل في root bridge test بسبب تهيئة `media_uploads` | CI المحلي يعطي failure مضللًا | **RESOLVED/VERIFIED**: full Python suite يمر بعد تهيئة البيئة، مع بقاء اختبار large-media اختياريًا. |
+| P2-1 | full `pytest gateway` يفشل في root bridge test لأن `media_uploads` غير مهيأة، رغم نجاح `gateway/tests` | CI المحلي يعطي failure مضللًا | fixture أو `init_db()` واضح للاختبار، لا تغيير business behavior بلا حاجة |
 | P2-2 | اختبار pipeline من بيئة نظيفة يحتاج scipy/librosa وغيرهما؛ الاختبار ينجح فقط بعد تثبيت dependencies | onboarding/contributor path غير deterministic | جعل command الموثق `uv sync && uv run pytest` هو gate، وتوضيح عدم كفاية system Python |
 | P2-3 | native Android وTauri generated Android لهما identities ومسارات مختلفة | release ownership غير واضح | قرار artifact واحد وتوثيق migration مستقبلية |
 | P2-4 | release signing مشروط بوجود keystore/env | يمكن إنتاج APK غير قابل للتوزيع | CI release signing منفصل، مع بقاء debug build للاختبار |
@@ -115,9 +115,9 @@
 | `python3 -m unittest discover -s gateway/tests -p 'test_*.py' -v` | **PASS** | suite المعزولة نجحت |
 | `python3 -m pytest gateway/tests -q` | **29 passed, 1 skipped** | warnings بسبب FastAPI `on_event` deprecated؛ large-media اختياري |
 | `python3 -m pytest backend/tests -q` | **6 passed, 1 warning** | يستخدم fake engine، وليس pipeline end-to-end |
-| `python3 -m pytest pipeline/tests -q` | **97 passed** بعد تثبيت scipy/librosa في sandbox | أول تشغيل فشل collection بسبب غياب scipy ثم librosa |
-| full `python3 -m pytest gateway -q` | **36 passed, 1 skipped, 1 failed** | root test `test_processing_bridge` يستعمل DB table دون init fixture |
-| `android/./gradlew :app:testDebugUnitTest` وassemble | **NOT PROVEN** | فشل compilation قبل code tests لأن البيئة لا تحتوي `javac`؛ Gradle وجد Java 21 runtime بلا compiler |
+| `python3 -m pytest -q` | **164 passed, 1 skipped** بعد تثبيت gateway/pipeline requirements في sandbox | أول تشغيل فشل collection بسبب نقص pytest، ثم python-multipart، scipy، وlibrosa؛ بعد استكمال المتطلبات نجحت suite الموحدة. |
+| `bash scripts/verify.sh` | **NOT PROVEN بالكامل** | النسخة الأولى توقفت قبل الاختبارات بسبب نقص pytest؛ suite Python المنفصلة نجحت، وAndroid skipped بسبب غياب SDK. يلزم إعادة verify في بيئة CI كاملة. |
+| Android Gradle checks | **NOT RUN في هذه الجلسة** | Android SDK غير مضبوط في sandbox؛ يلزم JDK 21 + SDK/NDK أو الاعتماد على CI. |
 | Docker build | **NOT RUN** | docker غير متوفر في sandbox |
 | APK/device smoke | **NOT RUN** | لا جهاز أو emulator متاح |
 
@@ -135,3 +135,6 @@
 [10]: ../.github/workflows/windows.yml "Windows clean-machine desktop workflow"
 [11]: ../.github/workflows/android-build.yml "Android CI workflow"
 [12]: ../Dockerfile.gateway "Gateway container image"
+[13]: ../../upload/whisper.cpp-master.zip "Supplied whisper.cpp reference archive"
+[14]: https://github.com/ggerganov/whisper.cpp/blob/master/examples/whisper.android.java/README.md "whisper.cpp Android sample"
+[15]: https://github.com/ggerganov/whisper.cpp/blob/master/LICENSE "whisper.cpp MIT license"

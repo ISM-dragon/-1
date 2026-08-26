@@ -1,0 +1,138 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.3.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build
+Calculating task graph as no cached configuration is available for tasks: :app:lint :app:assembleRelease
+
+> Configure project :app
+WARNING: The option setting 'android.disallowKotlinSourceSets=false' is experimental.
+The current default is 'true'.
+
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:generateDebugRFile UP-TO-DATE
+> Task :app:kspDebugKotlin UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:bundleDebugClassesToCompileJar UP-TO-DATE
+> Task :app:preDebugAndroidTestBuild SKIPPED
+> Task :app:generateDebugAndroidTestLintModel
+> Task :app:extractProguardFiles
+> Task :app:generateDebugLintReportModel
+> Task :app:preDebugUnitTestBuild UP-TO-DATE
+> Task :app:generateDebugUnitTestLintModel
+> Task :app:lintAnalyzeDebug
+> Task :app:lintAnalyzeDebugAndroidTest
+> Task :app:lintAnalyzeDebugUnitTest
+
+> Task :app:lintReportDebug
+Wrote HTML report to file:///home/ubuntu/work/publikclip-repo/android/app/build/reports/lint-results-debug.html
+
+> Task :app:lintDebug
+> Task :app:lint
+> Task :app:preReleaseBuild UP-TO-DATE
+> Task :app:mergeReleaseJniLibFolders
+> Task :app:mergeReleaseNativeLibs
+
+> Task :app:stripReleaseDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so, libface_detector_v2_jni.so. Run with --info option to learn more.
+
+> Task :app:extractReleaseNativeSymbolTables
+> Task :app:mergeReleaseNativeDebugMetadata NO-SOURCE
+> Task :app:checkReleaseDuplicateClasses
+> Task :app:generateReleaseBuildConfig
+> Task :app:generateReleaseResources FROM-CACHE
+> Task :app:packageReleaseResources
+> Task :app:processReleaseNavigationResources FROM-CACHE
+> Task :app:parseReleaseLocalResources FROM-CACHE
+> Task :app:generateReleaseRFile FROM-CACHE
+> Task :app:kspReleaseKotlin
+> Task :app:compileReleaseKotlin
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ContractApp.kt:103:48 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/data/db/OpusDatabase.kt:47:34 The corresponding parameter in the supertype 'Migration' is named 'db'. This may cause problems when calling this function with named arguments.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/data/repository/OpusRepository.kt:766:103 Unnecessary safe call on a non-null receiver of type 'ProcessingJobEntity'.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/data/video/Media3VideoProcessor.kt:207:42 Unnecessary non-null assertion (!!) on a non-null receiver of type '<anonymous>'.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/data/video/Media3VideoProcessor.kt:209:33 Unnecessary safe call on a non-null receiver of type '<anonymous>'.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/domain/analysis/CandidateClipDetector.kt:104:43 Unnecessary non-null assertion (!!) on a non-null receiver of type 'TranscriptSegment'.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/remote/ui/RemoteStudioScreens.kt:102:44 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/AiEditingCommandBar.kt:190:44 'val Icons.Filled.Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/ApiKeySettingsDialog.kt:617:49 'val Icons.Filled.OpenInNew: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.OpenInNew.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/ApiKeySettingsDialog.kt:752:34 'fun Modifier.menuAnchor(): Modifier' is deprecated. Use overload that takes MenuAnchorType and enabled parameters.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/AutoPublishResultDialog.kt:445:45 'val Icons.Filled.OpenInNew: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.OpenInNew.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/AutoPublishSettingsDialog.kt:155:61 'val Icons.Filled.Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/DedicatedCaptionGeneratorCard.kt:564:53 'val Icons.Filled.Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/DirectPublisherDialog.kt:417:77 'val Icons.Filled.OpenInNew: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.OpenInNew.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/DirectPublisherDialog.kt:464:65 'val Icons.Filled.Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/VideoProcessingLoadingDialog.kt:308:54 'val Icons.Filled.TrendingUp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.TrendingUp.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/VideoSimPlayer.kt:379:61 'val Icons.Filled.VolumeUp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.VolumeUp.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/VideoSimPlayer.kt:590:45 'val Icons.Filled.VolumeUp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.VolumeUp.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/ViralityScoreGauge.kt:310:46 'val Icons.Filled.TrendingUp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.TrendingUp.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/components/ViralityScoreGauge.kt:455:53 'val Icons.Filled.CompareArrows: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.CompareArrows.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ApiManagementSettingsScreen.kt:459:38 'fun Modifier.menuAnchor(): Modifier' is deprecated. Use overload that takes MenuAnchorType and enabled parameters.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ApiManagementSettingsScreen.kt:1109:57 'val Icons.Filled.OpenInNew: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.OpenInNew.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ClipCompetitorComparisonScreen.kt:260:57 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ComparisonDetailScreen.kt:101:53 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ComparisonHubScreen.kt:145:61 'val Icons.Filled.TrendingUp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.TrendingUp.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ComparisonHubScreen.kt:228:69 Redundant call of conversion method.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ComparisonHubScreen.kt:504:53 'val Icons.Filled.ArrowForward: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowForward.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ProjectsScreen.kt:510:54 'val Icons.Filled.TrendingUp: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.TrendingUp.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/ToolsScreen.kt:88:38 'val Icons.Filled.CompareArrows: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.CompareArrows.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/VideoUploadScreen.kt:145:44 Unnecessary safe call on a non-null receiver of type 'String'.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/screens/VideoUploadScreen.kt:217:36 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/theme/Theme.kt:42:24 'var statusBarColor: Int' is deprecated. Deprecated in Java.
+w: file:///home/ubuntu/work/publikclip-repo/android/app/src/main/java/com/example/ui/theme/Theme.kt:43:24 'var navigationBarColor: Int' is deprecated. Deprecated in Java.
+
+> Task :app:javaPreCompileRelease FROM-CACHE
+> Task :app:compileReleaseJavaWithJavac
+> Task :app:checkReleaseAarMetadata
+> Task :app:mapReleaseSourceSetPaths
+> Task :app:compileReleaseNavigationResources FROM-CACHE
+> Task :app:mergeReleaseResources
+> Task :app:createReleaseCompatibleScreenManifests
+> Task :app:extractDeepLinksRelease FROM-CACHE
+> Task :app:processReleaseMainManifest
+> Task :app:processReleaseManifest
+> Task :app:processReleaseManifestForPackage
+> Task :app:processReleaseResources
+> Task :app:dexBuilderRelease
+> Task :app:desugarReleaseFileDependencies
+> Task :app:mergeReleaseStartupProfile
+> Task :app:mergeExtDexRelease
+> Task :app:mergeDexRelease
+> Task :app:mergeReleaseArtProfile
+> Task :app:mergeReleaseGlobalSynthetics
+> Task :app:compileReleaseArtProfile
+> Task :app:generateReleaseAssets UP-TO-DATE
+> Task :app:mergeReleaseAssets
+> Task :app:compressReleaseAssets
+> Task :app:extractReleaseVersionControlInfo
+> Task :app:generateReleaseLintVitalReportModel
+> Task :app:lintVitalAnalyzeRelease
+> Task :app:lintVitalReportRelease SKIPPED
+> Task :app:lintVitalRelease SKIPPED
+> Task :app:processReleaseJavaRes
+> Task :app:mergeReleaseJavaResource
+> Task :app:optimizeReleaseResources
+> Task :app:writeReleaseAppMetadata
+> Task :app:writeReleaseSigningConfigVersions
+> Task :app:packageRelease
+> Task :app:createReleaseApkListingFileRedirect
+> Task :app:assembleRelease
+
+BUILD SUCCESSFUL in 7m 6s
+75 actionable tasks: 47 executed, 7 from cache, 21 up-to-date
+Configuration cache entry stored.

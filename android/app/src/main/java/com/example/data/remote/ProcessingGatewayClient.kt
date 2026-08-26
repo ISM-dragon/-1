@@ -3,6 +3,7 @@ package com.example.data.remote
 import android.content.ContentResolver
 import android.net.Uri
 import com.example.data.model.GatewayConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -10,11 +11,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
-import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
 import java.util.UUID
+import kotlin.math.min
 
 /**
  * Remote processing bridge. Gemini credentials never cross this boundary;
@@ -49,23 +50,39 @@ class ProcessingGatewayClient(
         sourceUri: String,
         captionTheme: String,
         mode: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+        existingRemoteJobId: String? = null,
         onProgress: suspend (Progress) -> Unit,
-        onJobCreated: suspend (String) -> Unit = {}
+        onJobCreated: suspend (String) -> Unit = {},
+        existingGatewayJobId: String? = null
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
-            val localUri = Uri.parse(sourceUri)
-            val upload = upload(baseUrl, config.token, localUri) { percent ->
-                onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
+            val existing = existingRemoteJobId?.trim().orEmpty().ifBlank {
+                existingGatewayJobId?.trim().orEmpty()
             }
-            onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
-            val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode, UUID.randomUUID().toString())
+            val gatewayJobId = if (existing.isNotBlank()) {
+                onProgress(Progress(12, "RESUMING", "استعادة المهمة المحفوظة من Gateway"))
+                existing
+            } else {
+                val localUri = Uri.parse(sourceUri)
+                val upload = uploadResumable(baseUrl, config.token, localUri) { percent ->
+                    onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
+                }
+                onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
+                start(baseUrl, config.token, upload, captionTheme, mode, idempotencyKey)
+            }
             onJobCreated(gatewayJobId)
             var lastStatus = "queued"
+            var resumeAttempted = false
             var completedResult: RemoteResult? = null
             while (completedResult == null) {
                 val statusPayload = status(baseUrl, config.token, gatewayJobId)
-                val fraction = statusPayload.optDouble("fraction", 0.0).toFloat().coerceIn(0f, 1f)
+                val fractionValue = statusPayload.opt("fraction") ?: statusPayload.opt("progress")
+                val fraction = when (fractionValue) {
+                    is Number -> if (fractionValue.toDouble() > 1.0) fractionValue.toDouble() / 100.0 else fractionValue.toDouble()
+                    else -> 0.0
+                }.toFloat().coerceIn(0f, 1f)
                 val percent = (15 + fraction * 80f).toInt().coerceIn(15, 95)
                 val stage = statusPayload.optString("stage", statusPayload.optString("status", "processing"))
                 val message = statusPayload.optString("message", "جاري تنفيذ المعالجة على Gateway")
@@ -80,127 +97,136 @@ class ProcessingGatewayClient(
                         completedResult = RemoteResult(gatewayJobId, parseClips(statusPayload))
                     }
                     state == "CANCELLED" || statusPayload.optString("status") == "cancelled" -> error("ألغى Gateway مهمة المعالجة")
-                    state == "FAILED" || statusPayload.optString("status") in setOf("failed", "error") -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
-                    state == "INTERRUPTED" -> onProgress(Progress(percent, "INTERRUPTED", "توقفت المهمة مؤقتاً؛ يمكن استئنافها من Gateway"))
+                    (state == "INTERRUPTED" || state == "RETRY_WAIT" || state == "FAILED" || state == "ERROR" || statusPayload.optString("status") in setOf("failed", "error")) && !resumeAttempted -> {
+                        resume(config, gatewayJobId).getOrThrow()
+                        resumeAttempted = true
+                        onProgress(Progress(percent, "RESUMING", "استئناف المهمة من checkpoint Gateway"))
+                    }
+                    state == "FAILED" || state == "ERROR" || statusPayload.optString("status") in setOf("failed", "error") -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
                 }
                 if (completedResult == null) delay(POLL_INTERVAL_MS)
             }
             Result.success(requireNotNull(completedResult))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             Result.failure<RemoteResult>(error)
         }
     }
 
-    private suspend fun upload(
+    private suspend fun uploadResumable(
         baseUrl: String,
         token: String,
         sourceUri: Uri,
         onProgress: suspend (Int) -> Unit
     ): String {
-        val total = contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
-        require(total > 0L) { "تعذر معرفة حجم الفيديو للرفع" }
-        val digest = sha256(sourceUri, total)
-        val filename = sourceUri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "source.mp4"
-        val session = requestJson(
+        val totalBytes = contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
+        require(totalBytes > 0L) { "تعذر معرفة حجم ملف الفيديو للرفع المتقطع" }
+        val checksum = sha256(sourceUri)
+        val filename = sourceUri.lastPathSegment?.substringAfterLast('/').orEmpty().ifBlank { "source.mp4" }
+        val initialized = requestJson(
             "$baseUrl/v1/sources/uploads",
             token,
             "POST",
-            JSONObject().put("filename", filename).put("bytes", total).put("sha256", digest)
+            JSONObject()
+                .put("filename", filename)
+                .put("bytes", totalBytes)
+                .put("sha256", checksum)
         )
-        val uploadId = session.optString("id").takeIf { it.isNotBlank() } ?: error("Gateway لم يُرجع معرّف جلسة الرفع")
-        var offset = session.optLong("offset", 0L).coerceIn(0L, total)
-        val chunkBytes = session.optLong("chunk_bytes", DEFAULT_UPLOAD_CHUNK_BYTES.toLong()).coerceIn(1L, MAX_UPLOAD_CHUNK_BYTES.toLong())
-        if (session.optString("status").equals("done", true) || session.optString("status").equals("completed", true)) {
-            onProgress(10)
-            return session.optString("source").takeIf { it.isNotBlank() } ?: error("جلسة الرفع المكتملة بلا مصدر")
+        val uploadId = initialized.optString("id").takeIf { it.isNotBlank() }
+            ?: error("Gateway لم يُرجع معرّف جلسة الرفع")
+        var offset = initialized.optLong("offset", 0L).coerceIn(0L, totalBytes)
+        if (initialized.optString("status").equals("completed", ignoreCase = true) || offset == totalBytes) {
+            return initialized.optString("source").takeIf { it.isNotBlank() }
+                ?: completeUpload(baseUrl, token, uploadId)
         }
-        while (offset < total) {
-            val length = minOf(chunkBytes, total - offset)
-            val response = uploadChunk(baseUrl, token, uploadId, sourceUri, total, offset, length)
-            val nextOffset = response.optLong("offset", offset + length)
-            require(nextOffset == offset + length) { "Gateway أعاد offset غير متوقع لجلسة الرفع" }
-            offset = nextOffset
-            onProgress((offset * 10L / total).toInt().coerceIn(0, 10))
+
+        while (offset < totalBytes) {
+            val chunkLength = min(UPLOAD_CHUNK_BYTES.toLong(), totalBytes - offset).toInt()
+            val chunk = readChunk(sourceUri, offset, chunkLength)
+            val connection = openConnection("$baseUrl/v1/sources/uploads/${URI.create(uploadId).toASCIIString()}", token, "PUT").apply {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/octet-stream")
+                setRequestProperty("X-Upload-Offset", offset.toString())
+                setRequestProperty("Content-Range", "bytes $offset-${offset + chunk.size - 1}/$totalBytes")
+                setFixedLengthStreamingMode(chunk.size)
+            }
+            try {
+                connection.outputStream.use { it.write(chunk) }
+                val response = readJson(connection)
+                val nextOffset = response.optLong("offset", offset + chunk.size)
+                require(nextOffset == offset + chunk.size && nextOffset <= totalBytes) {
+                    "Gateway أعاد offset غير متوقع لجلسة الرفع"
+                }
+                offset = nextOffset
+                onProgress((offset.toDouble() / totalBytes.toDouble() * 10.0).toInt().coerceIn(0, 10))
+            } finally {
+                connection.disconnect()
+            }
         }
-        val completed = requestJson(
+        onProgress(10)
+        return completeUpload(baseUrl, token, uploadId)
+    }
+
+    private fun completeUpload(baseUrl: String, token: String, uploadId: String): String {
+        val json = requestJson(
             "$baseUrl/v1/sources/uploads/${URI.create(uploadId).toASCIIString()}/complete",
             token,
             "POST",
             JSONObject()
         )
-        onProgress(10)
-        return completed.optString("source").takeIf { it.isNotBlank() } ?: error("Gateway لم يُرجع رابط المصدر المرفوع")
+        return json.optString("source").takeIf { it.isNotBlank() }
+            ?: error("Gateway لم يُرجع رابط المصدر بعد إكمال الرفع")
     }
 
-    private fun sha256(sourceUri: Uri, total: Long): String {
+    private fun sha256(sourceUri: Uri): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        val input = contentResolver.openInputStream(sourceUri) ?: throw IOException("تعذر فتح ملف الفيديو للرفع")
-        var read = 0L
+        val input = contentResolver.openInputStream(sourceUri) ?: error("تعذر فتح ملف الفيديو للتحقق")
         input.use { source ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             while (true) {
                 val count = source.read(buffer)
                 if (count < 0) break
-                digest.update(buffer, 0, count)
-                read += count
+                if (count > 0) digest.update(buffer, 0, count)
             }
         }
-        require(read == total) { "تغير حجم الفيديو أثناء الرفع" }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 
-    private fun uploadChunk(baseUrl: String, token: String, uploadId: String, sourceUri: Uri, total: Long, offset: Long, length: Long): JSONObject {
-        val connection = openConnection("$baseUrl/v1/sources/uploads/${URI.create(uploadId).toASCIIString()}", token, "PUT").apply {
-            doOutput = true
-            setRequestProperty("Content-Type", contentResolver.getType(sourceUri) ?: "video/mp4")
-            setRequestProperty("X-Upload-Offset", offset.toString())
-            setRequestProperty("Content-Range", "bytes $offset-${offset + length - 1}/$total")
-            setFixedLengthStreamingMode(length)
-        }
-        return try {
-            val input = contentResolver.openInputStream(sourceUri) ?: throw IOException("تعذر فتح ملف الفيديو للرفع")
-            input.use { source ->
-                skipFully(source, offset)
-                connection.outputStream.use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var remaining = length
-                    while (remaining > 0L) {
-                        val count = source.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                        if (count < 0) throw IOException("انتهى مصدر الفيديو قبل اكتمال الجزء")
-                        output.write(buffer, 0, count)
-                        remaining -= count
-                    }
+    private fun readChunk(sourceUri: Uri, offset: Long, length: Int): ByteArray {
+        val input = contentResolver.openInputStream(sourceUri) ?: error("تعذر فتح ملف الفيديو لاستئناف الرفع")
+        input.use { source ->
+            var remaining = offset
+            while (remaining > 0L) {
+                val skipped = source.skip(remaining)
+                if (skipped > 0L) {
+                    remaining -= skipped
+                } else if (source.read() >= 0) {
+                    remaining -= 1L
+                } else {
+                    error("تعذر الوصول إلى موضع الاستئناف في الفيديو")
                 }
             }
-            readJson(connection)
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun skipFully(input: InputStream, bytes: Long) {
-        var remaining = bytes
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (remaining > 0L) {
-            val skipped = input.skip(remaining)
-            if (skipped > 0L) remaining -= skipped
-            else {
-                val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                if (count < 0) throw IOException("تعذر الوصول إلى موضع الاستئناف")
-                remaining -= count
+            val chunk = ByteArray(length)
+            var read = 0
+            while (read < length) {
+                val count = source.read(chunk, read, length - read)
+                if (count < 0) break
+                if (count == 0) continue
+                read += count
             }
+            require(read > 0) { "تعذر قراءة جزء من الفيديو" }
+            return if (read == chunk.size) chunk else chunk.copyOf(read)
         }
     }
 
-    private fun requestJson(url: String, token: String, method: String, body: JSONObject? = null): JSONObject {
+    private fun requestJson(url: String, token: String, method: String, body: JSONObject): JSONObject {
         val connection = openConnection(url, token, method).apply {
-            if (body != null) {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
         }
         return try {
-            body?.let { connection.outputStream.use { output -> output.write(it.toString().toByteArray(Charsets.UTF_8)) } }
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             readJson(connection)
         } finally {
             connection.disconnect()
@@ -314,13 +340,18 @@ class ProcessingGatewayClient(
         val normalized = raw.trim().removeSuffix("/")
         require(normalized.isNotBlank()) { "Gateway URL غير مضبوط" }
         val uri = URI(normalized)
-        require(uri.scheme?.lowercase() == "https") { "يجب استخدام HTTPS مع private Processing Gateway" }
+        val host = uri.host.orEmpty().lowercase()
+        val local = host == "localhost" || host == "127.0.0.1" || host == "[::1]" ||
+            host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("172.16.")
+        require(!uri.host.isNullOrBlank()) { "عنوان Gateway غير صالح" }
+        require(uri.scheme?.lowercase() == "https" || (uri.scheme?.lowercase() == "http" && local)) {
+            "استخدم HTTPS خارج الشبكة المحلية"
+        }
         return normalized
     }
 
     companion object {
         private const val POLL_INTERVAL_MS = 2_000L
-        private const val DEFAULT_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
-        private const val MAX_UPLOAD_CHUNK_BYTES = 64 * 1024 * 1024
+        private const val UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
     }
 }

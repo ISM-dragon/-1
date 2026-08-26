@@ -124,7 +124,7 @@ POST /v1/sources/uploads/{upload_id}/complete
 }
 ```
 
-لا ينشئ Gateway processing job تلقائيًا؛ إنشاء job خطوة مستقلة idempotent. endpoint `/v1/sources/upload` one-shot يبقى compatibility مؤقتًا، لكن Android canonical يجب أن ينتقل إلى session contract حتى لا يفقد upload طويلًا عند انقطاع الشبكة [3] [6].
+لا ينشئ Gateway processing job تلقائيًا؛ إنشاء job خطوة مستقلة idempotent. endpoint `/v1/sources/upload` one-shot يبقى compatibility مؤقتًا للعملاء legacy، بينما Android canonical يستخدم session contract حتى لا يفقد upload طويلًا عند انقطاع الشبكة [3] [6].
 
 ## 5. Processing job contract
 

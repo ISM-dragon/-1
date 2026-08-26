@@ -8,11 +8,13 @@
 | Python | Gateway + pipeline regression | `python3 -m pytest -q` | PASS: 164، skipped: 1 |
 | Engine | lifecycle/checkpoints/progress | `pipeline/tests/test_engine.py`, `test_queue.py` | PASS |
 | Media | invalid/corrupt source | `gateway/tests/test_media_lifecycle.py`, smoke evidence | PASS |
+| Upload | SHA-256 session/chunk/offset/complete | `ProcessingGatewayClient.uploadResumable`, Gateway `/v1/sources/uploads` contract | STATIC PASS؛ interruption E2E مطلوب على جهاز/Gateway فعلي |
 | Failure | missing provider/model/FFmpeg/render | targeted failure suite | PASS للـclassification، لا يثبت production readiness |
 | Resilience | Gateway restart | `evidence/gateway_restart_recovery.json` | PASS جزئيًا على Gateway |
 | Resilience | network loss/recovery | `evidence/network_loss_observation.json` و`network_loss_recovery.json` | PASS جزئيًا على Gateway |
 | Control | active cancel | `evidence/active_cancel.json` | PASS على Gateway |
 | Control | retry/resume | retry evidence وcontract tests | PASS جزئيًا؛ لا يثبت E2E من Android |
+| Upload recovery | network interruption during chunk upload | Gateway session dedupe by `(bytes, sha256)` + WorkManager retry | NOT RUN: يحتاج Gateway وجهاز فعلي |
 | Android | unit tests | `:app:testDebugUnitTest` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
 | Android | lint | `:app:lint` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |
 | Android | release assembly | `:app:assembleRelease` | يجب إعادة التشغيل في بيئة Android SDK/JDK مكتملة |

@@ -1,39 +1,50 @@
-# مقارنة المشروع المرجعي
+# مقارنة المشروع المرجعي مع ISM / PublikClip
 
 **الحالة:** تدقيق موثق قبل أي نسخ أو استبدال واسع.
 
-**المصدر المرجعي:** الأرشيف المرفق `opensource-clipping-main.zip`، وهو مشروع **OpenSource Clipping** المنشور في [NaufalRizqullah/opensource-clipping][1]. يحتوي الأرشيف على خط معالجة Python محلي، وواجهة Web Studio مبنية بـHTML/JavaScript، وواجهة FastAPI خفيفة، وليس تطبيق Android أو بنية Backend/Engine منفصلة. ترخيصه المرصود في ملف `LICENSE` هو **MIT** مع إشعار copyright باسم Muhammad Naufal Rizqullah.
+**المصادر المرجعية:** الأرشيفان المتاحان في سجل المشروع هما `supoclip-main.zip` و`whisper.cpp-master.zip`. يضيف whisper.cpp عينة Android/Java محلية مبنية على JNI وGGML/Whisper، بينما يضيف SupoClip مرجعًا لواجهة الويب وBackend متعدد الخدمات. لم تُنسخ ملفات source أو binary أو model من أي أرشيف إلى المستودع الهدف.
 
 ## الخلاصة التنفيذية
 
-المشروع المرجعي غني بميزات clipping والرندر: transcription بكلمات زمنية، اختيار المقاطع عبر Gemini، auto-framing، split-screen وcamera-switch، karaoke subtitles، hook/teaser، B-roll، BGM، watermark، thumbnail، ورفع اختياري إلى YouTube/Facebook. لكنه يفترض Python محليًا وFFmpeg ونماذج GPU ومفاتيح مزودين، ويستخدم orchestrator متسلسلًا وملف JSON/ذاكرة محلية لإدارة الوظائف. لذلك فهو **مرجع ميزات وأفكار UX** وليس أساسًا مناسبًا لنسخه داخل APK أو لاستبدال حد Android → Gateway → Engine.
+المشروع المرجعي قوي في تجربة الويب، وإدارة اختيار المقاطع، والتحرير الخفيف، والقوالب، والتكامل مع مزودات الذكاء الاصطناعي. أما المستودع الهدف فهو أقرب إلى المنتج المطلوب فعليًا لأنه يملك Android client، وPrivate Gateway، ومحرك PublikClip ذي checkpoints، واختبارات resilience، وعقودًا بين العميل والخادم. لذلك لا توجد مبررات تقنية لاستبدال بنية الهدف بنسخة المرجع. القرار المعتمد هو **COMBINE بصورة انتقائية**: الاحتفاظ بمسار Android/Gateway/Engine الحالي، واستخدام أفكار المرجع في UX والعقود القابلة للتوسع فقط بعد تحويلها إلى مكونات مستقلة واختبارها.
 
-المشروع الهدف أقرب إلى المتطلب التشغيلي لأنه يملك تطبيق Android أصليًا، وGateway خاصًا، ومحرك PublikClip مرحليًا مع checkpoints، وحالة وظائف قابلة للاسترداد، وحدود أسرار واضحة. القرار المعتمد هو **COMBINE بصورة انتقائية**: الاحتفاظ بالمسار الحالي، والاستفادة من أفكار المرجع عبر إعادة تنفيذ مستقلة واختبارات regression، دون نسخ ملفات source أو assets أو build outputs.
+> لا يعتبر وجود implementation أكبر أو أحدث دليلًا كافيًا على صلاحيتها لمسار Android شخصي. معيار الاختيار هنا هو التوافق مع Android، والاستقرار، وكلفة الدمج، وقابلية القياس.
 
-> حجم المشروع المرجعي أو عدد خيارات CLI فيه لا يثبت تفوقه في التوافق مع Android أو الاستقرار أو قابلية الاستئناف. معيار الاختيار هو ملاءمة المسار المستهدف، وصحة التنفيذ، وكلفة الدمج، وقابلية القياس.
+## whisper.cpp: نتيجة fit check
 
-## مقارنة على مستوى المكوّنات
+عينة `examples/whisper.android.java` في الأرشيف المرجعي هي تطبيق Android تجريبي ضيق النطاق: يضع المستخدم نموذج GGML وملف WAV داخل `assets`، ثم يمرر مصفوفة `float` إلى `whisper_full` عبر JNI ويقرأ النصوص والتوقيتات. هي لا تنفذ اختيار فيديو، رفعًا، jobs، checkpoints، diarization، events، candidate scoring، camera، rendering، أو استعادة بعد process death. كما أن README يحذر من أن مشروع العينة يعتمد على ملفات المستودع الكامل، فلا يُعامل كوحدة Android مستقلة.
 
-| المجال | الموجود في الهدف | الموجود في المرجع الفعلي | القرار | السبب والحدود |
+| فكرة whisper.cpp | ملاءمتها للمشروع الهدف | القرار | السبب |
+|---|---|---|---|
+| JNI bridge لتهيئة نموذج من asset/file | محدودة ومحصورة في ASR المحلي | IGNORE_REFERENCE | المسار canonical هو Python/WhisperX داخل Private Gateway؛ نقل النموذج إلى APK يرفع الحجم والذاكرة ويكسر boundary المطلوب. |
+| timestamps للنصوص والمقاطع | مفيدة على مستوى contract | IMPROVE_CURRENT | تُحفظ word timestamps التي ينتجها backend، دون إعادة transcription محلي. |
+| CMake/NDK وABI filters | غير لازمة للمسار الحالي | IGNORE_REFERENCE | لا توجد native ASR dependency في APK، ولا دليل benchmark يبررها. |
+| نماذج GGML داخل `assets` | غير مناسبة للتوزيع الشخصي الحالي | MANUAL_REVIEW | تحتاج إدارة حجم/تنزيل/checksum/حذف وقياس على أجهزة فعلية قبل أي مسار اختياري لاحق. |
+| benchmark/system-info helpers | مفيدة كفكرة قياس فقط | ADD_REFERENCE | يمكن استعارة مبدأ تسجيل baseline للـCPU/RAM/زمن ASR دون نسخ helper أو native source. |
+
+## مصفوفة القرار
+
+| المجال | الموجود في الهدف | الموجود في المرجع | القرار | السبب والحدود |
 |---|---|---|---|---|
-| Android structure | Kotlin/Compose داخل `android/` مع Room وWorkManager | لا يوجد Android native؛ Web Studio وموارد ويب | KEEP_CURRENT | الهدف الوحيد القابل لبناء APK أصلي بدورة حياة Android واضحة. |
-| File/video picker | URI من Photo Picker ثم نسخ إلى `filesDir` | ملفات محلية أو روابط يقرأها Python | KEEP_CURRENT | يعالج صلاحيات Android واستمرار URI في الخلفية. |
-| Networking | Gateway API خاص، bearer token، upload session وpolling | FastAPI Web Studio مع `POST /api/jobs` وSSE polling | IMPROVE_CURRENT | تُستفاد فكرة progress، لكن عقد `/v1` الحالي يبقى canonical للـAPK. |
-| Background processing | WorkManager وforeground notification وRoom | Thread pool/semaphore ومهمة asyncio محلية | KEEP_CURRENT | WorkManager وRoom ملائمان لاستمرار العميل بعد إغلاق Activity أو إعادة التشغيل. |
-| Job persistence | SQLite في Gateway وRoom في Android وcheckpoint stages | JSON snapshot وذاكرة process-local في Web API | KEEP_CURRENT | المرجع لا يقدم durable queue أو restart reconciliation مكافئًا. |
-| Upload | Resumable session، offset، SHA-256، atomic finalize | رفع/ملفات محلية ضمن Web API | KEEP_CURRENT | رفع الفيديو الطويل يحتاج استئنافًا ولا ينبغي ربطه بمسار local filesystem. |
-| ASR | WhisperX/ASR ضمن Pipeline server-side | Faster-Whisper وبدائل/YouTube subtitles | KEEP_CURRENT | لا ينقل runtime الثقيل إلى APK ولا يعيد transcription دون سبب. |
-| Diarization/events | مراحل مستقلة وcheckpoints | Pyannote اختياري وbest-effort داخل orchestrator | KEEP_CURRENT | الفصل الحالي أفضل للاستئناف والتشخيص. |
-| Candidate generation | candidates ثم scoring مع signals متعددة | Gemini يختار highlights وmetadata | IMPROVE_CURRENT | يمكن إضافة rubric المرجع كإشارة versioned اختيارية، دون حذف scoring الحالي. |
-| Camera/framing | `camera/` مع tracking/director/stage وactive speaker | MediaPipe/YOLO وsplit-screen/camera-switch | KEEP_CURRENT + MANUAL_REVIEW | لا استبدال دون benchmark؛ تُعاد تنفيذ التحسينات المفيدة خلف feature flag. |
-| Captions | word timestamps وASS/render integration | karaoke ASS وfont presets وkinetic typography | IMPROVE_CURRENT | تفصل caption state عن render وتُضاف presets قابلة للقياس. |
-| Rendering/media | FFmpeg/ffprobe، validation، artifacts، cleanup | hooks، transitions، B-roll، BGM، watermark، thumbnail | COMBINE | تستمر media runtime الحالية؛ الميزات الإضافية اختيارية ولا تدخل APK. |
-| Preview/edit | Android results/review/edit/export | Web Studio لتكوين jobs ومعاينة النتائج | ADD_REFERENCE | تُستخلص قواعد flow والتحرير الخفيف فقط؛ لا تُنقل واجهة الويب حرفيًا. |
-| Provider management | Gateway registry وsecret vault وdiagnostics | مفاتيح env مباشرة لـGemini/Pexels/HF/NVIDIA | KEEP_CURRENT | الأسرار تبقى server-side وتظهر حالات آمنة فقط. |
-| API/auth | private token وdevice boundary | API key لـWeb Studio/tunnel | KEEP_CURRENT | لا حاجة لـmulti-user أو billing أو حسابات عامة. |
-| Social publishing | optional routes وmock adapters | YouTube/Facebook uploaders | IGNORE_REFERENCE | خارج الحد الأدنى لمعالجة clip، ويبقى feature منفصلًا. |
-| Deployment | Gateway خاص وsingle-instance storage | Colab/Kaggle أو Python محلي مع FFmpeg | KEEP_CURRENT | يتطابق مع Android شخصي ويتيح مصدر أسرار واحدًا. |
-| Licensing | مستودع الهدف AGPL-3.0-or-later وnotices محلية | المرجع MIT | MANUAL_REVIEW | MIT يسمح بإعادة الاستخدام مع حفظ notice، لكن لا حاجة للنسخ؛ الأفكار العامة يعاد تنفيذها. |
+| Android structure | تطبيق Kotlin مستقل داخل `android/` مع Compose وRoom وWorkManager | تطبيق ويب وموارد Tauri/iOS في SupoClip، وعينة Java/JNI محلية في whisper.cpp | KEEP_CURRENT | الهدف يملك APK native وعقد Gateway؛ عينة whisper.cpp ليست بديلًا عن التطبيق الكامل. |
+| File/video picker | وصول Android إلى URI محلي ثم نسخ آمن إلى `filesDir` | اختيار ملف عبر المتصفح | KEEP_CURRENT | `content://` وقيود Android لا يمكن تمثيلها باستدعاء متصفح عام. |
+| Networking | عميل Gateway ورفع واستطلاع واستئناف | REST/WebSocket وARQ للويب | IMPROVE_CURRENT | يمكن استعارة فكرة progress stream، لكن العقد الحالي يجب أن يبقى المصدر الوحيد للـAPK. |
+| Background processing | WorkManager وforeground notification وRoom state | ARQ/Redis worker | KEEP_CURRENT | WorkManager مناسب لاستمرار العميل؛ Redis ليس ضرورة لمالك واحد وGateway خاص. |
+| Job persistence | SQLite/Room وcheckpoints وtransition history | DB/ARQ jobs | COMBINE | تبقى durable state في Gateway، ويُحسن Android عرضها بعد restart. |
+| Upload | Gateway upload sessions وchecksum | رفع API يديره Backend | KEEP_CURRENT | session/resume وSHA-256 أهم لمسار فيديو كبير من one-shot upload. |
+| ASR | Python/WhisperX في runtime خاص | SupoClip يعتمد مزودات خارجية؛ whisper.cpp يقدم JNI/Whisper محليًا | KEEP_CURRENT | لا يجوز نقل نموذج desktop إلى APK أو إعادة transcription دون سبب؛ يُدرس native ASR فقط كمسار اختياري بعد benchmark. |
+| Diarization/events | مراحل مستقلة في Pipeline | مرحلة تحليل ضمن worker | KEEP_CURRENT | الفصل الحالي أفضل للـcheckpoints والاختبارات والتشخيص. |
+| Candidate generation | candidates/scoring موجودان في Pipeline | LLM يختار 3–7 مقاطع مع virality rubric | IMPROVE_CURRENT | يمكن إضافة rubric versioned كمدخل scoring، دون حذف scoring الحالي أو جعل فشل LLM قاتلًا. |
+| Camera/framing | `camera/` مع tracking/director/stage | face-centered crop | KEEP_CURRENT | الهدف يملك تركيبة أوسع؛ المرجع لا يثبت benchmark يتفوق عليه. |
+| Captions | word timestamps وASS/render integration | قوالب وword-synced subtitles | IMPROVE_CURRENT | فصل caption state عن render logic، وإضافة presets فقط عبر contract. |
+| Rendering/media | FFmpeg/ffprobe، validation، cleanup، artifacts | FFmpeg transitions/B-roll | COMBINE | تستمر media runtime الحالية؛ B-roll/transitions اختيارية ولا تدخل APK أو تزيد dependencies بلا قياس. |
+| Preview/edit | Android results/cache ومسار تحرير مبدئي | محرر ويب trim/split/merge | ADD_REFERENCE | تُستخلص UX rules فقط؛ لا تُنقل واجهة الويب حرفيًا. |
+| Provider management | Gateway provider registry وsecret vault | Gemini/OpenAI/Claude/Ollama في Backend | KEEP_CURRENT | الأسرار تبقى server-side، مع diagnostics واضحة وfallback آمن. |
+| API/auth | Private token/device binding و`/v1` | user accounts/API keys وbilling routes | IGNORE_REFERENCE | خارج نطاق تطبيق شخصي، ويزيد المخاطر والسطح التشغيلي. |
+| Social publishing | optional routes في الهدف والمرجع | Instagram/analytics/email integrations | IGNORE_REFERENCE | ليست شرطًا لإنشاء clip؛ تُبقى منفصلة حتى استقرار processing. |
+| Deployment | Gateway خاص وDocker Compose volume | Docker Compose مع Redis/DB وخدمات متعددة | KEEP_CURRENT | تصميم أحادي المستخدم أبسط وأقرب للمتطلب؛ التوسع ليس هدف Wave الحالية. |
+| MCP | غير أساسي للمسار Android | MCP server مستقل | IGNORE_REFERENCE | لا يضيف قيمة لمسار APK الشخصي الحالي. |
+| Licensing | target license وvendor notices موجودة | SupoClip AGPL-3.0؛ whisper.cpp وggml تحت MIT-style notices في الأرشيف | MANUAL_REVIEW | لا نسخ للكود المرجعي قبل مراجعة التوافق؛ إعادة التنفيذ المستقل هو الافتراضي، مع حفظ notices إذا أضيفت dependency مستقبلًا. |
 
 ## التقييم الوزني
 
@@ -41,29 +52,97 @@
 
 | معيار القرار | الوزن | المسار الحالي | نقل بنية المرجع |
 |---|---:|---:|---:|
-| توافق Android | 20% | 5/5 | 1/5 |
+| توافق Android | 20% | 5/5 | 2/5 |
 | Correctness | 20% | 4/5 | 3/5 |
-| Stability | 15% | 4/5 | 2/5 |
+| Stability | 15% | 4/5 | 3/5 |
 | Performance | 15% | 4/5 | 3/5 |
-| Maintainability | 10% | 4/5 | 2/5 |
-| Feature completeness | 10% | 4/5 | 5/5 |
+| Maintainability | 10% | 4/5 | 3/5 |
+| Feature completeness | 10% | 4/5 | 4/5 |
 | Integration cost | 5% | 4/5 | 1/5 |
 | Dependency cost | 5% | 4/5 | 2/5 |
-| **المحصلة التقريبية** | **100%** | **4.15/5** | **2.45/5** |
+| **المحصلة التقريبية** | **100%** | **4.15/5** | **2.70/5** |
 
-## القرارات الناتجة
+## نتيجة التدقيق
 
-تم اعتماد `KEEP_CURRENT` للمسار Android → Gateway → Engine → AI/Media Runtime. وتم اعتماد `IMPROVE_CURRENT` للرفع القابل للاستئناف، وerror envelope، وcaptions، وscoring، وUX. وتم اعتماد `ADD_REFERENCE` لأفكار المحرر والقوالب، و`IGNORE_REFERENCE` للحسابات وbilling وMCP والبنية السحابية العامة. لم تُنقل dependencies أو أسرار أو artifacts build من الأرشيف.
+تم اعتماد `KEEP_CURRENT` للمسار Android → Gateway → Engine → AI/Media Runtime. وتم اعتماد `IMPROVE_CURRENT` للـcaptions وscoring وUX، و`ADD_REFERENCE` لأفكار المحرر والقوالب، و`IGNORE_REFERENCE` للحسابات وbilling وMCP وsocial integrations في هذه المرحلة. لم تُنقل dependencies أو أسرار أو artifacts build من الأرشيف.
 
 ## References
 
-[1]: https://github.com/NaufalRizqullah/opensource-clipping "OpenSource Clipping reference project"
-[2]: ../LICENSE "Target AGPL-3.0-or-later license"
-[3]: ../pipeline/publikclip_pipeline/engine/contracts.py "PublikClip Engine contract v1"
+[1]: https://github.com/FujiwaraChoki/supoclip "SupoClip public reference project"
+[2]: ARCHITECTURE.md "Target architecture baseline"
+[3]: CONTRACTS.md "Android/Gateway/Engine contracts"
 [4]: ../gateway/main.py "Private Gateway implementation"
-[5]: ../android/app/build.gradle.kts "Native Android build configuration"
-[6]: REFERENCE_MIGRATION_PLAN.md "Reference migration plan"
+[5]: ../pipeline/publikclip_pipeline/engine/contracts.py "PublikClip Engine contract"
+[6]: ../android/app/build.gradle.kts "Native Android build configuration"
+[7]: ../VENDORED-LICENSES.md "Target repository vendor notices"
+[8]: ../../upload/whisper.cpp-master.zip "Supplied whisper.cpp reference archive; not committed"
+[9]: https://github.com/ggerganov/whisper.cpp "whisper.cpp upstream reference"
 
 ---
 
-**ملاحظة:** لم تُنسخ أي أجزاء من OpenSource Clipping إلى المستودع الهدف؛ التعديلات الحالية هي إعادة تنفيذ مستقلة لعقود الرفع والأخطاء، مع توثيق الأفكار المرجعية فقط.
+**ملاحظة:** لم تُنسخ أي أجزاء من SupoClip أو whisper.cpp إلى المستودع الهدف أثناء هذا التدقيق. القرار الحالي هو الاحتفاظ بالـremote-only Android boundary وإعادة تنفيذ أي أفكار قياس أو UX بشكل مستقل.
+
+## VideoClipper-main المرفق — نتيجة المقارنة الإضافية
+
+يضيف الأرشيف المرفق `VideoClipper-main` مرجعًا مختلفًا عن SupoClip وwhisper.cpp: تطبيق Streamlit أحادي العملية يركز على استخراج الصوت، تحليل Gemini، faster-whisper، إعادة التأطير بالوجه، أنماط letterbox/blurred background/center crop، وcaptions مرسومة عبر Pillow. ملف `LICENSE` في الأرشيف يعلن MIT مع copyright لـKacper. لم تُنسخ منه ملفات source أو assets أو أسرار إلى production.
+
+| فكرة VideoClipper-main | القرار | نتيجة التقييم |
+|---|---|---|
+| Streamlit UI ومعالجة متزامنة داخل الصفحة | IGNORE_REFERENCE | لا يطابق Android lifecycle أو job persistence أو secret boundary. |
+| FFmpeg audio extraction مع MoviePy fallback | COMBINE | نحتفظ بـFFmpeg/Media runtime الحالي ونستفيد من fallback typed فقط؛ لا ننقل MoviePy إلى APK. |
+| faster-whisper وword timestamps | KEEP_CURRENT | تُستخدم timestamps الموجودة في WhisperX/ASR على الخادم، دون transcription ثانٍ على الهاتف. |
+| Gemini cloud audio analysis | ADD_REFERENCE | يُدرس خلف Gateway/provider registry؛ لا يمرر Android API key إلى provider. |
+| RMS audio-energy fallback للفيديو بلا كلام | ADD_REFERENCE | signal deterministic اختياري داخل events/candidates بعد regression fixture. |
+| Face tracking مع EMA/interpolation | COMBINE | تُقارن مع camera director/tracks الحالية بعد benchmark، ولا تُستبدل بلا قياس. |
+| Letterbox وblurred background وPillow captions | ADD_REFERENCE | presets UX/render اختيارية بعد golden tests وبدون تغيير boundary. |
+| JSON-only highlight selection وempty-list error handling | IMPROVE_CURRENT | نحافظ على candidates/scoring وtyped errors/fallback بدل إخفاء فشل LLM. |
+
+المحصلة: المرجع مفيد كمصدر أفكار media UX وfallback، لكنه لا يبرر استبدال Android → Gateway → Engine. القرار يظل **KEEP_CURRENT + COMBINE انتقائي**.
+
+### References إضافية
+
+[10]: ../../references/VideoClipper-main/README.md "Attached VideoClipper feature description"
+[11]: ../../references/VideoClipper-main/ai_utils.py "Attached VideoClipper AI helpers"
+[12]: ../../references/VideoClipper-main/video_utils.py "Attached VideoClipper media helpers"
+[13]: ../../references/VideoClipper-main/LICENSE "Attached VideoClipper MIT license"
+
+## OpenSource Clipping — الأرشيف المرفق في هذه الجلسة
+
+الأرشيف `opensource-clipping-main.zip` هو مشروع Python/CLI محلي مع Web Studio وFastAPI wrapper. يضيف transcription بكلمات زمنية، Gemini content curation، face auto-framing، karaoke subtitles، hook/teaser، B-roll، BGM، watermark، thumbnail، split-screen وcamera-switch. يعتمد على Python وFFmpeg ونماذج ومفاتيح مزودين على الجهاز أو الخادم؛ لا يقدم Android native أو upload sessions أو durable checkpoint-aware job system مكافئًا للمسار الحالي.
+
+| فكرة OpenSource Clipping | القرار | نتيجة التقييم |
+|---|---|---|
+| CLI feature surface وخيارات render كثيرة | ADD_REFERENCE | مصدر أفكار للـfeature flags، لكن لا تُنقل واجهة CLI إلى الهاتف ولا تُضاف dependencies ضخمة بلا baseline. |
+| Word timestamps وkaraoke/typography presets | IMPROVE_CURRENT | نستخدم timestamps الموجودة في Engine ونحافظ على caption state منفصلة عن render logic. |
+| Face tracking وsplit-screen/camera-switch | KEEP_CURRENT + MANUAL_REVIEW | تُقارن أفكار tracking مع camera director الحالية؛ لا استبدال بلا benchmark. |
+| Hook V2 وsegment trimming وB-roll/BGM | ADD_REFERENCE | تُدرس كميزات server-side اختيارية بعد golden tests؛ لا تدخل APK ولا تتجاوز checkpoints. |
+| Local runner وJSON job snapshot | IGNORE_REFERENCE | المسار المطلوب يحتاج Gateway/Room/WorkManager وdurable recovery، وليس orchestrator محليًا داخل Android. |
+| Web Studio ورفع source المحلي | ADD_REFERENCE | تُستفاد مبادئ UX فقط؛ عميل Android يستخدم `/v1/sources/uploads` مع offset وSHA-256. |
+
+ملف `LICENSE` في الأرشيف يعلن **MIT** مع copyright باسم Muhammad Naufal Rizqullah. لم تُنسخ أي ملفات source أو assets أو secrets أو build outputs من الأرشيف؛ التقييم أعلاه على مستوى الميزات والسلوك فقط.
+
+### References إضافية
+
+[14]: https://github.com/NaufalRizqullah/opensource-clipping "OpenSource Clipping upstream project"
+[15]: ../../upload/opensource-clipping-main.zip "Attached OpenSource Clipping archive; not committed"
+[16]: ../../upload/opensource-clipping-main/clipping/runner.py "Reference local pipeline orchestrator"
+[17]: ../../upload/opensource-clipping-main/web/api/worker.py "Reference web worker"
+[18]: ../../upload/opensource-clipping-main/LICENSE "Reference MIT license"
+
+## OpenSource Clipping — الأرشيف المرفق في هذه الجلسة
+
+الأرشيف `opensource-clipping-main.zip` هو مشروع Python/CLI محلي مع Web Studio وFastAPI wrapper. يضيف transcription بكلمات زمنية، Gemini content curation، face auto-framing، karaoke subtitles، hook/teaser، B-roll، BGM، watermark، thumbnail، split-screen وcamera-switch. يعتمد على Python وFFmpeg ونماذج ومفاتيح مزودين على الجهاز أو الخادم؛ لا يقدم Android native أو upload sessions أو durable checkpoint-aware job system مكافئًا للمسار الحالي.
+
+| فكرة OpenSource Clipping | القرار | نتيجة التقييم |
+|---|---|---|
+| CLI feature surface وخيارات render كثيرة | ADD_REFERENCE | مصدر أفكار للـfeature flags، لكن لا تُنقل واجهة CLI إلى الهاتف ولا تُضاف dependencies ضخمة بلا baseline. |
+| Word timestamps وkaraoke/typography presets | IMPROVE_CURRENT | نستخدم timestamps الموجودة في Engine ونحافظ على caption state منفصلة عن render logic. |
+| Face tracking وsplit-screen/camera-switch | KEEP_CURRENT + MANUAL_REVIEW | تُقارن أفكار tracking مع camera director الحالية؛ لا استبدال بلا benchmark. |
+| Hook V2 وsegment trimming وB-roll/BGM | ADD_REFERENCE | تُدرس كميزات server-side اختيارية بعد golden tests؛ لا تدخل APK ولا تتجاوز checkpoints. |
+| Local runner وJSON job snapshot | IGNORE_REFERENCE | المسار المطلوب يحتاج Gateway/Room/WorkManager وdurable recovery، وليس orchestrator محليًا داخل Android. |
+| Web Studio ورفع source المحلي | ADD_REFERENCE | تُستفاد مبادئ UX فقط؛ عميل Android يستخدم `/v1/sources/uploads` مع offset وSHA-256. |
+
+ملف `LICENSE` في الأرشيف يعلن **MIT** مع copyright باسم Muhammad Naufal Rizqullah. لم تُنسخ أي ملفات source أو assets أو secrets أو build outputs من الأرشيف؛ التقييم أعلاه على مستوى الميزات والسلوك فقط.
+
+[14]: https://github.com/NaufalRizqullah/opensource-clipping "OpenSource Clipping upstream project"
+[15]: ../../upload/opensource-clipping-main/LICENSE "Attached OpenSource Clipping MIT license; not committed"

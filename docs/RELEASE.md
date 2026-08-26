@@ -2,12 +2,12 @@
 
 ## النطاق والنتيجة
 
-هذا الإصدار هو **APK release موقّع وقابل للتثبيت** لتطبيق ISM Android، ويعمل كعميل خفيف أمام private Processing Gateway. لا يحتوي تطبيق Android على محرك Python أو `uv` أو Node أو Rust، ولا ينفّذ معالجة الفيديو الثقيلة محلياً. أصبح `ProcessingEngine` و`VideoProcessingWorker` يرفضان المسار المحلي ويستخدمان Gateway البعيد فقط؛ تبقى مفاتيح مزودي الذكاء الاصطناعي ومحرك Python داخل backend الخاص.
+هذا التقرير يوثق baseline APK سابقًا موقّعًا وقابلًا للتثبيت لتطبيق ISM Android، ويعمل كعميل خفيف أمام private Processing Gateway. بعد هذه الدفعة أُضيف resumable upload إلى العميل الفعلي؛ لذلك يجب إعادة بناء artifact وتحديث بصمته قبل اعتبارها release نهائية. لا يحتوي تطبيق Android على محرك Python أو `uv` أو Node أو Rust، ولا ينفّذ معالجة الفيديو الثقيلة محلياً. تبقى مفاتيح مزودي الذكاء الاصطناعي ومحرك Python داخل backend الخاص.
 
-مسار الـAPK الناتج هو `android/app/build/outputs/apk/release/app-release.apk`، ومعرّف الحزمة `com.aistudio.opuspro.apk`، والإصدار الحالي من إعدادات Gradle هو `0.11.0` مع `versionCode=6`. لا تُحفظ ملفات APK داخل Git؛ يجب تسجيل الحجم والبصمة بعد كل build release ناجح. البصمة التالية تخص artifact تاريخيًا من baseline سابق، وليست ادعاءً ببصمة الكود الحالي:
+الـ APK الموثق في baseline السابق هو `android/app/build/outputs/apk/release/app-release.apk`، بحجم **55,596,707 بايت**، ومعرّف الحزمة `com.aistudio.opuspro.apk`، والإصدار السابق `0.10.1`، و`versionCode=5`. هذه البصمة ليست بصمة الكود الحالي بعد تعديل resumable upload؛ يجب توليد بصمة جديدة بعد build ناجح:
 
 ```text
-historical-baseline-artifact; regenerate after the current release build
+deceadddb138251acd6da62478f8b8913f7620c3f25140d2e3c108805c5faf5a
 ```
 
 تم توقيع artifact بمفتاح اختبار مؤقت خارج Git باستخدام APK Signature Scheme v2. هذا يكفي للتثبيت المباشر على جهاز Android، لكنه **ليس مفتاح النشر الإنتاجي أو مفتاح Play App Signing**. قبل النشر العام يجب تمرير `KEYSTORE_PATH` و`STORE_PASSWORD` و`KEY_PASSWORD` الخاصة بمالك المنتج إلى Gradle، وعدم مشاركة المفتاح المؤقت أو كلمات مروره.
@@ -33,11 +33,11 @@ export KEY_PASSWORD='***'
 
 | المجال | النتيجة | الدليل أو الملاحظة |
 |---|---|---|
-| Release build | غير مكتمل في هذه الجلسة | تم تثبيت JDK وSDK 36، ونجح Kotlin/unit-test compilation؛ محاولة `assembleRelease` تجاوزت 240 ثانية في dex/resource work ولم تُعتمد كنجاح نهائي. |
-| Unit tests | compilation ناجح؛ execution غير مثبت | `:app:compileDebugUnitTestKotlin` نجح. تنفيذ Robolectric الكامل تجاوز مهلة البيئة ويحتاج تشغيلًا منفصلًا مستقرًا. |
-| Android Lint | ناجح | `:app:lint` نجح. توجد تحذيرات deprecation غير حاجبة للبناء. |
-| APK signature | غير منفذ للكود الحالي | لا يوجد artifact release جديد معتمد في هذه الجلسة؛ يلزم build ثم `apksigner verify`. |
-| Package metadata | ثابت في المصدر | `com.aistudio.opuspro.apk`, version `0.11.0`, `versionCode=6` وفق `android/app/build.gradle.kts`. |
+| Release build | baseline سابق ناجح؛ إعادة البناء مطلوبة | `:app:assembleRelease` نجح سابقًا مع `compileSdk=36` و`targetSdk=36` و`minSdk=24`؛ لم يُعاد في هذه الجلسة بسبب غياب Android SDK. |
+| Unit tests | baseline سابق ناجح؛ إعادة التشغيل مطلوبة | `:app:testDebugUnitTest` نجح سابقًا؛ لم يُعاد بعد تعديل upload بسبب غياب Android SDK. |
+| Android Lint | baseline سابق ناجح؛ إعادة التشغيل مطلوبة | `:app:lint` نجح سابقًا؛ لم يُعاد بعد تعديل upload بسبب غياب Android SDK. |
+| APK signature | ناجح | `apksigner verify` أكد v2 مع signer واحد. |
+| Package metadata | baseline سابق | إعداد المصدر الحالي هو `com.aistudio.opuspro.apk`, version `0.11.0`, `versionCode=6`; يلزم build جديد لإثبات artifact. |
 | Forbidden runtimes | ناجح | فحص أرشيف APK لم يجد مسارات أو مكتبات Python/`uv`/Node/Rust/Cargo/FFmpeg runtime. |
 | Network access | ناجح static | `INTERNET` موجودة؛ عميل Processing Gateway يفرض HTTPS. `ACCESS_NETWORK_STATE` أضيفت من WorkManager merge. |
 | File picker | ناجح static | `PickVisualMedia(VideoOnly)` مع fallback للنظام؛ يتم نسخ URI إلى `filesDir/source_media`. هذا يوافق Photo Picker الذي يمنح وصولاً للوسائط المختارة فقط [2]. |
@@ -66,7 +66,7 @@ export KEY_PASSWORD='***'
 
 يجب ضبط عنوان Gateway ورمز الوصول من شاشة إعدادات Gateway داخل التطبيق. يجب أن يكون العنوان HTTPS كاملاً، ويجب ألا يوضع Gemini API key داخل APK أو داخل إعدادات العميل. في مسار معالجة الفيديو، يرسل Android الفيديو ورمز Gateway فقط؛ Gateway هو الذي يدير Python pipeline وFFmpeg ومفاتيح مزودي الذكاء الاصطناعي. تبقى بعض أدوات الذكاء الاختيارية في التطبيق مرتبطة بمفاتيح يضيفها المستخدم بنفسه، لكنها ليست محرك المعالجة ولا مفاتيح مضمّنة في APK.
 
-تدفق المعالجة هو: اختيار فيديو من Photo Picker، نسخ URI إلى مساحة التطبيق، إنشاء job في Room، جدولة `VideoProcessingWorker`، إنشاء upload session عبر `/v1/sources/uploads`، حساب SHA-256، إرسال chunks مع offset، إكمال الجلسة، إنشاء job بعيد، استطلاع الحالة، تنزيل MP4 إلى `filesDir/gateway_exports/<jobId>`، ثم استيراد المقاطع إلى Room. عند إغلاق التطبيق لا تُفقد المهمة المجدولة؛ وعند فشل شبكي يمكن إعادة رفع chunk من offset المثبت بدل إعادة الفيديو كاملًا، كما يمكن استئناف job البعيد عندما يكون checkpoint محفوظاً في Gateway.
+تدفق المعالجة هو: اختيار فيديو من Photo Picker، نسخ URI إلى مساحة التطبيق، إنشاء job في Room، جدولة `VideoProcessingWorker`، حساب SHA-256 وإنشاء جلسة upload عبر `/v1/sources/uploads`، إرسال chunks مع offset و`Content-Range` ثم إكمال الجلسة، إنشاء job بعيد، استطلاع الحالة، تنزيل MP4 إلى `filesDir/gateway_exports/<jobId>`، ثم استيراد المقاطع إلى Room. عند إغلاق التطبيق لا تُفقد المهمة المجدولة؛ وعند فشل شبكي تعيد WorkManager العملية، ويعيد Gateway session نفسها عبر `(bytes, sha256)` ليستأنف الرفع من offset المثبت، ثم يمكن استئناف job البعيد عندما يكون checkpoint محفوظاً في Gateway.
 
 ## التثبيت للمستخدم النهائي
 

@@ -38,13 +38,14 @@ class RemoteGatewayApiContractTest {
     @Test
     fun connectionChecksHealthCapabilitiesAndSession() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("{\"ok\":true,\"status\":\"ok\"}"))
-        server.enqueue(MockResponse().setResponseCode(200).setBody("{\"gateway\":true,\"pipeline\":true,\"ffmpeg\":true}"))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{\"gateway\":true,\"pipeline\":true,\"ffmpeg\":true,\"runtime_ready\":false}"))
         server.enqueue(MockResponse().setResponseCode(200).setBody("{\"authenticated\":true,\"product\":\"ISM\",\"api_version\":\"v1\"}"))
 
         val result = kotlinx.coroutines.runBlocking { client.checkConnection(config) }.getOrThrow()
 
         assertTrue(result.ok)
         assertTrue(result.authenticated)
+        assertEquals(false, result.runtimeReady)
         assertEquals(3, server.requestCount)
         assertEquals("Bearer test-session-token", server.takeRequest().getHeader("Authorization"))
     }
@@ -55,9 +56,9 @@ class RemoteGatewayApiContractTest {
         val downloaded = File.createTempFile("ism-result", ".mp4")
         val progress = mutableListOf<Int>()
         try {
-            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":0,\"chunk_bytes\":2048,\"expected_bytes\":4096}"))
-            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":2048,\"progress\":0.5}"))
-            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":4096,\"progress\":1.0}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":0,\"expected_bytes\":4096,\"chunk_bytes\":2048}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":2048,\"received_bytes\":2048}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_test\",\"status\":\"uploading\",\"offset\":4096,\"received_bytes\":4096}"))
             server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_test\",\"status\":\"done\",\"source\":\"${server.url("/v1/sources/jobs/upl_test/media/source.mp4")}\",\"filename\":\"source.mp4\",\"bytes\":4096}"))
             server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"proc_test\",\"job_id\":\"proc_test\",\"status\":\"queued\",\"state\":\"QUEUED\"}"))
             server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"proc_test\",\"job_id\":\"proc_test\",\"state\":\"RENDERING\",\"progress\":0.72,\"stage\":\"render\",\"message\":\"Rendering\"}"))
@@ -73,6 +74,7 @@ class RemoteGatewayApiContractTest {
             kotlinx.coroutines.runBlocking { client.downloadMedia(config, completed.clips.single().mediaUrl, downloaded) }.getOrThrow()
 
             assertEquals("upl_test", uploaded.id)
+            assertTrue(progress.contains(50))
             assertTrue(progress.contains(100))
             assertEquals("proc_test", created.id)
             assertEquals(GatewayJobState.RENDERING, running.state)
@@ -82,28 +84,57 @@ class RemoteGatewayApiContractTest {
             assertEquals(91, completed.clips.single().score)
             assertEquals("real-mp4-result", downloaded.readText())
 
-            val initRequest = server.takeRequest()
+            val init = server.takeRequest()
             val firstChunk = server.takeRequest()
             val secondChunk = server.takeRequest()
-            val completeRequest = server.takeRequest()
-            assertEquals("POST", initRequest.method)
-            assertTrue(initRequest.path!!.endsWith("/v1/sources/uploads"))
-            assertTrue(initRequest.body.readUtf8().contains("sha256"))
+            assertEquals("POST", init.method)
+            assertEquals("/v1/sources/uploads", init.path)
+            assertEquals("Bearer test-session-token", init.getHeader("Authorization"))
+            val initBody = init.body.readUtf8()
+            assertTrue(initBody.contains("\"bytes\":4096"))
+            assertTrue(initBody.contains("\"sha256\":"))
             assertEquals("PUT", firstChunk.method)
-            assertEquals("0", firstChunk.getHeader("X-Upload-Offset"))
             assertEquals("bytes 0-2047/4096", firstChunk.getHeader("Content-Range"))
+            assertEquals("0", firstChunk.getHeader("X-Upload-Offset"))
+            assertEquals(2048L, firstChunk.body.size)
             assertEquals("PUT", secondChunk.method)
-            assertEquals("2048", secondChunk.getHeader("X-Upload-Offset"))
             assertEquals("bytes 2048-4095/4096", secondChunk.getHeader("Content-Range"))
-            assertEquals("POST", completeRequest.method)
-            assertTrue(completeRequest.path!!.endsWith("/v1/sources/uploads/upl_test/complete"))
+            assertEquals("2048", secondChunk.getHeader("X-Upload-Offset"))
+            assertEquals(2048L, secondChunk.body.size)
             assertEquals("POST", server.takeRequest().method)
-            assertEquals("GET", server.takeRequest().method)
+            assertEquals("POST", server.takeRequest().method)
             assertEquals("GET", server.takeRequest().method)
             assertEquals("GET", server.takeRequest().method)
         } finally {
             source.delete()
             downloaded.delete()
+        }
+    }
+
+    @Test
+    fun uploadResumesFromPersistedGatewayOffset() {
+        val source = File.createTempFile("ism-resume", ".mp4").apply { writeBytes(ByteArray(4096) { 3 }) }
+        try {
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_resume\",\"status\":\"uploading\",\"offset\":2048,\"expected_bytes\":4096,\"chunk_bytes\":2048}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_resume\",\"status\":\"uploading\",\"offset\":4096,\"received_bytes\":4096}"))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"id\":\"upl_resume\",\"status\":\"done\",\"source\":\"${server.url("/v1/sources/jobs/upl_resume/media/source.mp4")}\",\"filename\":\"source.mp4\",\"bytes\":4096}"))
+
+            val uploaded = kotlinx.coroutines.runBlocking {
+                client.uploadVideo(config, Uri.fromFile(source)) {}
+            }.getOrThrow()
+
+            assertEquals("upl_resume", uploaded.id)
+            val init = server.takeRequest()
+            val resumedChunk = server.takeRequest()
+            assertEquals("POST", init.method)
+            assertEquals("/v1/sources/uploads", init.path)
+            assertEquals("PUT", resumedChunk.method)
+            assertEquals("bytes 2048-4095/4096", resumedChunk.getHeader("Content-Range"))
+            assertEquals("2048", resumedChunk.getHeader("X-Upload-Offset"))
+            assertEquals(2048L, resumedChunk.body.size)
+            assertEquals("POST", server.takeRequest().method)
+        } finally {
+            source.delete()
         }
     }
 }
