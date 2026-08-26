@@ -1,219 +1,87 @@
-# MANUS_HANDOFF
+# MANUS_HANDOFF — ISM Android Gateway Client
 
-**المشروع:** `publikclip` داخل المستودع `ISM-dragon/-1`  
-**تاريخ التسليم:** 2026-08-26  
-**نطاق هذه الجلسة:** متابعة انتقال عميل Android إلى APK شخصي يعتمد على Gateway خاص، دمج أحدث تغييرات `origin/main` حتى `d7d922e`، إصلاح أعطال CI والاختبارات، ورفع النتيجة النهائية حتى commit `fe71b18`، ومن دون إعادة كتابة الـPython pipeline أو حذفها.
+## الحالة
 
-## الخلاصة التنفيذية
+تم تنفيذ تطبيق Android أصلي حقيقي داخل `android/` باستخدام Kotlin وJetpack Compose. التطبيق موجه للاستخدام الشخصي، ويعتمد على **API contract فقط** عبر Gateway؛ لا يضمّن Python أو FFmpeg ولا يشغّل محرك المعالجة داخل Android.
 
-المستودع لا يبدأ من تطبيق فارغ. توجد فيه ثلاثة حدود تشغيلية قائمة: تطبيق سطح مكتب React/Tauri، تطبيق Android أصلي مستقل بـKotlin وJetpack Compose، وGateway بـFastAPI ينسق حالات الوظائف، ورفع الوسائط القابل للاستئناف، وطابور المعالجة، ثم يشغّل Python pipeline عبر subprocess وبروتوكول JSONL. لذلك كان القرار الأقل مخاطرة هو اعتماد تطبيق Android الأصلي كنقطة بناء الـAPK، وإبقاء Gateway هو محرك المعالجة خارج الهاتف، مع الحفاظ على pipeline الحالية كما هي.
+> المراجع المتاحة في المستودع هي `docs/API-CONTRACT.md` و`docs/CLIENT-RESPONSIBILITIES.md`. لم توجد نسختان سابقتان من `MANUS_HANDOFF.md` أو `BACKEND.md` داخل مساحة العمل عند بدء التنفيذ، لذلك يوثق هذا الملف الوضع الحالي اعتمادًا على عقد API وطبقة Gateway الموجودة.
 
-أصبح مسار المعالجة في Android صريحًا **Gateway-only**: لا تُقبل جدولة مهمة جديدة ما لم يتوفر عنوان Gateway صالح ورمز جلسة، ولا يعود `VideoProcessingWorker` إلى `ProductionVideoPipeline` المحلية. دُمجت كذلك أحدث تغييرات `origin/main` الخاصة بالمصادر البعيدة، ودورة حياة الوسائط القابلة للاستئناف، وعقد pipeline، وأصلحت أخطاء CI التي كانت تمنع التحقق من الفرع البعيد. بقي `ProductionVideoPipeline.kt` في شجرة المصدر ولم يُحذف؛ لكنه لم يعد route تشغيليًا للعامل. أضيف كذلك استئناف لمهمة Gateway المحفوظة، بحيث لا يعيد retry/resume رفع الفيديو أو إنشاء مهمة بعيدة جديدة، ويُستخدم معرف المهمة المحلي كمفتاح idempotency عند الإنشاء الأول.
+## المعمارية
 
-## المعمارية الحالية قبل التعديل
+| الطبقة | المسؤولية | الملفات الرئيسية |
+|---|---|---|
+| UI | عرض الشاشات، اختيار الفيديو، الحالة، التقدم، النتائج، المراجعة، الإعدادات | `android/app/src/main/java/com/example/ContractApp.kt` |
+| Contract client | HTTP/JSON، Bearer auth، health، upload، job creation، polling، control، artifact download | `android/app/src/main/java/com/example/data/contract/ApiContractClient.kt` و`ProcessingContract.kt` |
+| Durable orchestration | جدولة WorkManager، إعادة الاستعادة، منع التكرار، حفظ job IDs والحالة | `ContractJobRepository.kt` و`GatewayProcessingWorker.kt` |
+| Persistence | Room للحالة المحلية وSharedPreferences المشفرة لإعدادات Gateway والـ artifact manifest | `ProcessingJobEntity` و`ProcessingJobDao` و`ContractJobRepository` |
+| Backend | المصادقة، التحقق، queue، مراحل المعالجة، النتائج، retry/cancel/resume | Gateway API، وليس جزءًا من Android |
 
-| الحد | التنفيذ | المسؤولية | الملاحظة |
-|---|---|---|---|
-| Desktop Studio | `app/`، React + Tauri | واجهة سطح المكتب، وتشغيل Python محليًا عبر `uv` في desktop | يحتفظ بمساره المحلي ولم يُمسّ.
-| Tauri Android shell | `app/src-tauri/` | غلاف Android للواجهة الويب | يحتوي guard صريحًا يمنع تشغيل Python/`uv` داخل Android.
-| Native Android Studio | `android/`، Kotlin + Compose | اختيار الفيديو، WorkManager، Room، العرض والتنزيل المحلي | هذا هو العميل الأنسب للـAPK المستقل.
-| Processing Gateway | `gateway/main.py` | API، bearer token، SQLite، queue، حالات الوظائف، رفع/تنزيل الوسائط | يملك حدود الأمن وحالة المهمة ولا يفترض وجود Python على الهاتف.
-| Python pipeline | `pipeline/` | ingest، ASR، diarization، scoring، editing، rendering، artifacts | التنفيذ القائم يُستدعى من Gateway عبر JSONL، ويُعاد استخدامه كما هو.
+الواجهة لا تعرف أسماء مراحل Python أو ملفات pipeline الداخلية. تستخدم فقط `state`, `status`, `stage`, `fraction/progress`, `error_code`, `recoverable`, `artifacts`, `request_id`, و`correlation_id` كما يسمح بها العقد.
 
-التدفق السابق في Native Android كان هجينًا: `ProcessingEngine` يعيد `LOCAL_PIPELINE` عند غياب Gateway، ويعيد `REMOTE_GATEWAY` عند وجوده. بعد ذلك كان `VideoProcessingWorker` قادرًا على تشغيل `ProductionVideoPipeline` المحلية أو رفع المصدر إلى Gateway. أما Tauri Android فكان أصلًا يرفض تشغيل Python محليًا، وكانت واجهة React البعيدة أضيق من العميل الأصلي.
+## الشاشات المنفذة
 
-## المعمارية المستهدفة
-
-```text
-Android APK (Kotlin + Compose)
-    ├── Uri/File picker
-    ├── Room: local job/project/clip cache
-    ├── WorkManager: network-aware background execution
-    ├── ProcessingEngine: validates Gateway-only route
-    └── ProcessingGatewayClient
-            │ HTTPS + Authorization: Bearer gateway-session-token
-            ▼
-Private Processing Gateway (FastAPI)
-    ├── authenticated API and durable SQLite job state
-    ├── source upload boundary and media artifact validation
-    ├── persistent worker queue, retry, cancel, resume
-    └── subprocess JSONL bridge
-            ▼
-Existing Python pipeline + FFmpeg + WhisperX/AI models
-    └── rendered MP4 clips and checkpoint artifacts
-```
-
-الهاتف لا يحتاج Python أو `uv` أو WhisperX أو PyTorch أو FFmpeg. الهاتف يرفع ملف `content://` أو `file://` إلى Gateway، يستطلع حالة المهمة، ينزّل ملفات MP4 التي تحققت البوابة من وجودها، ثم يستوردها إلى Room. يحتفظ Gateway بمفتاح Gemini وأي أسرار مزودين على الخادم، ولا تُرسل هذه الأسرار في APK أو JSON المهمة.
-
-هذا ليس نظام SaaS متعدد المستخدمين. الرمز الموجود في هذا التصميم هو **رمز خدمة خاص بين APK وGateway** وليس تسجيل دخول مستخدمين أو بنية multi-user. يظل Gateway خاصًا، ويجب استخدام HTTPS خارج شبكة LAN موثوقة، مع `REQUIRE_GATEWAY_TOKEN=true` في النشر الشخصي.
-
-## الملفات المهمة
-
-| الملف | الدور الحالي |
+| الشاشة | السلوك |
 |---|---|
-| `android/app/src/main/java/com/example/data/engine/ProcessingEngine.kt` | حد القرار؛ يتحقق من المصدر المحلي ومن عنوان Gateway ورمزه، ويعيد route بعيدًا فقط.
-| `android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt` | WorkManager executor؛ يرفع/يستطلع/ينزّل ويستورد النتيجة، من دون تشغيل المحرك المحلي.
-| `android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt` | عقد HTTP للرفع، إنشاء الوظيفة، polling، cancel/retry/resume، وتنزيل artifacts.
-| `android/app/src/main/java/com/example/data/repository/OpusRepository.kt` | جدولة WorkManager، حفظ Room، استيراد نتائج Gateway، والتحكم في دورة حياة الوظائف.
-| `gateway/main.py` | API والـworker bridge؛ يشغّل أمر pipeline ويحوّل JSONL إلى حالات Gateway.
-| `gateway/processing_service.py` | إعداد بيئة subprocess وبناء أمر pipeline وعزل الأسرار.
-| `gateway/worker_queue.py` و`gateway/job_state.py` | صف العمل وحالات الوظائف والتحولات والاسترداد.
-| `pipeline/publikclip_pipeline/cli.py` | CLI وبروتوكول JSONL الذي يجب الحفاظ عليه.
-| `app/src-tauri/src/lib.rs` | مسار سطح المكتب المحلي وguard الخاص بـTauri Android؛ لم يُستخدم كمحرك APK الأصلي.
-| `android/app/build.gradle.kts` و`android/app/src/main/AndroidManifest.xml` | هوية وبناء وصلاحيات تطبيق Android.
-| `docs/API-CONTRACT.md` و`gateway/README.md` | عقد API ومتطلبات تشغيل Gateway.
+| Home | بدء استيراد، عرض المهام النشطة، فتح المهام المكتملة أو الفاشلة |
+| Import Video | `OpenDocument` لاختيار `video/*`، اسم المهمة، بدء آمن بعد الاختيار |
+| Processing | عرض المرحلة والتقدم القادم من API، بقاء الحالة بعد إغلاق التطبيق، إلغاء وإعادة محاولة حالات الانتظار |
+| Processing Error | عرض الرسالة الآمنة ورمز الخطأ/المرحلة، retry، resume من checkpoint، أو العودة للرئيسية |
+| Results | عرض artifact manifest، مراجعة المقطع، وتنزيل ملفات MP4 عند الطلب |
+| Clip Review | معاينة MP4 محليًا بعد التنزيل، قص بداية/نهاية للمعاينة، كتم الصوت، وحفظ إعدادات المعاينة محليًا |
+| Settings | حفظ Gateway URL وsession token في Android Keystore، واختبار `/health` |
 
-## المشاكل التي كشفها الفحص
+## دورة حياة المهمة
 
-أولًا، المشروع يضم مسارين Android مختلفين: Tauri Android وNative Android. Tauri Android يمنع Python محليًا عمدًا، بينما Native Android كان يحتوي fallback محليًا مستقلًا عن Python. هذا كان يترك المعمارية الهجينة غير متطابقة مع الهدف المعلن `Android APK = UI/client`.
+1. يختار المستخدم ملفًا محليًا، ويُحفظ job محلي في Room قبل أي طلب شبكة.
+2. يضع WorkManager مهمة فريدة باسم `ism_gateway_processing_<localJobId>` مع `NetworkType.CONNECTED` و`KEEP`.
+3. يرفع العامل الفيديو إلى `POST /v1/sources/upload`، ثم ينشئ job عبر `POST /v1/processing/jobs` مع `idempotency_key` ثابت مبني على job المحلي.
+4. يحفظ `remoteGatewayJobId` فورًا، ثم يستعلم عن `GET /v1/processing/jobs/{id}` ويعرض النسبة الواردة من Gateway دون تصنيع تقدم محلي.
+5. عند `COMPLETED` يحفظ manifest النتائج؛ لا تُنزّل الملفات إلا بطلب المستخدم من Results أو Clip Review.
+6. عند `FAILED` تظهر شاشة خطأ، ويُسمح بـ retry إذا كانت المهمة قابلة للاستعادة، وبـ resume عندما يعيد العقد المهمة من checkpoint.
+7. عند الإلغاء يُستدعى control route البعيد إن وُجد job ID، ثم يُلغى WorkManager وتُحفظ الحالة المحلية.
+8. عند انقطاع الشبكة أو timeout يعيد WorkManager المحاولة ضمن حد محدود، وتظهر حالة `WAITING_FOR_NETWORK`. عند restart يعيد التطبيق جدولة المهام المحلية غير النهائية، بما في ذلك المهمة التي اكتملت أثناء غياب التطبيق.
 
-ثانيًا، كان غياب Gateway يؤدي إلى اختيار `LOCAL_PIPELINE` بدل فشل مبكر. وبعد دمج upstream، تم الحفاظ على دعم مصادر HTTP/HTTPS التي يقرأها Gateway، إلى جانب ملفات `content://` و`file://` التي يرفعها العميل.
+## عقد API المستخدم
 
-ثالثًا، كانت النتيجة العملية هي إمكانية إنشاء WorkManager job ينجح فقط إذا كانت الاعتماديات المحلية متاحة، وهو عكس قرار الاعتماد على محرك خاص خارجي. عولج ذلك الآن في `ProcessingEngine` وداخل `OpusRepository.enqueueVideoProcessing`.
-
-رابعًا، كانت إعادة المحاولة أو الاستئناف في العامل تعيد تنفيذ `process(...)` مع رفع الملف وإنشاء job جديد؛ وكان Gateway يدعم idempotency في عقده، لكن العميل لم يثبت المفتاح على دورة المهمة المحلية، كما أن مسار repository لم يكن يستدعي control endpoint البعيد قبل إعادة الجدولة. عولج ذلك باستخدام `jobId` المحلي كمفتاح idempotency، وتمرير `remoteGatewayJobId` الموجود لاستئناف polling دون إعادة الرفع، واستدعاء `/retry` أو `/resume` على Gateway قبل إعادة WorkManager.
-
-خامسًا، أظهر أول build فعلي بعد توفير SDK وJDK خطأ ترجمة موجودًا في `OpusBottomNav.kt`: `NavigationBarItem` هو امتداد لـ`RowScope` في نسخة Material3 المستخدمة، بينما كان helper خارج هذا الـscope. أُصلح ذلك بتحويل `PrimaryItem` إلى `RowScope.PrimaryItem` دون تغيير السلوك المرئي.
-
-سادسًا، أظهر Quality Gate على GitHub أن Workflow الاختبارات لم يثبت `gateway/requirements.txt`، ففشل collection أولًا بسبب `ModuleNotFoundError: fastapi` ثم كشف التشغيل التالي غياب `httpx` الذي يستورده `ProviderRouter`. كما كان اختبار `uploaded_source_path` لا يهيئ جدول `media_uploads` ولا يسجل upload مكتملًا بعد إضافة التحقق من الحجم وSHA-256. وأظهر التشغيل التالي أن اختبار الوسائط الفاسدة يعتمد ضمنيًا على وجود FFprobe في runner؛ عُزل ذلك الاختبار باستخدام mock يعيد probe فاشلًا، مع إبقاء اختبار جاهزية FFprobe منفصلًا. بعد تجاوز هذه النقاط وصل CI إلى اختبار render وكشف غياب `ffmpeg` من runner؛ أضيف تثبيت FFmpeg صراحةً إلى Workflow. ثم كشف Windows CI أن اختبار ASR يعتمد على توفر WhisperX وسلوك runtime الحقيقي، فتم حقن runtime وهمي يفشل عند تحميل النموذج، مع إبقاء تصنيف `ASR_MODEL_UNAVAILABLE` ورسالة الخطأ الحالية. عولجت المشاكل في Workflow والاختبارات نفسها، من دون تخفيف فحوص الأمان.
-
-## القرارات التقنية
-
-| القرار | السبب |
+| العملية | المسار |
 |---|---|
-| اعتماد `android/` كتطبيق APK الأصلي | هو تطبيق Android مستقل بالفعل ويملك Compose وRoom وWorkManager وتدفق رفع/تنزيل مكتملًا؛ لا حاجة لنسخ `app/src` أو إعادة بناء UI من الصفر.
-| جعل Android Gateway-only | يمنع الاعتماد الخفي على Python/AI/FFmpeg محليًا ويطابق حدود العميل/المحرك المطلوبة.
-| إبقاء `ProductionVideoPipeline.kt` دون حذف | يحافظ على functionality موجودة ويجعل العزل قابلًا للعكس، مع منع العامل الحالي من اختياره.
-| الإبقاء على Room وWorkManager | يوفران cache محليًا واستمرارًا في الخلفية وإعادة محاولة وإشعارات دون إعادة تصميم.
-| استخدام token خاص بدل user authentication | يحقق خصوصية Gateway الشخصي من دون إدخال multi-user architecture أو حسابات مستخدمين.
-| استخدام `jobId` المحلي كمفتاح idempotency | يمنع إنشاء Gateway jobs مكررة عند إعادة التنفيذ لنفس المهمة المحلية.
-| عدم إرسال Gemini key إلى الهاتف | الأسرار تبقى على Gateway، وهو الحد الأمني المناسب للمحرك الخاص.
-| تثبيت متطلبات Gateway في Quality Gate | يجعل CI يختبر البيئة المعلنة فعليًا بدل الاعتماد على packages موجودة صدفة على runner.
-| اختبار upload المكتمل بقاعدة مؤقتة | يحافظ على فحص الحجم وSHA-256 وstatus بدل تحويل الاختبار إلى stub غير ممثل للإنتاج.
-
-## التعديلات التي تمت
-
-| الملف | التعديل |
-|---|---|
-| `android/app/src/main/java/com/example/data/engine/ProcessingEngine.kt` | إزالة route المحلي من enum؛ اشتراط Gateway URL وtoken؛ استخدام `java.net.URI` القابل للاختبار في JVM؛ الإبقاء على المصدر المحلي كمدخل للرفع فقط.
-| `android/app/src/main/java/com/example/data/repository/OpusRepository.kt` | إضافة فحص `ProcessingEngine` قبل نسخ المصدر أو إنشاء Room/WorkManager job.
-| `android/app/src/main/java/com/example/data/worker/VideoProcessingWorker.kt` | عزل وإزالة فرع `ProductionVideoPipeline` من العامل؛ تمرير `remoteGatewayJobId` و`jobId` إلى عميل Gateway؛ الإبقاء على دورة cancel/retry/error الحالية.
-| `android/app/src/main/java/com/example/data/remote/ProcessingGatewayClient.kt` | دعم `existingGatewayJobId` و`idempotencyKey`؛ إعادة الرفع والإنشاء فقط عند عدم وجود remote job محفوظ.
-| `android/app/src/main/java/com/example/data/repository/OpusRepository.kt` | استدعاء Gateway `/retry` و`/resume` فعليًا قبل إعادة جدولة المهمة المحلية.
-| `android/app/src/test/java/com/example/ProcessingEngineTest.kt` | استبدال اختبار fallback المحلي باختبارات فشل مبكر للعنوان والرمز، مع تغطية route البعيد والمصدر والعنوان غير الصالح.
-| `android/app/src/main/java/com/example/ui/components/OpusBottomNav.kt` | إصلاح receiver الخاص بـ`NavigationBarItem` حتى تترجم واجهة Android.
-| `android/README.md` و`ANDROID.md` | توثيق تدفق APK الشخصي Gateway-only، ومكان Python/FFmpeg/WhisperX خارج الهاتف.
-| `.github/workflows/quality-gate.yml` | تثبيت `gateway/requirements.txt` و`httpx` قبل اختبارات Python، وتثبيت FFmpeg قبل اختبار render.
-| `gateway/test_processing_bridge.py` | تهيئة SQLite المؤقتة وإضافة upload مكتمل مطابق للحجم وSHA-256.
-| `gateway/tests/test_gateway_safety.py` | جعل اختبار الوسائط الفاسدة deterministic عبر mock لـFFprobe مع الحفاظ على عقد 422.
-| `pipeline/tests/test_asr_errors.py` | جعل اختبار فشل runtime الخاص بـASR deterministic عبر fake `torch` و`whisperx`، والتحقق من عقد `ASR_MODEL_UNAVAILABLE`.
-| `MANUS_HANDOFF.md` | هذه الوثيقة.
-
-لم تُعدّل Python pipeline أو Gateway API في هذه الجلسة لأن الحد الفاصل القائم، بعد دمج تحسينات `origin/main`، كان كافيًا لإعادة الاستخدام. أُصلح اختبار Gateway وWorkflow التحقق فقط. لم تُحذف الوظائف الاجتماعية أو التحليلية أو إعدادات المزودين، لأنها ليست blocker لمسار معالجة الفيديو الشخصي.
-
-## التعديلات التي لم تتم
-
-لم يتم بعد تغيير `applicationId` أو `namespace` من القيم الحالية (`com.aistudio.opuspro.apk` و`com.example`). هذا يحتاج قرار هوية نهائيًا ومراجعة migration، ولا ينبغي تنفيذه عشوائيًا لأنه قد يؤثر على التثبيت والتوقيع والتوافق.
-
-لم يتم إنشاء release signing key أو توقيع production APK. الموجود حاليًا هو مسار debug، وملف signing يعتمد على متغيرات بيئية وkeystore غير متعقب. كما أن assembleDebug الكامل لم يصل إلى إنشاء artifact بسبب ضغط الذاكرة، رغم نجاح الترجمة واختبار الوحدة المستهدف في الجولة السابقة.
-
-لم يتم نشر Gateway أو ربطه بجهاز دائم أو GPU أو بيئة تملك dependencies الفعلية. لم يتم تنفيذ معالجة MP4 حقيقية من الهاتف، لأن ذلك يتطلب عنوان Gateway قابلًا للوصول، token، FFmpeg، Python/pipeline dependencies، اعتماد Gemini صالحًا عند استخدام Gemini، ومصدر فيديو اختباريًا يملكه المستخدم.
-
-لم يتم حذف الاعتماديات المحلية الخاصة بمسار Android القديم من `build.gradle.kts`، لأن ذلك سيكون تقليصًا أوسع من المطلوب وقد يكسر شاشات أو وظائف أخرى. العزل الحالي تشغيلي، والخطوة التالية يمكن أن تكون dependency audit ثم إزالة آمنة مع اختبارات.
-
-لم يتم بناء Tauri APK؛ الهدف المعتمد لهذه الجلسة هو Native Android الموجود في `android/`. يبقى Tauri desktop محفوظًا لمسار سطح المكتب، وTauri Android يحتاج قرارًا منفصلًا إذا أريد أن يصبح هو العميل الوحيد.
+| الاتصال | `GET /health` |
+| الرفع | `POST /v1/sources/upload` |
+| إنشاء job | `POST /v1/processing/jobs` |
+| polling | `GET /v1/processing/jobs/{id}` |
+| الإلغاء | `POST /v1/processing/jobs/{id}/cancel` |
+| retry | `POST /v1/processing/jobs/{id}/retry` |
+| resume | `POST /v1/processing/jobs/{id}/resume` |
+| تنزيل النتيجة | `GET` على رابط artifact الذي يعيده Gateway |
 
 ## الاختبارات والتحقق
 
-| الفحص | النتيجة |
+| الاختبار | الأمر/النتيجة |
 |---|---|
-| `git diff --check` | نجح.
-| `./gradlew :app:lint` | لم يكتمل محليًا بسبب ضغط ذاكرة مرتفع في sandbox؛ لا توجد نتيجة lint نهائية محلية.
-| `./gradlew :app:assembleDebug` | لم يكتمل محليًا بسبب ضغط الذاكرة عند مراحل dex؛ لا يوجد APK محلي نهائي من هذه الجلسة.
-| `python3 -m pytest gateway -q` | نجح: `40 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
-| `python3 -m pytest -q` | نجح: `157 passed, 1 skipped` مع 4 تحذيرات deprecation من FastAPI.
-| `python3 -m pytest pipeline/tests/test_asr_errors.py -q` | نجح: `1 passed` بعد جعل runtime deterministic.
-| `python3 -m compileall -q gateway pipeline/publikclip_pipeline` | نجح.
-| اختبار Android المستهدف بعد rebase | نجح: `:app:testDebugUnitTest --tests com.example.ProcessingEngineTest`؛ ترجمة Kotlin وKSP وJava و6 حالات ProcessingEngine مرّت.
-| `./gradlew :app:testDebugUnitTest` الكامل | بقي عالقًا محليًا في Test Executor ولم يُعتمد كنجاح؛ يلزم تأكيده عبر CI.
-| `git diff --check` | نجح بعد كل التعديلات الحالية.
-| حالة Git النهائية | `main` نظيف ومتطابق مع `origin/main` بعد آخر commit مرفوع.
-| Quality Gate على GitHub قبل الإصلاح | فشل بسبب FastAPI ثم `httpx` ثم اعتماد اختبار safety على FFprobe ثم غياب FFmpeg لاختبار render؛ تم إصلاح Workflow والاختبارات، ونجح التشغيل `32951488814` للcommit `fe71b18`.
-| Windows CI على `57aca4c` | فشل اختبار ASR لأن runtime الحقيقي صنّف فشل تحميل/تشغيل النموذج كـ`ASR_FAILED`؛ تم عزل الاختبار بحقن runtime فاشل عند `load_model`.
-| Windows CI على `fe71b18` | نجح التشغيل `32951488733`: اختبارات pipeline، بناء NSIS، التثبيت الصامت، ورفع artifact مرّت.
+| Kotlin compilation | `./gradlew :app:compileDebugKotlin` — ناجح |
+| API contract tests | `./gradlew :app:testDebugUnitTest --tests com.example.ApiContractClientTest --tests com.example.ProcessingEngineTest` — ناجح، 7 اختبارات |
+| APK build | `./gradlew :app:assembleDebug` — ناجح |
+| Lint | `./gradlew :app:lint` — ناجح مع تحذيرات deprecated موجودة في أجزاء قديمة غير مستخدمة من الغلاف الجديد |
+| HTTP mock coverage | يغطي health، create job، polling/progress، cancel، artifact download، وJSON manifest parsing |
+| Gateway E2E | السكربت الاختياري `scripts/test_android_gateway_contract.sh` يتطلب `GATEWAY_URL`, `GATEWAY_TOKEN`, و`VIDEO_FILE` ويختبر health/upload/create/poll/results ضد Gateway حقيقي |
 
-## الافتراضات
-
-يفترض هذا التسليم أن المستخدم يريد APK Native Android شخصيًا وليس إعادة استخدام Tauri Android كغلاف. ويفترض أن Gateway سيعمل على جهاز خاص أو خادم خاص يملك موارد المعالجة، وأن تخزين الفيديو مؤقت ويمكن رفعه إلى ذلك الجهاز. ويفترض أن رمز Gateway ليس user login بل secret خدمة واحد، وأن عدم وجود authentication متعدد المستخدمين قرار مقصود.
-
-يفترض أيضًا أن عقد Gateway الحالي `/v1/sources/upload` و`/v1/processing/jobs` و`GET /v1/processing/jobs/{id}` وmedia download هو العقد الذي سيبقى ثابتًا في الجلسة التالية. إذا تغيرت أسماء الحقول أو حالات الوظائف في Gateway فيجب تحديث العميل واختبار العقد معًا.
-
-## Blockers الحالية
-
-الـblocker الأول تشغيلي: لا يوجد Gateway منشور وقابل للوصول من الجهاز، لذلك لم تُنفذ رحلة `upload → process → download → import` الحقيقية. يلزم تجهيز `GATEWAY_TOKEN` و`REQUIRE_GATEWAY_TOKEN=true` و`PUBLIC_BASE_URL` و`ISM_PROCESSING_ROOT` و`ISM_PIPELINE_DIR` وFFmpeg واعتماديات pipeline ومفتاح Gemini على الخادم فقط.
-
-الـblocker الثاني متعلق بالـrelease: لا توجد هوية package نهائية أو signing configuration شخصية مؤكدة. لا ينبغي توزيع APK release قبل حسم ذلك.
-
-الـblocker الثالث متعلق بالتحقق المحلي: اختبار Android الكامل بقي عالقًا في Test Executor، وLint وassembleDebug لم يُستكملا في sandbox بسبب الموارد؛ لذلك يجب اعتماد CI لتأكيد البناء الكامل. اختبارات Python الكاملة أصبحت تمر، مع بقاء اختبار الوسائط الكبير skipped عمدًا.
-
-## Next steps للجلسة التالية
-
-1. تم رفع إصلاح ASR إلى GitHub؛ نجح Quality Gate `32951488814` وWindows CI `32951488733` على `fe71b18`.
-2. تجهيز Gateway على جهاز خاص أو خدمة دائمة، وضبط البيئة من دون وضع أي secret في Git أو APK، ثم تمرير اختبار `/health` و`/v1/processing/capabilities` وdiagnostic pipeline/Gemini.
-3. تشغيل Native Android على جهاز أو emulator، اختبار اختيار فيديو محلي، الرفع، polling، تنزيل MP4، الاستيراد إلى Room، cancel، retry، وresume على نفس `remoteGatewayJobId`.
-4. إكمال `assembleDebug` و`lint` في CI أو بيئة ذات ذاكرة كافية، وحفظ APK الناتج كartifact؛ ثم تشغيل اختبار instrumentation الأساسي على جهاز فعلي إن توفر.
-5. تثبيت عقد idempotency والاستئناف باختبارات عميل/خادم، خصوصًا حالات انقطاع الشبكة بعد الرفع وقبل حفظ remote job.
-6. تنفيذ dependency audit لمسار Android القديم: إزالة ما لا يلزم فقط بعد إثبات أن `ProductionVideoPipeline` غير مستورد في المسار المنتج وبعد مرور tests/build.
-7. حسم package identity وrelease signing واسم التطبيق النهائي، ثم إنشاء مسار release APK منفصل عن debug.
-8. بعد نجاح رحلة MP4 الحقيقية، تحديث هذه الوثيقة بحالة التشغيل الفعلية، artifact path، نتائج الاختبارات، وأي أخطاء متبقية.
-
-## References داخل المستودع
-
-- `docs/MASTER-ARCHITECTURE.md`
-- `docs/API-CONTRACT.md`
-- `docs/android/ANDROID_PROCESSING_AUDIT.md`
-- `gateway/README.md`
-- `ANDROID.md`
-- `android/README.md`
-
-
-## Private Backend Android — إضافة 2026-08-26
-
-تمت إضافة واجهة FastAPI شخصية لتطبيق Android فوق Gateway الحالي، من دون إنشاء backend ثانٍ أو إضافة accounts أو billing أو public authentication أو multi-user infrastructure. المسار المنفذ هو:
+تم إنشاء Debug APK في:
 
 ```text
-Android → /jobs/* → SQLite + PersistentWorkerQueue → publikclip checkpoints → output
+android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-المسارات الجديدة هي `POST /jobs` لرفع فيديو multipart وإنشاء job، و`GET /jobs/{job_id}` لعرض `current_stage` و`progress` و`status` و`errors`، و`POST /jobs/{job_id}/cancel` و`POST /jobs/{job_id}/resume` للتحكم، و`GET /jobs/{job_id}/results` للنتائج، و`GET /jobs/{job_id}/clips/{clip_id}` لتفاصيل المقطع، و`POST /jobs/{job_id}/clips/{clip_id}/render` لإعادة الرندر. هذه aliases فوق نفس صفوف SQLite والـ checkpoints المستخدمة في `/v1/processing/*`.
+## تشغيل E2E ضد Gateway حقيقي
 
-يدعم الرفع امتدادات MP4 وMOV وMKV وWebM، ويُنفّذ streaming بقطع 1 MiB مع حد افتراضي 2 GiB قابل للضبط عبر `ISM_MAX_UPLOAD_BYTES`. أضيفت `python-multipart==0.0.20` إلى `gateway/requirements.txt`. تشمل الحماية bearer token عند تفعيل `REQUIRE_GATEWAY_TOKEN=true`، containment checks للمسارات، إزالة الملفات الجزئية عند الفشل، والتحقق من artifacts قبل عرضها. لا تُعاد مسارات النظام أو traceback أو أسرار المحرك إلى Android.
+```bash
+GATEWAY_URL="https://gateway.example" \
+GATEWAY_TOKEN="<session-token>" \
+VIDEO_FILE="/absolute/path/video.mp4" \
+./scripts/test_android_gateway_contract.sh
+```
 
-أُضيفت اختبارات `gateway/tests/test_private_backend.py` للـ HTTP upload والمصادقة والحدود وpersistence والتقدم والأخطاء وpath escape. اختبار `PYTHONPATH=. pytest -q gateway` مرّ بنتيجة `42 passed`، واختبارات pipeline عبر `uv run --project pipeline --offline pytest -q pipeline/tests` مرّت بنتيجة `91 passed`.
+لا تُضع session tokens أو مفاتيح مزودي الذكاء الاصطناعي في المستودع أو داخل APK. يتطلب الاختبار الفعلي Gateway صالحًا وبيانات اعتماد يحددها مالك البيئة.
 
-يوجد اختبار E2E قابل للإعادة في `scripts/e2e_private_backend.sh`. أنشأ الاختبار MP4 حقيقياً عبر FFmpeg مع video وaudio، ومرّر الملف عبر Uvicorn و`POST /jobs` والـ worker ومحرك publikclip حتى ASR. انتهى الاختبار بحالة `FAILED` آمنة مع `PIPELINE_STAGE_FAILED` لأن الصوت الاصطناعي نغمة بلا كلام؛ لم يُدّعَ نجاح كامل للرندر. يتطلب النجاح الكامل فيديو كلامياً واعتماديات ASR/LLM والنماذج اللازمة.
+## ملاحظات التسليم
 
-المرجع التفصيلي هو [`docs/BACKEND.md`](docs/BACKEND.md). كان `ENGINE_ARCHITECTURE.md` غير موجود في الفرع عند التنفيذ، لذلك استُخدم `docs/MASTER-ARCHITECTURE.md` بوصفه المرجع المعماري الموجود.
-
-
-## Android UI refresh — 2026-08-26
-
-تم تحسين تجربة Android UI حول المسار التالي:
-
-> **Home → اختيار فيديو → Generate → Processing progress → أفضل المقاطع → Preview → اختيار clip → Edit → Export**
-
-التغيير محصور في طبقة العرض والتنقل داخل `android/app/src/main/java/com/example/ui`. لم تُعدّل طبقات `data` أو `domain` أو `gateway` أو `pipeline` في هذا التغيير، ولم تتغير استدعاءات engine أو AI.
-
-| المنطقة | ما تغير |
-|---|---|
-| Home | واجهة بداية مختصرة تركز على رابط الفيديو أو اختيار ملف محلي، مع زر Generate ومشاريع أخيرة بسيطة. أزيلت بطاقات dashboard/developer والنشر التلقائي من المسار الأساسي. |
-| اختيار الفيديو | معاينة thumbnail فعلية، قراءة metadata، تحقق من الحجم والمدة والأبعاد، ورسالة واضحة قبل Generate. |
-| Processing | عرض حالات loading وprocessing وcompleted وerror باستخدام `ProcessingStep` و`ProcessingJobEntity` الفعليين. |
-| Studio | ترتيب النتائج إلى أفضل المقاطع، score، preview، transcript، captions، crop، ثم render/export. |
-| Captions/Crop | تبويبان واضحان للكابشن والقص، مع حفظ التخطيط عبر `repository.updateLayoutType`. |
-| Export | نافذة تصيير مختصرة تعرض progress الفعلي وتظهر completed أو error داخل الواجهة. |
-| Navigation | حصر شريط الهاتف في الرئيسية والاستوديو والمكتبة؛ تبقى الشاشات الإدارية خارج المسار الأساسي. |
-
-تمت إضافة حالات `empty` و`offline` و`error` إلى Home واختيار الفيديو والاستوديو، مع إزالة أي فيديو تجريبي أو نسب تقدم مصطنعة. المعاينة الحقيقية تعتمد على `clip.exportPath` الناتج من مسار المعالجة.
-
-التحقق المحلي: نجح `git diff --check` والفحص الساكن للواجهة، ولم تُعدّل ملفات backend أو AI ضمن commit الواجهة. تعذر تشغيل Gradle محلياً في بيئة التنفيذ الحالية لعدم وجود Android SDK أو `ANDROID_HOME` صالح؛ يجب الاعتماد على Android CI أو بيئة تحتوي SDK لإكمال `:app:testDebugUnitTest` و`:app:lint`.
+تظل ملفات المنتج القديم داخل المستودع لأسباب التوافق، لكن `MainActivity` لم يعد يربطها بالمسار التشغيلي. كما أصبح `VideoProcessingWorker` غلاف توافق يشير إلى `GatewayProcessingWorker` فقط، وأزيل قرار `LOCAL_PIPELINE` من `ProcessingEngine` حتى لا توجد نقطة تشغيل محلية لمحرك المعالجة داخل Android.
