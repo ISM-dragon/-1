@@ -257,6 +257,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key);
             CREATE TABLE IF NOT EXISTS processing_jobs (
                 id TEXT PRIMARY KEY,
+                project_id TEXT,
                 pipeline_job_id TEXT,
                 source TEXT NOT NULL,
                 llm TEXT NOT NULL DEFAULT 'gemini',
@@ -293,6 +294,16 @@ def init_db() -> None:
                 FOREIGN KEY(job_id) REFERENCES processing_jobs(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_processing_transitions_job ON processing_job_transitions(job_id, id);
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                source TEXT,
+                status TEXT NOT NULL DEFAULT 'created',
+                active_job_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at);
             CREATE TABLE IF NOT EXISTS source_jobs (
                 id TEXT PRIMARY KEY,
                 source TEXT NOT NULL,
@@ -341,6 +352,7 @@ def init_db() -> None:
             """
         )
         migrations = [
+            ("processing_jobs", "project_id", "TEXT"),
             ("accounts", "daily_limit", "INTEGER NOT NULL DEFAULT 10"),
             ("accounts", "min_gap_seconds", "INTEGER NOT NULL DEFAULT 60"),
             ("accounts", "last_publish_at", "TEXT"),
@@ -430,6 +442,22 @@ class AIProviderUpdatePayload(BaseModel):
     api_key: str | None = Field(default=None, min_length=1, max_length=500)
 
 
+class ProjectCreatePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    source: HttpUrl | None = None
+
+
+class ProjectPatchPayload(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    source: HttpUrl | None = None
+
+
+class ProjectProcessPayload(BaseModel):
+    source: HttpUrl | None = None
+    llm: str = Field(default="gemini", pattern=r"^(gemini|ollama)$")
+    captions: str = Field(default="classic", min_length=1, max_length=40)
+
+
 class AIProviderPayload(BaseModel):
     id: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
     name: str = Field(min_length=1, max_length=160)
@@ -440,6 +468,8 @@ class AIProviderPayload(BaseModel):
     fallback_model: str = ""
     enabled: bool = True
     capabilities: dict[str, bool] = Field(default_factory=dict)
+    input_cost_per_million: float = Field(default=0.0, ge=0.0)
+    output_cost_per_million: float = Field(default=0.0, ge=0.0)
 
 
 class PersonalEventPayload(BaseModel):
@@ -667,11 +697,12 @@ def public_provider_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "name": profile.get("name", ""),
         "type": profile.get("type", ""),
         "base_url": profile.get("base_url", ""),
-        "credential_ref": profile.get("credential_ref", ""),
         "default_model": profile.get("default_model", ""),
         "fallback_model": profile.get("fallback_model", ""),
         "enabled": bool(profile.get("enabled", True)),
         "capabilities": profile.get("capabilities", {}),
+        "input_cost_per_million": float(profile.get("input_cost_per_million", 0.0) or 0.0),
+        "output_cost_per_million": float(profile.get("output_cost_per_million", 0.0) or 0.0),
         "credential_configured": bool(profile.get("credential_ref")),
     }
 
@@ -686,6 +717,15 @@ def processing_dict(row: sqlite3.Row) -> dict[str, Any]:
     return result
 
 
+def project_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return dict(row)
+
+
+def get_project_row(project_id: str) -> sqlite3.Row | None:
+    with closing(db()) as connection:
+        return connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+
+
 def update_processing_job(job_id: str, **values: Any) -> None:
     if not values:
         return
@@ -694,6 +734,23 @@ def update_processing_job(job_id: str, **values: Any) -> None:
     parameters = list(values.values()) + [job_id]
     with closing(db()) as connection:
         connection.execute(f"UPDATE processing_jobs SET {assignments} WHERE id=?", parameters)
+        if "status" in values:
+            job = connection.execute("SELECT project_id FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+            project_id = job["project_id"] if job else None
+            if project_id:
+                project_status = {
+                    "queued": "queued",
+                    "running": "processing",
+                    "done": "completed",
+                    "failed": "failed",
+                    "cancelled": "cancelled",
+                }.get(str(values["status"]))
+                if project_status:
+                    terminal = project_status in {"completed", "failed", "cancelled"}
+                    connection.execute(
+                        "UPDATE projects SET status=?, active_job_id=?, updated_at=? WHERE id=?",
+                        (project_status, None if terminal else job_id, values["updated_at"], project_id),
+                    )
         connection.commit()
 
 
@@ -1274,7 +1331,7 @@ async def auth_session(request: Request) -> dict[str, Any]:
         "product": "ISM",
         "api_version": "v1",
         "gateway_version": app.version,
-        "request_id": getattr(request.state, "request_id", None),
+        "request_id": getattr(getattr(request, "state", None), "request_id", None),
     }
 
 
@@ -1337,6 +1394,45 @@ async def save_ai_provider(payload: AIProviderPayload) -> dict[str, Any]:
     return {"provider": public_provider_profile(item), "status": "saved"}
 
 
+@app.get("/v1/ai/usage", dependencies=[Depends(auth)])
+async def ai_usage_summary(days: int = 30) -> dict[str, Any]:
+    days = max(1, min(days, 3650))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    usage_path = PROCESSING_ROOT / "ai_usage.jsonl"
+    events: list[dict[str, Any]] = []
+    if usage_path.exists():
+        try:
+            for line in usage_path.read_text(encoding="utf-8").splitlines()[-10000:]:
+                try:
+                    item = json.loads(line)
+                    timestamp = float(item.get("timestamp", 0))
+                    if datetime.fromtimestamp(timestamp, timezone.utc) >= cutoff:
+                        events.append(item)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    continue
+        except OSError:
+            events = []
+    aggregates: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in events:
+        key = (str(event.get("provider", "unknown")), str(event.get("model", "unknown")))
+        row = aggregates.setdefault(key, {"provider": key[0], "model": key[1], "requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "estimated_requests": 0, "latency_ms_total": 0, "cost_usd": 0.0})
+        input_tokens = int(event.get("input_tokens", 0) or 0)
+        output_tokens = int(event.get("output_tokens", 0) or 0)
+        row["requests"] += 1
+        row["input_tokens"] += input_tokens
+        row["output_tokens"] += output_tokens
+        row["total_tokens"] += int(event.get("total_tokens", input_tokens + output_tokens) or 0)
+        row["estimated_requests"] += 1 if event.get("usage_source") != "actual" else 0
+        row["latency_ms_total"] += int(event.get("latency_ms", 0) or 0)
+        row["cost_usd"] += (input_tokens / 1_000_000) * float(event.get("input_cost_per_million", 0) or 0) + (output_tokens / 1_000_000) * float(event.get("output_cost_per_million", 0) or 0)
+    rows = []
+    for row in aggregates.values():
+        row["average_latency_ms"] = round(row["latency_ms_total"] / row["requests"], 2) if row["requests"] else 0
+        row.pop("latency_ms_total", None)
+        rows.append(row)
+    return {"days": days, "from": cutoff.isoformat(), "to": now_iso(), "events": len(events), "aggregates": sorted(rows, key=lambda item: (item["provider"], item["model"]))}
+
+
 @app.delete("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
 async def delete_ai_provider(provider_id: str) -> dict[str, Any]:
     profiles = read_provider_profiles()
@@ -1380,6 +1476,121 @@ async def find_better(payload: FindBetterPayload) -> dict[str, Any]:
     from .personal_taste import better_recommendations, load_state
     state = load_state(personal_state_path())
     return {"results": better_recommendations(state["profile"], payload.selected, payload.candidates, payload.threshold), "threshold": payload.threshold}
+
+
+@app.get("/api/v1/health")
+async def api_health() -> dict[str, Any]:
+    return await health()
+
+
+@app.get("/api/v1/projects", dependencies=[Depends(auth)])
+async def list_projects() -> list[dict[str, Any]]:
+    with closing(db()) as connection:
+        rows = connection.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+    return [project_dict(row) for row in rows]
+
+
+@app.post("/api/v1/projects", dependencies=[Depends(auth)])
+async def create_project(payload: ProjectCreatePayload) -> dict[str, Any]:
+    source = validate_public_source(str(payload.source)) if payload.source else None
+    project_id = f"proj_{secrets.token_urlsafe(10)}"
+    timestamp = now_iso()
+    with closing(db()) as connection:
+        connection.execute(
+            "INSERT INTO projects (id, name, source, status, created_at, updated_at) VALUES (?, ?, ?, 'created', ?, ?)",
+            (project_id, payload.name.strip(), source, timestamp, timestamp),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    return project_dict(row)
+
+
+@app.get("/api/v1/projects/{project_id}", dependencies=[Depends(auth)])
+async def get_project(project_id: str) -> dict[str, Any]:
+    row = get_project_row(project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    result = project_dict(row)
+    if row["active_job_id"]:
+        with closing(db()) as connection:
+            job = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (row["active_job_id"],)).fetchone()
+        result["job"] = processing_dict(job) if job else None
+    else:
+        result["job"] = None
+    return result
+
+
+@app.patch("/api/v1/projects/{project_id}", dependencies=[Depends(auth)])
+async def patch_project(project_id: str, payload: ProjectPatchPayload) -> dict[str, Any]:
+    row = get_project_row(project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found")
+    values: dict[str, Any] = {"updated_at": now_iso()}
+    if payload.name is not None:
+        values["name"] = payload.name.strip()
+    if payload.source is not None:
+        values["source"] = validate_public_source(str(payload.source))
+    assignments = ", ".join(f"{key}=?" for key in values)
+    with closing(db()) as connection:
+        connection.execute(f"UPDATE projects SET {assignments} WHERE id=?", [*values.values(), project_id])
+        connection.commit()
+        updated = connection.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    return project_dict(updated)
+
+
+@app.post("/api/v1/projects/{project_id}/process", dependencies=[Depends(auth)])
+async def process_project(project_id: str, payload: ProjectProcessPayload) -> dict[str, Any]:
+    project = get_project_row(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    source = str(payload.source) if payload.source else project["source"]
+    if not source:
+        raise HTTPException(status_code=422, detail="Project has no source URL")
+    processing_payload = ProcessingPayload(source=source, llm=payload.llm, captions=payload.captions)
+    job_result = await start_processing(processing_payload, request=None, project_id=project_id)
+    with closing(db()) as connection:
+        connection.execute(
+            "UPDATE projects SET source=?, status='queued', active_job_id=?, updated_at=? WHERE id=?",
+            (source, job_result["id"], now_iso(), project_id),
+        )
+        connection.commit()
+    return {"project_id": project_id, "job": job_result}
+
+
+@app.get("/api/v1/jobs/{job_id}", dependencies=[Depends(auth)])
+async def get_job(job_id: str) -> dict[str, Any]:
+    return await processing_status(job_id)
+
+
+@app.post("/api/v1/jobs/{job_id}/cancel", dependencies=[Depends(auth)])
+async def cancel_job(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT project_id, status FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    if row["status"] in {"done", "failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"Job cannot be cancelled while status is {row['status']}")
+    with _processing_runtime_lock:
+        process = _processing_processes.get(job_id)
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+    with closing(db()) as connection:
+        connection.execute(
+            "UPDATE processing_jobs SET status='cancelled', message='Cancelled by client', error=NULL, updated_at=? WHERE id=? AND status IN ('queued', 'running')",
+            (now_iso(), job_id),
+        )
+        if row["project_id"]:
+            connection.execute(
+                "UPDATE projects SET status='cancelled', active_job_id=NULL, updated_at=? WHERE id=?",
+                (now_iso(), row["project_id"]),
+            )
+        connection.commit()
+    return {"id": job_id, "status": "cancelled"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1722,7 +1933,7 @@ async def source_media(job_id: str, filename: str) -> FileResponse:
 
 
 @app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
-async def start_processing(payload: ProcessingPayload, request: Request) -> dict[str, Any]:
+async def start_processing(payload: ProcessingPayload, request: Request, project_id: str | None = None) -> dict[str, Any]:
     source = validate_processing_source(str(payload.source))
     if payload.llm == "gemini" and not read_server_gemini_key():
         raise HTTPException(status_code=503, detail="GEMINI_NOT_CONFIGURED: Configure Gemini on the personal Gateway.")
@@ -1747,15 +1958,15 @@ async def start_processing(payload: ProcessingPayload, request: Request) -> dict
         if active >= MAX_ACTIVE_PROCESSING_JOBS:
             raise HTTPException(status_code=429, detail="A processing job is already active. Wait for it to finish.")
         connection.execute(
-            "INSERT INTO processing_jobs (id, source, llm, captions, mode, status, state, recoverable, retry_count, cancel_requested, correlation_id, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'queued', 'QUEUED', 1, 0, 0, ?, ?, ?, ?)",
-            (job_id, source, payload.llm, payload.captions, payload.mode, correlation_id, idempotency, timestamp, timestamp),
+            "INSERT INTO processing_jobs (id, project_id, source, llm, captions, mode, status, state, recoverable, retry_count, cancel_requested, correlation_id, idempotency_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', 'QUEUED', 1, 0, 0, ?, ?, ?, ?)",
+            (job_id, project_id, source, payload.llm, payload.captions, payload.mode, correlation_id, idempotency, timestamp, timestamp),
         )
         connection.execute("INSERT INTO processing_job_transitions (job_id, from_state, to_state, message, created_at) VALUES (?, NULL, 'QUEUED', ?, ?)", (job_id, "Job accepted", timestamp))
         connection.commit()
     if not _processing_workers.submit(job_id):
         processing_transition(job_id, "FAILED", error="Processing worker is not ready.", error_code="WORKER_NOT_READY", message="Retry shortly", recoverable=True)
         raise HTTPException(status_code=503, detail="Processing worker is not ready. Retry shortly.")
-    return {"id": job_id, "job_id": job_id, "status": "queued", "state": "QUEUED", "correlation_id": correlation_id, "request_id": getattr(request.state, "request_id", None)}
+    return {"id": job_id, "job_id": job_id, "status": "queued", "state": "QUEUED", "correlation_id": correlation_id, "request_id": getattr(getattr(request, "state", None), "request_id", None)}
 
 
 @app.get("/v1/processing/jobs/{job_id}", dependencies=[Depends(auth)])

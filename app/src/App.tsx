@@ -10,9 +10,10 @@ import SocialHub from './components/SocialHub'
 import SourceLibrary from './components/SourceLibrary'
 import AnalyticsDashboard from './components/AnalyticsDashboard'
 import AIProviders from './components/AIProviders'
+import AiUsageDashboard from './components/AiUsageDashboard'
 import './styles.css'
 
-type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'social' | 'sources' | 'analytics' | 'providers'
+type View = 'boot' | 'onboarding' | 'studio' | 'review' | 'loop' | 'social' | 'sources' | 'analytics' | 'providers' | 'ai-usage'
 
 export default function App() {
   const [view, setView] = useState<View>('boot')
@@ -205,6 +206,25 @@ export default function App() {
     [isAndroid]
   )
 
+  const cancelRun = useCallback(async () => {
+    if (!isAndroid || !activeJobRef.current) {
+      setRunError('لا يمكن إلغاء المعالجة المحلية بأمان من الواجهة الحالية.')
+      return
+    }
+    const gateway = loadProcessingGatewayConfig()
+    if (!gateway.url.trim()) {
+      setRunError('Processing Gateway URL is missing.')
+      return
+    }
+    try {
+      await api.processingCancel(gateway.url, gateway.token, activeJobRef.current)
+      setRunning(false)
+      setRunError('Remote processing cancelled. No clip was marked as completed.')
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : String(error))
+    }
+  }, [isAndroid])
+
   const openJob = useCallback(async (jobId: string) => {
     const r = await api.jobResults(jobId)
     setActiveJob(jobId)
@@ -247,6 +267,10 @@ export default function App() {
     return <AIProviders onBack={() => setView('studio')} />
   }
 
+  if (view === 'ai-usage') {
+    return <AiUsageDashboard onBack={() => setView('studio')} />
+  }
+
   if (view === 'review' && results) {
     return (
       <Review
@@ -279,10 +303,12 @@ export default function App() {
       stages={stages}
       error={runError}
       onRun={startRun}
+      onCancel={cancelRun}
       onOpenLoop={() => setView('loop')}
               onOpenSocial={() => setView('social')}
         onOpenSources={() => setView('sources')}
         onOpenProviders={() => setView('providers')}
+        onOpenAiUsage={() => setView('ai-usage')}
 
       onOpenJob={openJob}
       onResume={(id, llm) => {

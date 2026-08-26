@@ -61,6 +61,9 @@ export type AIModel = { id: string; provider_id: string; model_id: string; displ
 export type AIProvider = { id: string; name: string; type: string; enabled: boolean; base_url?: string | null; credential_ref?: string | null; capabilities: string[]; models: AIModel[]; created_at: string; updated_at: string }
 export type AIHealth = { provider_id: string; state: string; configured: boolean; reachable: boolean; authenticated?: boolean | null; selected_model_available?: boolean | null; required_capabilities: string[]; checked_at: string; latency_ms?: number | null; error?: string | null }
 export type AIProviderSnapshot = { provider: AIProvider; health: AIHealth }
+export type GatewayUsageAggregate = { provider: string; model: string; requests: number; input_tokens: number; output_tokens: number; total_tokens: number; estimated_requests: number; average_latency_ms: number; cost_usd: number }
+export type GatewayUsageSummary = { days: number; from: string; to: string; events: number; aggregates: GatewayUsageAggregate[] }
+export type GatewayProviderModel = { id: string; name: string; type: string; base_url?: string; default_model: string; fallback_model?: string; enabled: boolean; credential_configured: boolean; capabilities: Record<string, boolean>; input_cost_per_million: number; output_cost_per_million: number }
 
 export function loadProcessingGatewayConfig(): ProcessingGatewayConfig {
   try {
@@ -115,6 +118,8 @@ export const api = {
   pipelineDiagnostic: (baseUrl: string, token: string) => gatewayJson<ProcessingCapabilities & { pipeline_importable?: boolean; ffmpeg_usable?: boolean; ready?: boolean }>(baseUrl, token, '/v1/diagnostics/pipeline', { method: 'POST' }),
   geminiDiagnostic: (baseUrl: string, token: string) => gatewayJson<GeminiDiagnostic>(baseUrl, token, '/v1/diagnostics/gemini', { method: 'POST' }),
   aiProviders: (baseUrl: string, token: string) => gatewayJson<{ providers: AIProviderSnapshot[]; secret_names: string[] }>(baseUrl, token, '/v1/ai/providers'),
+  aiUsageSummary: (baseUrl: string, token: string, days = 30) => gatewayJson<GatewayUsageSummary>(baseUrl, token, `/v1/ai/usage?days=${days}`),
+  aiProviderProfiles: (baseUrl: string, token: string) => gatewayJson<{ providers: GatewayProviderModel[] }>(baseUrl, token, '/v1/ai/providers'),
   aiProviderHealth: (baseUrl: string, token: string, providerId: string) => gatewayJson<AIProviderSnapshot>(baseUrl, token, `/v1/ai/providers/${encodeURIComponent(providerId)}/health`, { method: 'POST' }),
   aiModels: (baseUrl: string, token: string, providerId?: string) => gatewayJson<{ models: AIModel[] }>(baseUrl, token, `/v1/ai/models${providerId ? `?provider_id=${encodeURIComponent(providerId)}` : ''}`),
   createAIProvider: (baseUrl: string, token: string, payload: unknown) => gatewayJson<AIProviderSnapshot>(baseUrl, token, '/v1/ai/providers', { method: 'POST', body: JSON.stringify(payload) }),
@@ -214,6 +219,14 @@ export const api = {
     if (!response.ok) throw new Error(`Source status returned ${response.status}.`)
     return (await response.json()) as SourceJob
   },
+  processingCancel: async (baseUrl: string, token: string, jobId: string) => {
+    const response = await fetch(gatewayEndpoint(baseUrl, `/v1/processing/jobs/${encodeURIComponent(jobId)}/cancel`), {
+      method: 'POST',
+      headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
+    })
+    if (!response.ok) throw new Error(`Processing cancel returned ${response.status}: ${(await response.text()).slice(0, 240)}`)
+    return (await response.json()) as { id: string; status: 'cancelled' }
+  },
   processingStatus: async (baseUrl: string, token: string, jobId: string) => {
     const response = await fetch(gatewayEndpoint(baseUrl, `/v1/processing/jobs/${encodeURIComponent(jobId)}`), {
       headers: token.trim() ? { Authorization: `Bearer ${token.trim()}` } : undefined
@@ -221,7 +234,7 @@ export const api = {
     if (!response.ok) throw new Error(`Processing status returned ${response.status}.`)
     return (await response.json()) as {
       id: string
-      status: 'queued' | 'running' | 'done' | 'failed'
+      status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
       stage?: string | null
       fraction?: number | null
       message?: string | null
