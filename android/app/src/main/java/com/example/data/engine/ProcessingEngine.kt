@@ -1,6 +1,6 @@
 package com.example.data.engine
 
-import android.net.Uri
+import java.net.URI
 import com.example.data.model.GatewayConfig
 
 /**
@@ -29,15 +29,23 @@ class ProcessingEngine {
             return Result.failure(IllegalArgumentException("مصدر الفيديو مطلوب."))
         }
 
-        val scheme = runCatching { Uri.parse(trimmedSource).scheme?.lowercase() }.getOrNull()
-        if (scheme == null || scheme !in setOf("content", "file")) {
+        val parsedSource = runCatching { URI(trimmedSource) }.getOrNull()
+        val scheme = parsedSource?.scheme?.lowercase()
+        val isLocalSource = scheme in setOf("content", "file")
+        val isRemoteSource = scheme in setOf("http", "https") && !parsedSource?.host.isNullOrBlank()
+        if (!isLocalSource && !isRemoteSource) {
             return Result.failure(
-                IllegalArgumentException("مصدر الفيديو يجب أن يكون ملفًا محليًا قابلًا للقراءة.")
+                IllegalArgumentException("مصدر الفيديو يجب أن يكون content:// أو file:// محليًا، أو HTTP/HTTPS عند استخدام Gateway.")
             )
         }
 
         val baseUrl = gateway.baseUrl.trim().trimEnd('/')
         if (baseUrl.isBlank()) {
+            if (!isLocalSource) {
+                return Result.failure(
+                    IllegalArgumentException("مصدر HTTP/HTTPS يحتاج إلى Processing Gateway صالح؛ المعالجة المحلية تقبل الملفات فقط.")
+                )
+            }
             return Result.success(
                 Plan(
                     route = Route.LOCAL_PIPELINE,
@@ -47,9 +55,9 @@ class ProcessingEngine {
             )
         }
 
-        val parsedGateway = runCatching { Uri.parse(baseUrl) }.getOrNull()
+        val parsedGateway = runCatching { URI(baseUrl) }.getOrNull()
         val gatewayScheme = parsedGateway?.scheme?.lowercase()
-        if (gatewayScheme == null || gatewayScheme !in setOf("http", "https") || parsedGateway?.host.isNullOrBlank()) {
+        if (gatewayScheme == null || gatewayScheme !in setOf("http", "https") || parsedGateway.host.isNullOrBlank()) {
             return Result.failure(
                 IllegalArgumentException("عنوان Gateway غير صالح. استخدم عنوان HTTP أو HTTPS كاملًا.")
             )

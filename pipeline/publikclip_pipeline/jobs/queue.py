@@ -39,12 +39,19 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS stage_runs (
     job_id TEXT NOT NULL,
     stage TEXT NOT NULL,
-    status TEXT NOT NULL,               -- running|done|failed
+    status TEXT NOT NULL,               -- running|done|failed|cancelled
     schema_version INTEGER NOT NULL,
     started_at REAL NOT NULL,
     finished_at REAL,
     error TEXT,
     PRIMARY KEY (job_id, stage)
+);
+CREATE TABLE IF NOT EXISTS job_progress (
+    job_id TEXT PRIMARY KEY,
+    stage TEXT,
+    fraction REAL NOT NULL,
+    message TEXT NOT NULL,
+    updated_at REAL NOT NULL
 );
 """
 
@@ -59,6 +66,9 @@ class Job:
     status: str
     error: str | None
     settings_json: str
+    error_code: str | None = None
+    message: str | None = None
+    cancel_requested: bool = False
 
     @property
     def dir(self) -> Path:
@@ -70,6 +80,16 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(config.db_path(), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    # Lightweight migrations keep existing local homes compatible with the
+    # public engine contract introduced after the original schema.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for name, definition in (
+        ("error_code", "TEXT"),
+        ("message", "TEXT"),
+        ("cancel_requested", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
     return conn
 
 
@@ -83,6 +103,9 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         status=row["status"],
         error=row["error"],
         settings_json=row["settings_json"],
+        error_code=row["error_code"] if "error_code" in row.keys() else None,
+        message=row["message"] if "message" in row.keys() else None,
+        cancel_requested=bool(row["cancel_requested"]) if "cancel_requested" in row.keys() else False,
     )
 
 
@@ -118,17 +141,59 @@ def list_jobs(limit: int = 50) -> list[Job]:
     return [_row_to_job(r) for r in rows]
 
 
-def set_job_status(job_id: str, status: str, error: str | None = None, title: str | None = None) -> None:
+def set_job_status(
+    job_id: str,
+    status: str,
+    error: str | None = None,
+    title: str | None = None,
+    *,
+    error_code: str | None = None,
+    message: str | None = None,
+) -> None:
+    values: dict[str, Any] = {"status": status, "error": error}
+    if title is not None:
+        values["title"] = title
+    if error_code is not None:
+        values["error_code"] = error_code
+    if message is not None:
+        values["message"] = message
+    assignments = ", ".join(f"{key} = ?" for key in values)
     with _connect() as conn:
-        if title is not None:
-            conn.execute(
-                "UPDATE jobs SET status = ?, error = ?, title = ? WHERE id = ?",
-                (status, error, title, job_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE jobs SET status = ?, error = ? WHERE id = ?", (status, error, job_id)
-            )
+        conn.execute(f"UPDATE jobs SET {assignments} WHERE id = ?", (*values.values(), job_id))
+
+
+def update_job_settings(job_id: str, settings_json: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE jobs SET settings_json = ? WHERE id = ?", (settings_json, job_id))
+        conn.commit()
+
+
+def is_cancel_requested(job_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT cancel_requested FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return bool(row and row["cancel_requested"])
+
+
+def request_cancel(job_id: str) -> None:
+    with _connect() as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return
+        status = "cancelled" if row["status"] == "pending" else row["status"]
+        conn.execute(
+            "UPDATE jobs SET cancel_requested = 1, status = ?, error_code = ?, error = ?, message = ? WHERE id = ?",
+            (status, "JOB_CANCELLED", "Job cancellation was requested.", "Cancellation requested", job_id),
+        )
+        conn.commit()
+
+
+def clear_cancel_request(job_id: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET cancel_requested = 0, status = 'pending', error = NULL, error_code = NULL, message = NULL WHERE id = ?",
+            (job_id,),
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +239,9 @@ def read_checkpoint(job: Job, stage: str, schema_version: int) -> dict | None:
         envelope = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    if envelope.get("schema_version") != schema_version:
+    if not isinstance(envelope, dict):
+        return None
+    if envelope.get("stage") != stage or envelope.get("schema_version") != schema_version:
         return None
     data = envelope.get("data")
     return data if isinstance(data, dict) else None
@@ -200,6 +267,34 @@ def stage_statuses(job_id: str) -> dict[str, str]:
             "SELECT stage, status FROM stage_runs WHERE job_id = ?", (job_id,)
         ).fetchall()
     return {r["stage"]: r["status"] for r in rows}
+
+
+def record_progress(job_id: str, stage: str, fraction: float, message: str) -> None:
+    """Persist the latest progress event for polling and restart diagnostics."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO job_progress (job_id, stage, fraction, message, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET "
+            "stage=excluded.stage, fraction=excluded.fraction, message=excluded.message, "
+            "updated_at=excluded.updated_at",
+            (job_id, stage or None, float(fraction), message, time.time()),
+        )
+
+
+def get_progress(job_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT stage, fraction, message, updated_at FROM job_progress WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "stage": row["stage"],
+        "fraction": row["fraction"],
+        "message": row["message"],
+        "updated_at": row["updated_at"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -252,31 +347,50 @@ class Stage:
 
 def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[str, dict]:
     """Run stages in order, skipping fresh checkpoints. Returns stage→data."""
+    def emit(stage: str, fraction: float, message: str) -> None:
+        record_progress(job.id, stage, fraction, message)
+        progress(stage, fraction, message)
+
+    if is_cancel_requested(job.id):
+        set_job_status(job.id, "cancelled", "Job cancellation was requested.", error_code="JOB_CANCELLED", message="Cancellation requested")
+        emit("", 0.0, "Cancellation requested")
+        raise StageError("Job cancellation was requested.", "JOB_CANCELLED")
     settings = config.Settings.from_json(json.loads(job.settings_json))
-    ctx = StageContext(job=job, settings=settings, progress=progress)
+    ctx = StageContext(job=job, settings=settings, progress=emit)
     results: dict[str, dict] = {}
     set_job_status(job.id, "running")
     for stage in stages:
+        if is_cancel_requested(job.id):
+            set_job_status(job.id, "cancelled", "Job cancellation was requested.", error_code="JOB_CANCELLED", message="Cancellation requested")
+            emit(stage.name, 0.0, "Cancellation requested")
+            raise StageError("Job cancellation was requested.", "JOB_CANCELLED")
         cached = read_checkpoint(job, stage.name, stage.schema_version)
         if cached is not None and stage.artifacts_ok(ctx, cached):
             results[stage.name] = cached
-            progress(stage.name, 1.0, "cached")
+            emit(stage.name, 1.0, "cached")
             continue
         mark_stage(job.id, stage.name, "running", stage.schema_version)
-        progress(stage.name, -1.0, "starting")
+        emit(stage.name, -1.0, "starting")
         try:
             data = stage.run(_ctx_for(ctx, stage.name, results))
         except StageError as err:
-            mark_stage(job.id, stage.name, "failed", stage.schema_version, str(err))
-            set_job_status(job.id, "failed", f"{stage.name}: {err}")
+            stage_status = "cancelled" if err.code == "JOB_CANCELLED" else "failed"
+            mark_stage(job.id, stage.name, stage_status, stage.schema_version, str(err))
+            set_job_status(
+                job.id,
+                "cancelled" if err.code == "JOB_CANCELLED" else "failed",
+                f"{stage.name}: {err}",
+                error_code=err.code,
+                message="Cancellation requested" if err.code == "JOB_CANCELLED" else "Pipeline failed",
+            )
             raise
         except Exception as err:  # noqa: BLE001 - record then re-raise
             mark_stage(job.id, stage.name, "failed", stage.schema_version, repr(err))
-            set_job_status(job.id, "failed", f"{stage.name}: {err!r}")
+            set_job_status(job.id, "failed", f"{stage.name}: {err!r}", error_code="ENGINE_FAILED", message="Pipeline failed")
             raise
         write_checkpoint(job, stage.name, stage.schema_version, data)
         results[stage.name] = data
-        progress(stage.name, 1.0, "done")
+        emit(stage.name, 1.0, "done")
     set_job_status(job.id, "done", None)
     return results
 

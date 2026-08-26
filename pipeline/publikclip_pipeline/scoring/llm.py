@@ -72,6 +72,25 @@ def _cache_key(backend: str, model: str, prompt: str, schema: dict, images: list
     return h.hexdigest()[:32]
 
 
+def _read_cached_json(path: Path) -> dict | None:
+    """Treat malformed cache entries as misses and remove them for recovery."""
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("cached response is not an object")
+        return data
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        path.unlink(missing_ok=True)
+        return None
+
+
+def _write_cached_json(path: Path, data: dict) -> None:
+    """Atomically publish a cache entry so interrupted writes cannot be reused."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data))
+    tmp.replace(path)
+
+
 def _strip_fences(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -97,7 +116,9 @@ class GeminiClient:
         images = images or []
         cache_file = _cache_dir() / f"{_cache_key(self.backend, self.model, prompt, schema, images)}.json"
         if use_cache and cache_file.exists():
-            return json.loads(cache_file.read_text())
+            cached = _read_cached_json(cache_file)
+            if cached is not None:
+                return cached
 
         parts: list[dict[str, Any]] = [{"text": prompt}]
         for img in images:
@@ -145,7 +166,7 @@ class GeminiClient:
                 text = payload["candidates"][0]["content"]["parts"][0]["text"]
                 data = json.loads(_strip_fences(text))
                 if use_cache:
-                    cache_file.write_text(json.dumps(data))
+                    _write_cached_json(cache_file, data)
                 return data
             except LlmError:
                 raise
@@ -186,7 +207,9 @@ class OllamaClient:
             images = []
         cache_file = _cache_dir() / f"{_cache_key(self.backend, self.model, prompt, schema, [])}.json"
         if cache_file.exists():
-            return json.loads(cache_file.read_text())
+            cached = _read_cached_json(cache_file)
+            if cached is not None:
+                return cached
         body = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -200,7 +223,7 @@ class OllamaClient:
             data = json.loads(_strip_fences(res.json()["message"]["content"]))
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as err:
             raise LlmError(f"Ollama call failed: {err}") from err
-        cache_file.write_text(json.dumps(data))
+        _write_cached_json(cache_file, data)
         return data
 
 
@@ -228,12 +251,18 @@ class RoutedProviderClient:
     backend = "provider-router"
 
     def __init__(self, task: str = "content_analysis"):
-        self.router = ProviderRouter.from_disk()
+        try:
+            self.router = ProviderRouter.from_disk()
+        except Exception as err:  # noqa: BLE001 - normalize provider setup failures
+            raise LlmError("The configured AI provider profile is invalid.", "PROVIDER_CONFIG_INVALID") from err
         self.task = task
         self.model = "provider-router"
 
     def generate_json(self, prompt: str, schema: dict, images: list[bytes] | None = None) -> dict:
-        return self.router.generate_json(self.task, prompt, schema, images)
+        try:
+            return self.router.generate_json(self.task, prompt, schema, images)
+        except Exception as err:  # noqa: BLE001 - normalize provider runtime failures
+            raise LlmError("The configured AI provider failed.", "PROVIDER_FAILED") from err
 
 
 def make_client(llm_mode: str):

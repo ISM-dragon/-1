@@ -12,32 +12,13 @@ import json
 import sys
 
 from . import config
-from .jobs import queue
+from .engine import EngineError, PipelineEngine
+from .jobs import queue  # legacy compatibility commands only
 
 
-def _stages() -> list[queue.Stage]:
-    # Grows per milestone: ingest → asr → diarize → events → candidates →
-    # score → camera → render. Stage imports are deferred so `publikclip
-    # jobs` doesn't pay the torch import tax.
-    from .asr.stage import AsrStage
-    from .camera.stage import CameraStage
-    from .candidates.stage import CandidatesStage
-    from .diarize.stage import DiarizeStage
-    from .events.stage import EventsStage
-    from .ingest.stage import IngestStage
-    from .render.stage import RenderStage
-    from .scoring.stage import ScoreStage
-
-    return [
-        IngestStage(),
-        AsrStage(),
-        DiarizeStage(),
-        EventsStage(),
-        CandidatesStage(),
-        ScoreStage(),
-        CameraStage(),
-        RenderStage(),
-    ]
+def _engine() -> PipelineEngine:
+    """Return the local engine; CLI remains a thin compatibility shell."""
+    return PipelineEngine()
 
 
 def _progress_printer(jsonl: bool):
@@ -75,49 +56,57 @@ def cmd_run(args: argparse.Namespace) -> int:
         settings.processing_mode = args.mode
     if args.camera:
         settings.camera.speaker_change = args.camera
-    job = queue.create_job(source_type, source, json.dumps(settings.to_json()))
-    return _execute(job, args.jsonl)
+    engine = _engine()
+    job = engine.create_job(source, settings, source_type=source_type)
+    return _execute(engine, job.id, args.jsonl)
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    job = queue.get_job(args.job_id)
-    if job is None:
-        print(f"No job {args.job_id}", file=sys.stderr)
-        return 2
-    if args.llm or args.captions or args.mode or args.camera:
-        settings = config.Settings.from_json(json.loads(job.settings_json))
-        if args.llm:
-            settings.llm_mode = args.llm
-        if args.captions:
-            settings.caption_preset = args.captions
-        if args.mode:
-            settings.processing_mode = args.mode
-        if args.camera:
-            settings.camera.speaker_change = args.camera
-        new_json = json.dumps(settings.to_json())
-        with queue._connect() as conn:  # noqa: SLF001 — CLI is a queue friend
-            conn.execute("UPDATE jobs SET settings_json = ? WHERE id = ?", (new_json, job.id))
-        job = queue.get_job(args.job_id)
-    return _execute(job, args.jsonl)
-
-
-def _execute(job: queue.Job, jsonl: bool) -> int:
-    emit = _progress_printer(jsonl)
-    if jsonl:
-        print(json.dumps({"event": "job", "job_id": job.id, "dir": str(job.dir)}), flush=True)
-    else:
-        print(f"job {job.id} → {job.dir}", file=sys.stderr)
+    engine = _engine()
     try:
-        results = queue.run_stages(job, _stages(), emit)
-    except queue.StageError as err:
+        engine.get_job(args.job_id)
+        settings = config.Settings.from_json(dict(engine.get_job_settings(args.job_id)))
+    except EngineError as err:
+        print(err.safe_message, file=sys.stderr)
+        return 2
+    if args.llm:
+        settings.llm_mode = args.llm
+    if args.captions:
+        settings.caption_preset = args.captions
+    if args.mode:
+        settings.processing_mode = args.mode
+    if args.camera:
+        settings.camera.speaker_change = args.camera
+    return _execute(engine, args.job_id, args.jsonl, resume=True, settings=settings)
+
+
+def _execute(engine: PipelineEngine, job_id: str, jsonl: bool, *, resume: bool = False, settings=None) -> int:
+    emit = _progress_printer(jsonl)
+    try:
+        job = engine.get_job(job_id)
+    except EngineError as err:
+        _emit_result(jsonl, {"ok": False, "job_id": job_id, "error": err.safe_message, "error_code": err.code})
+        return 2
+    job_dir = config.jobs_dir() / job.id
+    if jsonl:
+        print(json.dumps({"event": "job", "job_id": job.id, "dir": str(job_dir)}), flush=True)
+    else:
+        print(f"job {job.id} → {job_dir}", file=sys.stderr)
+    def on_progress(event) -> None:
+        emit(event.stage, event.fraction, event.message)
+
+    try:
+        results = engine.resume_job(job.id, settings=settings, on_progress=on_progress) if resume else engine.start_job(job.id, on_progress=on_progress)
+        payload = results.to_dict()
+    except EngineError as err:
         _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": err.safe_message, "error_code": err.code})
         return 1
     summary = {
         "ok": True,
         "job_id": job.id,
-        "stages": list(results.keys()),
-        "title": results.get("ingest", {}).get("title"),
-        "heatmap_segments": len(results.get("ingest", {}).get("heatmap") or []),
+        "stages": [key for key, value in payload.items() if value is not None and key in {"ingest", "events", "candidates", "score", "render"}],
+        "title": (payload.get("ingest") or {}).get("title"),
+        "heatmap_segments": len((payload.get("ingest") or {}).get("heatmap") or []),
     }
     _emit_result(jsonl, summary)
     return 0
@@ -178,10 +167,15 @@ def cmd_edit(args: argparse.Namespace) -> int:
 
     if args.edit_cmd == "render-clip":
         emit = _progress_printer(args.jsonl)
+        engine = _engine()
         try:
-            entry = rc.render_clip_edit(job_dir, args.clip, lambda f, m: emit("render", f, m))
-        except Exception as err:  # noqa: BLE001
-            _emit_result(args.jsonl, {"ok": False, "error": str(err)})
+            entry = engine.render_clip(
+                args.job_id,
+                args.clip,
+                on_progress=lambda event: emit(event.stage, event.fraction, event.message),
+            )
+        except EngineError as err:
+            _emit_result(args.jsonl, {"ok": False, "error": err.safe_message, "error_code": err.code})
             return 1
         _emit_result(args.jsonl, {"ok": True, "output": entry})
         return 0

@@ -1,69 +1,61 @@
-# MANUS HANDOFF
+# MANUS HANDOFF — ISM Android / Backend
 
-## الحالة عند التسليم
+**المشروع:** ISM
+**المستودع:** `ISM-dragon/-1`
+**الحالة:** تم دمج إصلاحات Android/Gateway مع تحسينات engine وmedia lifecycle وpipeline stability؛ لم يبدأ rebuild كبير.
 
-آخر تحقق شامل في **2026-08-26** على فرع `main`. نتيجة القبول الصارم هي **FAIL** لأن Android APK لم يُبنَ بنجاح ولم يُشغّل على جهاز أو Emulator، ولأن Pipeline الحقيقي توقف عند ASR بسبب عدم توفر WhisperX/PyTorch والنماذج المطلوبة. تقرير التفاصيل الكامل موجود في [`docs/FINAL_ACCEPTANCE.md`](docs/FINAL_ACCEPTANCE.md).
+## ما تم تنفيذه
 
-> لا تُعلن النسخة جاهزة للإنتاج أو ناجحة في اختبار End-to-End إلا بعد إعادة تشغيل المسار من Android APK فعليًا مع نماذج Pipeline ومزود LLM متاحين.
+تم تصحيح عقد source في Native Android. يقبل `ProcessingEngine` الآن `content://` و`file://` للمعالجة المحلية، ويقبل `http://` و`https://` عندما يكون Gateway مضبوطًا. لم يعد `VideoProcessingWorker` يرفض URL قبل اختيار المسار، و`ProcessingGatewayClient` يرفع المصادر المحلية فقط ويرسل URL البعيد مباشرة إلى `/v1/processing/jobs`.
 
-## معمارية المسار
+تم إصلاح نتائج Gateway بحيث تُستكمل metadata لكل output من score checkpoint، بما في ذلك `start` و`end` و`title` و`transcript` عندما لا تكون موجودة في render output. أضيفت regression coverage لعقد URL routing وmetadata وmedia upload path.
 
-المسار المقصود هو: Android media picker → Gateway upload → create processing job → ingest → ASR → diarization → events → candidates → scoring → camera → render → results → clip preview → download/export. Android لا يشغّل Python داخل APK؛ يرسل الفيديو إلى Gateway ويحفظ job ID ونتائج التنزيل محليًا عبر Room وWorkManager.
+تم دمج `PipelineEngine` العام في `pipeline/publikclip_pipeline/engine/` بعقد ثابت للـ jobs والنتائج والأخطاء والتقدم، مع إبقاء CLI JSONL كطبقة توافق. كما تم دمج media lifecycle reliability في Gateway: resumable uploads، offset/checksum validation، atomic finalize، duplicate detection، cleanup، وoutput integrity metadata.
 
-| المكوّن | الموقع | المسؤولية |
-|---|---|---|
-| Android | `android/` | اختيار واستيراد الوسائط، جدولة WorkManager، حفظ job ID، polling، preview وexport. |
-| Gateway | `gateway/main.py` | upload، job lifecycle، auth، state transitions، retry/cancel/resume، results وmedia serving. |
-| Pipeline | `pipeline/publikclip_pipeline/` | ingest، ASR، diarization، events، candidates، scoring، camera، render وcheckpoints. |
-| Acceptance report | `docs/FINAL_ACCEPTANCE.md` | PASS/FAIL لكل مرحلة وكل failure scenario. |
+آخر تغييرات remote أضافت pipeline-stage stability hardening دون تغيير algorithms: validation للمدخلات والـartifacts، recovery للـcheckpoint/cache الفاسد، معالجة timeout وFFmpeg/ffprobe errors، cleanup للملفات المؤقتة، ورسائل آمنة لأخطاء LLM/provider.
 
-## تشغيل Gateway المحلي
+## المعمارية المؤقتة
 
-من جذر المستودع:
+| المكوّن | المسؤولية |
+|---|---|
+| Android client | local URI أو remote URL، حفظ Gateway job ID، WorkManager، polling، تنزيل النتائج والكاش |
+| Gateway | auth، SQLite state، media boundary، queue، retry/cancel/resume، provider secrets، artifact serving |
+| Pipeline Engine | public lifecycle adapter فوق stage graph الحالي |
+| Python pipeline | ingest، ASR، diarization، events، candidates، scoring، camera، captions، FFmpeg rendering |
+| Social providers | تبقى منفصلة؛ live publishing غير جاهز خارج mock mode |
 
-```bash
-export GATEWAY_TOKEN='ضع-رمزًا-محليًا-طويلًا'
-export REQUIRE_GATEWAY_TOKEN=true
-export PUBLIC_BASE_URL='http://127.0.0.1:8787'
-export ISM_PIPELINE_DIR="$PWD/pipeline"
-export ISM_PROCESSING_ROOT="$PWD/gateway/processing"
-python3 -m uvicorn gateway.main:app --host 127.0.0.1 --port 8787
-```
+المسار الموصى به لمعالجة YouTube على Android هو تشغيل Python/FFmpeg والنماذج في Gateway، وليس داخل APK. Tauri Android لا يشغّل desktop runtime المحلي، وNative Android لا يملك parity كاملة مع WhisperX أو diarization أو active-speaker أو ASS/libass rendering.
 
-يجب التحقق قبل بدء المهمة من `/health` و`/v1/processing/capabilities` و`/v1/diagnostics/pipeline`. عند اختيار Gemini يجب أن يكون `/v1/diagnostics/gemini` في حالة `ready`. لا يوضع مفتاح Gemini داخل Android أو job JSON أو URL.
+## الاختبارات
 
-## متطلبات Android
+| الفحص | النتيجة |
+|---|---|
+| `python3 -m pytest gateway backend -q` | **44 passed, 1 skipped** لاختبار large-media، مع تحذيرات deprecation |
+| `cd pipeline && python3 -m pytest tests -q` | **97 passed**؛ suite الجذر الكاملة أعادت **154 passed, 1 skipped** |
+| `python3 -m compileall -q gateway pipeline/publikclip_pipeline` | نجح |
+| `python3 scripts/check_identity.py` | نجح |
+| `git diff --check` | نجح قبل آخر merge |
+| `cd android && ./gradlew :app:testDebugUnitTest --no-daemon` | متوقف قبل الاختبارات بسبب غياب Android SDK |
 
-```bash
-cd android
-./gradlew :app:testDebugUnitTest
-./gradlew :app:lint
-./gradlew :app:assembleDebug
-```
+لم يُثبت بعد تشغيل E2E حقيقي من APK إلى Gateway إلى pipeline إلى MP4، ولم تُشغّل النماذج الثقيلة في هذه البيئة. Android unit tests ما زالت متوقفة بسبب غياب Android SDK.
 
-في هذا التحقق تم تثبيت JDK وAndroid SDK محليًا، لكن `assembleDebug` انتهى باختفاء Gradle daemon تحت ضغط ذاكرة sandbox. لم يتوفر `adb` بجهاز، ولم يوجد AVD. لذلك لم يُنفذ Android UI، Media Picker، app restart، clip preview، أو export من APK.
+## العوائق المتبقية
 
-## نتائج التشغيل المنفذة
+أهم عائق هو عدم وجود APK-to-Gateway E2E موثق. Android CI يبني debug APK فقط ولا يغطي release signing أو device/instrumentation tests. يجب اختيار Android surface رسمي واحد بين Tauri-generated APK وNative Compose APK قبل الاستثمار في parity أو publishing.
 
-تم إنشاء fixture كلام حقيقي قصير مدته 8 ثوانٍ وطويل مدته 120 ثانية، ونجح upload الحقيقي لكليهما بعد إضافة ffprobe validation. Pipeline الحقيقي أنشأ ingest checkpoint والصوت التحليلي، ثم توقف عند ASR لأن runtime/model غير متاح. مسار API المنفصل باستخدام test double عبر جميع أسماء المراحل نجح للفيديو القصير والطويل، وفُحص artifact الناتج بـFFprobe، لكنه ليس دليلًا على نجاح Pipeline الإنتاج الحقيقي.
+Gateway live social adapters وOAuth ما زالت غير منفذة خارج `PROVIDER_MODE=mock`. كما أن readiness probe يحتاج فصل structural readiness عن runtime ML/model readiness.
 
-اختُبرت network interruption وbackend restart وresume وcancel وretry وjob failure وrender failure عبر Gateway lifecycle. أُعيد تشغيل Gateway بعد الانقطاع، وسُجلت حالة `INTERRUPTED` ثم اكتملت مهمة recovery في contract test. أُعيدت مهمة failure عبر `RETRY_WAIT → QUEUED` مع زيادة `retry_count`. لا يُسمح باستخدام هذه النتائج لإعلان نجاح Android E2E.
+## الخطوة التالية
 
-## الإصلاحات التي يجب الحفاظ عليها
+1. تثبيت Android SDK 36 وJava/Gradle المطلوبة وتشغيل unit tests وlint و`assembleDebug`.
+2. تشغيل Gateway حقيقي مع Python 3.12 وFFmpeg/ffprobe وmodel cache وGemini server key.
+3. اختبار Native remote URL وlocal upload مع cancel/retry/resume على جهاز أو emulator.
+4. اختيار package/application ID الرسمي وإضافة release signing وE2E smoke test.
+5. إبقاء Instagram publishing خارج نطاق الإصلاح الحالي حتى تُنفذ adapters وOAuth والإدارة الآمنة للأسرار.
 
-أُصلح `cancel` على job في حالة `FAILED` ليعيد HTTP 409 مع توجيه إلى retry/resume بدل HTTP 500. أُضيف ffprobe validation قبل إنشاء source job، مع رفض corrupted media بـ`MEDIA_INVALID` وتنظيف المجلد. أُضيف تصنيف `ASR_MODEL_UNAVAILABLE` عند غياب WhisperX/PyTorch. كما أُصلح سياق `RowScope` في `OpusBottomNav` ليتوافق مع Material3 `NavigationBarItem`.
+التوثيق التفصيلي موجود في:
 
-اختبارات regression الحالية تشمل جميع اختبارات Gateway وعددها 37 اختبارًا ناجحًا، واختبارات التحكم والوسائط وASR وعددها 15 اختبارًا ناجحًا، واختبارات Pipeline المعزولة غير البطيئة التي نجحت عند تشغيل كل ملف في عملية مستقلة. اختبار Android build وrender smoke الكامل بقيا FAIL في البيئة الحالية ويجب عدم تحويلهما إلى PASS دون إعادة تشغيل فعلي.
-
-## بوابة القبول التالية
-
-يجب أولًا توفير Android SDK/JDK وemulator أو هاتف، ثم بناء APK، وتثبيت نماذج ASR وdiarization، وتشغيل Ollama model أو Gemini credential اختباري server-side، وتشغيل فيديو قصير وطويل عبر APK نفسه. بعد ذلك يجب تنفيذ كل حالات failure matrix في [`docs/FINAL_ACCEPTANCE.md`](docs/FINAL_ACCEPTANCE.md) مع حفظ evidence، ثم تحديث هذا الملف ورفع القرار إلى PASS فقط إذا اكتمل المسار حتى preview وdownload/export من التطبيق.
-
-## مراجع التشغيل
-
-- [`docs/API-CONTRACT.md`](docs/API-CONTRACT.md)
-- [`docs/CLIENT-RESPONSIBILITIES.md`](docs/CLIENT-RESPONSIBILITIES.md)
-- [`docs/MASTER-ARCHITECTURE.md`](docs/MASTER-ARCHITECTURE.md)
-- [`gateway/README.md`](gateway/README.md)
-- [`android/README.md`](android/README.md)
-- [`docs/FINAL_ACCEPTANCE.md`](docs/FINAL_ACCEPTANCE.md)
+- [`docs/ANDROID_AUDIT.md`](docs/ANDROID_AUDIT.md)
+- [`docs/ENGINE_ARCHITECTURE.md`](docs/ENGINE_ARCHITECTURE.md)
+- [`docs/MEDIA_PIPELINE.md`](docs/MEDIA_PIPELINE.md)
+- [`docs/ENGINE_STABILITY.md`](docs/ENGINE_STABILITY.md)

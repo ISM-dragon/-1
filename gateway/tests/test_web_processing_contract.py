@@ -1,4 +1,5 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,35 @@ class WebProcessingContractTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as context:
             main.validate_processing_source("http://127.0.0.1/private-video.mp4")
         self.assertEqual(context.exception.status_code, 422)
+
+    def test_processing_results_enriches_render_outputs_for_android_clients(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job_dir = root / "jobs" / "pipeline_01"
+            job_dir.mkdir(parents=True)
+            output_path = job_dir / "clips" / "clip_00.mp4"
+            output_path.parent.mkdir()
+            output_path.write_bytes(b"valid-test-artifact")
+            (job_dir / "render.json").write_text(json.dumps({
+                "data": {"outputs": [{"clip": 0, "path": str(output_path), "duration": 31.0}]}
+            }))
+            (job_dir / "score.json").write_text(json.dumps({
+                "data": {"clips": [{"start": 12.5, "end": 43.5, "title": "Hook", "transcript": "A real hook", "score": 88}]}
+            }))
+
+            with (
+                patch.object(main, "PROCESSING_ROOT", root),
+                patch.object(main, "PUBLIC_BASE_URL", "https://gateway.example.test"),
+                patch.object(main, "validate_media_artifact", return_value=(True, "")),
+            ):
+                result = main.processing_results("proc_01", "pipeline_01")
+
+            output = result["render"]["outputs"][0]
+            self.assertEqual(output["path"], "https://gateway.example.test/v1/processing/jobs/proc_01/media/clip_00.mp4")
+            self.assertEqual(output["start"], 12.5)
+            self.assertEqual(output["end"], 43.5)
+            self.assertEqual(output["title"], "Hook")
+            self.assertEqual(output["transcript"], "A real hook")
 
     def test_creates_job_and_exposes_polling_shape_for_signed_gateway_source(self):
         with tempfile.TemporaryDirectory() as directory:

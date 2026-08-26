@@ -11,6 +11,18 @@ from ..jobs.queue import Stage, StageContext, StageError
 from ..models import registry, specs
 
 
+def _load_cached_embeddings(path: Path, expected_windows: int) -> np.ndarray | None:
+    """Read the mid-stage cache, deleting malformed data so the stage can rebuild it."""
+    try:
+        cached = np.load(path, allow_pickle=False)
+        if cached.ndim != 2 or len(cached) != expected_windows:
+            raise ValueError("unexpected embedding cache shape")
+        return cached
+    except (OSError, ValueError, EOFError, TypeError):
+        path.unlink(missing_ok=True)
+        return None
+
+
 class DiarizeStage(Stage):
     name = "diarize"
     schema_version = 2  # v2: refined affinity (v1 collapsed real two-host audio to one speaker)
@@ -49,9 +61,8 @@ class DiarizeStage(Stage):
         cache_path = ctx.job_dir / "diar_embeddings.npy"
         embeddings = None
         if cache_path.exists():
-            cached = np.load(cache_path)
-            if len(cached) == len(windows):
-                embeddings = cached
+            embeddings = _load_cached_embeddings(cache_path, expected_windows=len(windows))
+            if embeddings is not None:
                 ctx.emit(0.8, "Embeddings cached")
         if embeddings is None:
             ctx.emit(0.25, f"Embedding {len(windows)} speech windows…")

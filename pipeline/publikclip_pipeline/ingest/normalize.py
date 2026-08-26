@@ -30,9 +30,14 @@ class FfmpegError(Exception):
 
 
 def _run(args: list[str], timeout: float) -> subprocess.CompletedProcess:
-    proc = subprocess.run(
-        args, capture_output=True, text=True, timeout=timeout
-    )
+    try:
+        proc = subprocess.run(
+            args, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as err:
+        raise FfmpegError(f"{args[0]} timed out after {timeout:.0f}s") from err
+    except OSError as err:
+        raise FfmpegError(f"{args[0]} could not start: {err}") from err
     if proc.returncode != 0:
         tail = (proc.stderr or "")[-4000:]
         raise FfmpegError(f"{args[0]} failed ({proc.returncode}): {tail}")

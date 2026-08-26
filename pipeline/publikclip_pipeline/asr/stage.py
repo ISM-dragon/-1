@@ -1,16 +1,8 @@
-"""ASR + forced alignment via whisperX (BSD-2-Clause, pinned 3.8.6).
+"""WhisperX transcription and word alignment stage.
 
 Word-level timestamps are the substrate for everything downstream: captions,
 [laughs] tag placement, prosodic emphasis, long-pause detection, ducking,
 and sentence-snapped candidate boundaries.
-
-Model choice: large-v3-turbo int8 by default — near-parity accuracy with
-large-v3 at a fraction of the compute, which is what makes local-first
-viable on Apple Silicon. Silero VAD (MIT) instead of whisperX's bundled
-pyannote VAD checkpoint, whose license the research flagged as unresolved.
-
-The stage records wall-clock + realtime factor into its checkpoint — the M1
-gate's Apple Silicon benchmark comes from real runs, not synthetic tests.
 """
 
 from __future__ import annotations
@@ -29,12 +21,19 @@ BATCH_SIZE = 8
 
 
 def _point_caches_at_home() -> None:
-    """All model caches live under PUBLIKCLIP_HOME so 'delete the app data
-    dir' is a complete uninstall."""
+    """All model caches live under PUBLIKCLIP_HOME so app data is self-contained."""
     hf_home = config.models_dir() / "hf"
     hf_home.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_HOME", str(hf_home))
     os.environ.setdefault("TORCH_HOME", str(config.models_dir() / "torch"))
+
+
+def _audio_is_nonempty(path: Path) -> bool:
+    """A WAV header-only or zero-byte file is not a usable ASR input."""
+    try:
+        return path.is_file() and path.stat().st_size > 44
+    except OSError:
+        return False
 
 
 class AsrStage(Stage):
@@ -45,96 +44,113 @@ class AsrStage(Stage):
         ingest = ctx.prior.get("ingest") if ctx.prior else None
         if not ingest:
             raise StageError("ASR needs the ingest stage output.")
-        audio_path = Path(ingest["audio_path"])
-        if not audio_path.exists():
-            raise StageError("Analysis audio missing — re-run ingest.")
+        audio_path = Path(ingest.get("audio_path", ""))
+        if not _audio_is_nonempty(audio_path):
+            raise StageError("Analysis audio is missing or empty — re-run ingest.", "ASR_AUDIO_INVALID")
 
         _point_caches_at_home()
         ctx.emit(-1, "Loading speech model (downloads ~1.6 GB on first run)…")
         try:
             import torch  # deferred: heavy import
             import whisperx
-        except (ImportError, OSError) as err:
-            raise StageError(
-                "ASR model/runtime is unavailable. Install the speech-model dependencies and retry.",
-                "ASR_MODEL_UNAVAILABLE",
-            ) from err
+        except Exception as err:  # noqa: BLE001 - dependency/runtime setup failure
+            raise StageError(f"Speech model is unavailable: {err}", "ASR_MODEL_UNAVAILABLE") from err
 
         device = "cpu"  # ctranslate2 has no MPS backend; int8 CPU is the local path
-        t0 = time.monotonic()
+        model = None
+        align_model = None
         try:
-            model = whisperx.load_model(
-                ASR_MODEL, device, compute_type=COMPUTE_TYPE, vad_method="silero"
+            t0 = time.monotonic()
+            try:
+                model = whisperx.load_model(
+                    ASR_MODEL, device, compute_type=COMPUTE_TYPE, vad_method="silero"
+                )
+            except Exception as err:  # noqa: BLE001 — normalize model load/download failures
+                raise StageError(
+                    "ASR model could not be loaded. Check model availability and retry.",
+                    "ASR_MODEL_UNAVAILABLE",
+                ) from err
+            audio = whisperx.load_audio(str(audio_path))
+            duration = float(len(audio)) / 16000.0
+            if duration <= 0:
+                raise StageError("Analysis audio is empty — re-run ingest.", "ASR_AUDIO_INVALID")
+
+            ctx.emit(-1, "Transcribing…")
+            result = model.transcribe(audio, batch_size=BATCH_SIZE)
+            language = result.get("language", "en")
+            transcribe_secs = time.monotonic() - t0
+
+            # Free ASR weights before loading the alignment model — peak RSS matters.
+            del model
+            model = None
+            gc.collect()
+
+            ctx.emit(-1, "Aligning words…")
+            t1 = time.monotonic()
+            align_model, align_meta = whisperx.load_align_model(
+                language_code=language, device=device
             )
-        except Exception as err:  # noqa: BLE001 — normalize model download/load failures
-            raise StageError(
-                "ASR model could not be loaded. Check model availability and retry.",
-                "ASR_MODEL_UNAVAILABLE",
-            ) from err
-        audio = whisperx.load_audio(str(audio_path))
-        duration = float(len(audio)) / 16000.0
-
-        ctx.emit(-1, "Transcribing…")
-        result = model.transcribe(audio, batch_size=BATCH_SIZE)
-        language = result.get("language", "en")
-        transcribe_secs = time.monotonic() - t0
-
-        # Free ASR weights before loading the alignment model — peak RSS on a
-        # 24 GB machine matters more than reload cost.
-        del model
-        gc.collect()
-
-        ctx.emit(-1, "Aligning words…")
-        t1 = time.monotonic()
-        align_model, align_meta = whisperx.load_align_model(language_code=language, device=device)
-        aligned = whisperx.align(
-            result["segments"], align_model, align_meta, audio, device,
-            return_char_alignments=False,
-        )
-        align_secs = time.monotonic() - t1
-        del align_model
-        gc.collect()
-        if hasattr(torch, "mps") and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-
-        segments = []
-        for seg in aligned["segments"]:
-            words = [
-                {
-                    "word": w.get("word", "").strip(),
-                    "start": round(float(w["start"]), 3),
-                    "end": round(float(w["end"]), 3),
-                    "score": round(float(w.get("score", 0.0)), 3),
-                }
-                for w in seg.get("words", [])
-                if "start" in w and "end" in w
-            ]
-            segments.append(
-                {
-                    "start": round(float(seg["start"]), 3),
-                    "end": round(float(seg["end"]), 3),
-                    "text": seg.get("text", "").strip(),
-                    "words": words,
-                }
+            aligned = whisperx.align(
+                result["segments"], align_model, align_meta, audio, device,
+                return_char_alignments=False,
             )
+            align_secs = time.monotonic() - t1
+            del align_model
+            align_model = None
+            gc.collect()
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
 
-        word_count = sum(len(s["words"]) for s in segments)
-        if word_count == 0:
-            raise StageError(
-                "No speech was found in this video. publikclip needs dialogue to find moments."
-            )
+            segments = []
+            for seg in aligned["segments"]:
+                words = [
+                    {
+                        "word": w.get("word", "").strip(),
+                        "start": round(float(w["start"]), 3),
+                        "end": round(float(w["end"]), 3),
+                        "score": round(float(w.get("score", 0.0)), 3),
+                    }
+                    for w in seg.get("words", [])
+                    if "start" in w and "end" in w
+                ]
+                segments.append(
+                    {
+                        "start": round(float(seg["start"]), 3),
+                        "end": round(float(seg["end"]), 3),
+                        "text": seg.get("text", "").strip(),
+                        "words": words,
+                    }
+                )
 
-        total = transcribe_secs + align_secs
-        return {
-            "language": language,
-            "model": ASR_MODEL,
-            "compute_type": COMPUTE_TYPE,
-            "segments": segments,
-            "word_count": word_count,
-            "benchmark": {
-                "audio_sec": round(duration, 1),
-                "transcribe_sec": round(transcribe_secs, 1),
-                "align_sec": round(align_secs, 1),
-                "realtime_factor": round(duration / total, 2) if total > 0 else None,
-            },
-        }
+            word_count = sum(len(s["words"]) for s in segments)
+            if word_count == 0:
+                raise StageError(
+                    "No speech was found in this video. publikclip needs dialogue to find moments."
+                )
+
+            total = transcribe_secs + align_secs
+            return {
+                "language": language,
+                "model": ASR_MODEL,
+                "compute_type": COMPUTE_TYPE,
+                "segments": segments,
+                "word_count": word_count,
+                "benchmark": {
+                    "audio_sec": round(duration, 1),
+                    "transcribe_sec": round(transcribe_secs, 1),
+                    "align_sec": round(align_secs, 1),
+                    "realtime_factor": round(duration / total, 2) if total > 0 else None,
+                },
+            }
+        except StageError:
+            raise
+        except (KeyError, TypeError, ValueError) as err:
+            raise StageError(f"Speech recognition returned invalid data: {err}", "ASR_RESULT_INVALID") from err
+        except Exception as err:  # noqa: BLE001 - model/runtime failure
+            raise StageError(f"Speech recognition failed: {err}", "ASR_FAILED") from err
+        finally:
+            if model is not None:
+                del model
+            if align_model is not None:
+                del align_model
+            gc.collect()
