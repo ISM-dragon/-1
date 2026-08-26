@@ -4,7 +4,7 @@
 **المستودع:** `ISM-dragon/-1`
 **تاريخ التسليم:** 2026-08-26
 **الحالة:** **FINAL ACCEPTANCE BLOCKED — evidence and build artifacts committed for internal QA only**
-**آخر commit مرفوع:** `2e7d5fa` — `test(android): pin robolectric sdk for api contract`
+**آخر commit مرفوع:** `b5849db` — `docs: record android artifact and final fixes [skip ci]`
 
 ## القرار المعماري
 
@@ -97,7 +97,8 @@
 | `android/app/src/test/java/com/example/ApiContractClientTest.kt` | تثبيت Robolectric على SDK 34 لتجنب اختيار SDK غير متوفر في CI. |
 | `MANUS_HANDOFF.md` | تحديث الأدلة، أرقام التشغيلات، الـblockers، وartifact الأخير. |
 
-**Commits المرفوعة:** `0262537`, `3be5cd0`, `57aca4c`, `fe71b18`, `8e4825d`, `8596bed`, `2e7d5fa`. تم rebase آمن فوق تحديثات `origin/main` دون force push، والفرع المحلي متطابق مع `origin/main`.
+**Commits المرفوعة:** `0262537`, `3be5cd0`, `57aca4c`, `fe71b18`, `8e4825d`, `8596bed`, `2e7d5fa`, `b5849db`.
+تم rebase آمن فوق تحديثات `origin/main` دون force push، والفرع المحلي متطابق مع `origin/main`.
 
 ## ملاحظة عن الوثائق
 
