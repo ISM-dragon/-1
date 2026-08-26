@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from gateway.main import validate_public_source, validate_uploaded_media
 from fastapi import HTTPException
+from gateway.main import validate_public_source, validate_uploaded_media
 
 
 class GatewaySafetyTests(unittest.TestCase):
@@ -22,8 +24,10 @@ class GatewaySafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "corrupted.mp4"
             path.write_bytes(b"not a video")
-            with self.assertRaises(HTTPException) as context:
-                validate_uploaded_media(path)
+            probe_failure = SimpleNamespace(returncode=1, stdout="", stderr="invalid media")
+            with patch("gateway.main.subprocess.run", return_value=probe_failure):
+                with self.assertRaises(HTTPException) as context:
+                    validate_uploaded_media(path)
             self.assertEqual(context.exception.status_code, 422)
             self.assertIn("MEDIA_INVALID", str(context.exception.detail))
 

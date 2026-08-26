@@ -48,12 +48,16 @@ class ProcessingGatewayClient(
         captionTheme: String,
         mode: String,
         onProgress: suspend (Progress) -> Unit,
-        onJobCreated: suspend (String) -> Unit = {}
+        onJobCreated: suspend (String) -> Unit = {},
+        existingGatewayJobId: String? = null,
+        idempotencyKey: String = UUID.randomUUID().toString()
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
-            val source = resolveRemoteSource(baseUrl, config.token, sourceUri, onProgress)
-            val gatewayJobId = start(baseUrl, config.token, source, captionTheme, mode, UUID.randomUUID().toString())
+            val gatewayJobId = existingGatewayJobId?.trim()?.takeIf { it.isNotBlank() } ?: run {
+                val source = resolveRemoteSource(baseUrl, config.token, sourceUri, onProgress)
+                start(baseUrl, config.token, source, captionTheme, mode, idempotencyKey)
+            }
             onJobCreated(gatewayJobId)
             var lastStatus = "queued"
             var completedResult: RemoteResult? = null

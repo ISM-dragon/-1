@@ -10,11 +10,10 @@ class ProcessingEngineTest {
     private val engine = ProcessingEngine()
 
     @Test
-    fun `blank gateway routes a local file to local pipeline`() {
+    fun `blank gateway is rejected because Android is remote only`() {
         val result = engine.plan("content://media/video/42", GatewayConfig())
 
-        assertTrue(result.isSuccess)
-        assertEquals(ProcessingEngine.Route.LOCAL_PIPELINE, result.getOrThrow().route)
+        assertTrue(result.isFailure)
     }
 
     @Test
@@ -30,19 +29,8 @@ class ProcessingEngineTest {
     }
 
     @Test
-    fun `remote https source routes to gateway`() {
-        val result = engine.plan(
-            "https://www.youtube.com/watch?v=example",
-            GatewayConfig(baseUrl = "https://gateway.example.com", token = "secret")
-        )
-
-        assertTrue(result.isSuccess)
-        assertEquals(ProcessingEngine.Route.REMOTE_GATEWAY, result.getOrThrow().route)
-    }
-
-    @Test
-    fun `remote source is rejected without a gateway`() {
-        val result = engine.plan("https://example.com/video.mp4", GatewayConfig())
+    fun `invalid source is rejected before work is scheduled`() {
+        val result = engine.plan("https://example.com/video.mp4", GatewayConfig(baseUrl = "https://gateway.example.com"))
 
         assertTrue(result.isFailure)
     }
