@@ -126,3 +126,31 @@ def test_missing_job_has_safe_error_code():
     with pytest.raises(EngineError) as error:
         engine.get_job_status("missing")
     assert error.value.code == "JOB_NOT_FOUND"
+
+
+
+def test_direct_lifecycle_aliases_and_durable_progress():
+    stage = CountingStage()
+    engine = PipelineEngine(lambda: [stage])
+    job = engine.create_job("/tmp/input.mp4")
+
+    result = engine.start_job(job.id)
+
+    assert engine.status(job.id) == engine.get_job_status(job.id)
+    assert engine.results(job.id) == engine.get_job_results(job.id)
+    assert engine.progress(job.id)["fraction"] == 1.0
+    assert queue.get_progress(job.id)["stage"] == "counting"
+    assert engine.render(job.id).job_id == result.job_id
+
+
+def test_status_and_progress_use_public_stage_names():
+    engine = PipelineEngine(lambda: [])
+    job = engine.create_job("/tmp/input.mp4")
+    queue.record_progress(job.id, "diarize", 0.5, "working")
+
+    status = engine.status(job.id)
+    progress = engine.progress(job.id)
+
+    assert status.stage == "diarization"
+    assert progress["stage"] == "diarization"
+    assert progress["fraction"] == 0.0625

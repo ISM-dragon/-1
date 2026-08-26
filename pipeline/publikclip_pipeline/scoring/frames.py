@@ -33,15 +33,20 @@ def extract_frames(media_path: str, times: list[float], tmp_dir: Path) -> list[b
     frames: list[bytes] = []
     for i, t in enumerate(times):
         out = tmp_dir / f"frame_{i:02d}.jpg"
-        proc = subprocess.run(
-            [
-                ffmpeg_bin.ffmpeg(), "-y", "-ss", f"{t:.2f}", "-i", media_path,
-                "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2",
-                "-q:v", "6", str(out),
-            ],
-            capture_output=True, timeout=120,
-        )
-        if proc.returncode == 0 and out.exists():
-            frames.append(out.read_bytes())
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg_bin.ffmpeg(), "-y", "-ss", f"{t:.2f}", "-i", media_path,
+                    "-frames:v", "1", "-vf", f"scale={FRAME_WIDTH}:-2",
+                    "-q:v", "6", str(out),
+                ],
+                capture_output=True, timeout=120,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        try:
+            if proc.returncode == 0 and out.exists():
+                frames.append(out.read_bytes())
+        finally:
             out.unlink(missing_ok=True)
     return frames

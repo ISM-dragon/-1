@@ -243,7 +243,7 @@ Python processing plane
 | الأمر | النتيجة |
 |---|---|
 | `python3 -m pytest gateway -q` | **38 passed, 1 skipped** لاختبار الأحجام الكبيرة، مع 4 deprecation warnings من FastAPI `on_event` |
-| `cd pipeline && python3 -m pytest tests -q` | **97 passed** |
+| `cd pipeline && python3 -m pytest tests -q` | **97 passed**؛ suite الجذر الكاملة أعادت **154 passed, 1 skipped** |
 | `cd app && npm run typecheck` | **نجح** |
 | `cd app && npm run build` | **نجح**؛ Vite أنتج bundle production |
 | `cd android && ./gradlew :app:testDebugUnitTest --no-daemon` | **لم يبدأ الاختبار**؛ Gradle نجح في تنزيل نفسه لكنه توقف لأن Android SDK غير موجود (`SDK location not found`) |

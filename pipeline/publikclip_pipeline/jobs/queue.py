@@ -39,12 +39,19 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS stage_runs (
     job_id TEXT NOT NULL,
     stage TEXT NOT NULL,
-    status TEXT NOT NULL,               -- running|done|failed
+    status TEXT NOT NULL,               -- running|done|failed|cancelled
     schema_version INTEGER NOT NULL,
     started_at REAL NOT NULL,
     finished_at REAL,
     error TEXT,
     PRIMARY KEY (job_id, stage)
+);
+CREATE TABLE IF NOT EXISTS job_progress (
+    job_id TEXT PRIMARY KEY,
+    stage TEXT,
+    fraction REAL NOT NULL,
+    message TEXT NOT NULL,
+    updated_at REAL NOT NULL
 );
 """
 
@@ -232,7 +239,9 @@ def read_checkpoint(job: Job, stage: str, schema_version: int) -> dict | None:
         envelope = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    if envelope.get("schema_version") != schema_version:
+    if not isinstance(envelope, dict):
+        return None
+    if envelope.get("stage") != stage or envelope.get("schema_version") != schema_version:
         return None
     data = envelope.get("data")
     return data if isinstance(data, dict) else None
@@ -258,6 +267,34 @@ def stage_statuses(job_id: str) -> dict[str, str]:
             "SELECT stage, status FROM stage_runs WHERE job_id = ?", (job_id,)
         ).fetchall()
     return {r["stage"]: r["status"] for r in rows}
+
+
+def record_progress(job_id: str, stage: str, fraction: float, message: str) -> None:
+    """Persist the latest progress event for polling and restart diagnostics."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO job_progress (job_id, stage, fraction, message, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET "
+            "stage=excluded.stage, fraction=excluded.fraction, message=excluded.message, "
+            "updated_at=excluded.updated_at",
+            (job_id, stage or None, float(fraction), message, time.time()),
+        )
+
+
+def get_progress(job_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT stage, fraction, message, updated_at FROM job_progress WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "stage": row["stage"],
+        "fraction": row["fraction"],
+        "message": row["message"],
+        "updated_at": row["updated_at"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -310,24 +347,30 @@ class Stage:
 
 def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[str, dict]:
     """Run stages in order, skipping fresh checkpoints. Returns stage→data."""
+    def emit(stage: str, fraction: float, message: str) -> None:
+        record_progress(job.id, stage, fraction, message)
+        progress(stage, fraction, message)
+
     if is_cancel_requested(job.id):
         set_job_status(job.id, "cancelled", "Job cancellation was requested.", error_code="JOB_CANCELLED", message="Cancellation requested")
+        emit("", 0.0, "Cancellation requested")
         raise StageError("Job cancellation was requested.", "JOB_CANCELLED")
     settings = config.Settings.from_json(json.loads(job.settings_json))
-    ctx = StageContext(job=job, settings=settings, progress=progress)
+    ctx = StageContext(job=job, settings=settings, progress=emit)
     results: dict[str, dict] = {}
     set_job_status(job.id, "running")
     for stage in stages:
         if is_cancel_requested(job.id):
             set_job_status(job.id, "cancelled", "Job cancellation was requested.", error_code="JOB_CANCELLED", message="Cancellation requested")
+            emit(stage.name, 0.0, "Cancellation requested")
             raise StageError("Job cancellation was requested.", "JOB_CANCELLED")
         cached = read_checkpoint(job, stage.name, stage.schema_version)
         if cached is not None and stage.artifacts_ok(ctx, cached):
             results[stage.name] = cached
-            progress(stage.name, 1.0, "cached")
+            emit(stage.name, 1.0, "cached")
             continue
         mark_stage(job.id, stage.name, "running", stage.schema_version)
-        progress(stage.name, -1.0, "starting")
+        emit(stage.name, -1.0, "starting")
         try:
             data = stage.run(_ctx_for(ctx, stage.name, results))
         except StageError as err:
@@ -347,7 +390,7 @@ def run_stages(job: Job, stages: Iterable[Stage], progress: ProgressFn) -> dict[
             raise
         write_checkpoint(job, stage.name, stage.schema_version, data)
         results[stage.name] = data
-        progress(stage.name, 1.0, "done")
+        emit(stage.name, 1.0, "done")
     set_job_status(job.id, "done", None)
     return results
 
