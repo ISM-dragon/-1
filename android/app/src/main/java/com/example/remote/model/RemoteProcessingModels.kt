@@ -30,7 +30,15 @@ data class GatewayError(
     val httpCode: Int? = null
 ) : Exception(message)
 
-data class GatewayConfig(val baseUrl: String, val token: String)
+data class GatewayConfig(
+    val baseUrl: String,
+    val token: String,
+    val llm: String = "gemini"
+) {
+    init {
+        require(llm in setOf("gemini", "ollama")) { "مزود الذكاء الاصطناعي غير مدعوم" }
+    }
+}
 
 data class GatewayHealth(
     val ok: Boolean,
