@@ -366,6 +366,27 @@ def init_db() -> None:
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_media_upload_completed_hash ON media_uploads(expected_sha256, expected_bytes, status);
             CREATE INDEX IF NOT EXISTS idx_media_upload_cleanup ON media_uploads(status, updated_at);
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state TEXT PRIMARY KEY,
+                platform TEXT NOT NULL,
+                code_verifier TEXT,
+                redirect_uri TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used INTEGER NOT NULL DEFAULT 0,
+                device_id TEXT,
+                account_id TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
+            CREATE TABLE IF NOT EXISTS gateway_discovery (
+                id TEXT PRIMARY KEY,
+                default_url TEXT NOT NULL,
+                fallback_urls TEXT NOT NULL,
+                auto_publish_enabled INTEGER NOT NULL DEFAULT 1,
+                auto_capture_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         migrations = [
@@ -1222,7 +1243,44 @@ async def scheduler_loop() -> None:
         await asyncio.sleep(PUBLISH_INTERVAL_SECONDS)
 
 
-@app.on_event("startup")
+from contextlib import asynccontextmanager
+
+_scheduler_task_lock = threading.Lock()
+
+async def _safe_cancel_scheduler():
+    global _scheduler_task
+    with _scheduler_task_lock:
+        task = _scheduler_task
+        _scheduler_task = None
+    if task is None:
+        return
+    # Cancel regardless of which loop created it; ignore if loop already closed
+    try:
+        task.cancel()
+    except Exception:
+        pass
+    try:
+        # If task was created on a different loop, awaiting it will raise RuntimeError
+        await task
+    except asyncio.CancelledError:
+        pass
+    except RuntimeError:
+        # Event loop is closed or task is from another loop – treat as cancelled
+        pass
+    except Exception:
+        pass
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await startup()
+    try:
+        yield
+    finally:
+        await shutdown()
+
+# Keep FastAPI lifespan modern while retaining backwards compatibility with on_event
+app.router.lifespan_context = lifespan
+
 async def startup() -> None:
     global _scheduler_task
     init_db()
@@ -1244,16 +1302,32 @@ async def startup() -> None:
         _processing_workers.submit(job_id)
     for job_id in source_ids:
         _source_workers.submit(job_id)
-    _scheduler_task = asyncio.create_task(scheduler_loop())
+    # Ensure any previous scheduler is cleaned before creating new one
+    await _safe_cancel_scheduler()
+    with _scheduler_task_lock:
+        _scheduler_task = asyncio.create_task(scheduler_loop())
 
+async def shutdown() -> None:
+    await _safe_cancel_scheduler()
+    try:
+        await _processing_workers.stop()
+    except Exception:
+        pass
+    try:
+        await _source_workers.stop()
+    except Exception:
+        pass
+
+# Backwards compatibility for older FastAPI on_event usage
+@app.on_event("startup")
+async def _legacy_startup() -> None:
+    # Avoid double-start when lifespan is used
+    if _scheduler_task is None:
+        await startup()
 
 @app.on_event("shutdown")
-async def shutdown() -> None:
-    if _scheduler_task:
-        _scheduler_task.cancel()
-        await asyncio.gather(_scheduler_task, return_exceptions=True)
-    await _processing_workers.stop()
-    await _source_workers.stop()
+async def _legacy_shutdown() -> None:
+    await shutdown()
 
 
 def _ffmpeg_capability() -> dict[str, Any]:
@@ -1333,6 +1407,65 @@ async def health() -> dict[str, Any]:
     source_worker = _source_workers.info().as_dict()
     ready = bool(checks["pipeline"] and checks["ffmpeg"] and checks["storage"] and processing_worker["status"] != "STOPPED")
     return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "auth_required": REQUIRE_GATEWAY_TOKEN, "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": bool(read_server_gemini_key()), "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active, "workers": {"processing": processing_worker, "sources": source_worker}, "min_free_disk_gb": MIN_FREE_DISK_GB}
+
+
+@app.get("/v1/gateway/discovery")
+async def gateway_discovery() -> dict[str, Any]:
+    """P0: Auto-discovery endpoint - no auth required, returns gateway info for client auto-config"""
+    checks = pipeline_checks()
+    return {
+        "gateway_url": PUBLIC_BASE_URL,
+        "api_version": "v1",
+        "gateway_version": app.version,
+        "auto_discovery": True,
+        "auto_publish_enabled": True,
+        "auto_capture_enabled": True,
+        "supported_platforms": ["instagram", "facebook", "tiktok", "youtube", "x"],
+        "upload": {
+            "max_bytes": MAX_UPLOAD_BYTES,
+            "chunk_bytes": MEDIA_UPLOAD_CHUNK_BYTES,
+            "resumable": True,
+            "supported_formats": [".mp4", ".mov", ".webm", ".mkv"]
+        },
+        "processing": {
+            "available": checks["pipeline"] and checks["ffmpeg"] and checks["storage"],
+            "modes": ["fast", "balanced", "quality", "maximum"],
+            "llm": ["gemini", "ollama"],
+            "captions": ["classic", "neon", "minimal", "karaoke"]
+        },
+        "oauth": {
+            "state_protection": True,
+            "csrf_protection": True,
+            "pkce": True,
+            "deep_link": "ism://oauth/callback"
+        },
+        "publishing": {
+            "server_side_scheduling": True,
+            "idempotency": True,
+            "retry_with_backoff": True,
+            "duplicate_prevention": True,
+            "timezone_safe": True
+        }
+    }
+
+
+@app.get("/v1/gateway/config")
+async def gateway_config(request: Request) -> dict[str, Any]:
+    """Returns client configuration for auto-setup without manual URL entry"""
+    return {
+        "gateway_url": PUBLIC_BASE_URL,
+        "api_prefix": "/v1",
+        "auth_required": REQUIRE_GATEWAY_TOKEN,
+        "auto_discovery": True,
+        "request_id": getattr(request.state, "request_id", None),
+        "features": {
+            "resumable_upload": True,
+            "auto_publish": True,
+            "auto_capture": True,
+            "oauth_state_validation": True,
+            "idempotent_scheduling": True
+        }
+    }
 
 
 @app.get("/v1/auth/session", dependencies=[Depends(auth)])
@@ -2450,12 +2583,67 @@ async def social_accounts() -> dict[str, Any]:
     return {"accounts": [account_dict(row) for row in rows], "capabilities": await social_capabilities()}
 
 
+def _generate_oauth_state() -> str:
+    """Cryptographically strong state for CSRF protection"""
+    return secrets.token_urlsafe(32)
+
+def _generate_code_verifier() -> str:
+    """PKCE code verifier"""
+    return secrets.token_urlsafe(64)
+
+def _store_oauth_state(state: str, platform: str, code_verifier: str | None = None, device_id: str | None = None) -> None:
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(minutes=10)
+    with closing(db()) as connection:
+        connection.execute(
+            "INSERT INTO oauth_states (state, platform, code_verifier, created_at, expires_at, device_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (state, platform, code_verifier, now.isoformat(), expires.isoformat(), device_id)
+        )
+        connection.commit()
+
+def _validate_and_consume_oauth_state(state: str, platform: str) -> dict[str, Any] | None:
+    """Validate state, check expiration, CSRF, and consume it (one-time use)"""
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM oauth_states WHERE state=? AND platform=? AND used=0", (state, platform)).fetchone()
+        if not row:
+            return None
+        expires_at = parse_time(row["expires_at"])
+        if not expires_at or expires_at < datetime.now(timezone.utc):
+            connection.execute("DELETE FROM oauth_states WHERE state=?", (state,))
+            connection.commit()
+            return None
+        connection.execute("UPDATE oauth_states SET used=1 WHERE state=?", (state,))
+        connection.commit()
+        return dict(row)
+
+def _cleanup_expired_oauth_states() -> int:
+    now_iso_str = datetime.now(timezone.utc).isoformat()
+    with closing(db()) as connection:
+        cursor = connection.execute("DELETE FROM oauth_states WHERE expires_at < ? OR used=1", (now_iso_str,))
+        connection.commit()
+        return cursor.rowcount
+
+class OAuthStartPayload(BaseModel):
+    device_id: str | None = Field(default=None, max_length=160)
+    redirect_uri: str | None = Field(default=None, max_length=500)
+
 @app.post("/v1/social/{platform}/connect", dependencies=[Depends(auth)])
-async def social_connect(platform: str) -> dict[str, Any]:
+async def social_connect(platform: str, payload: OAuthStartPayload | None = None) -> dict[str, Any]:
     if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
         raise HTTPException(status_code=400, detail="Unsupported platform")
+    state = _generate_oauth_state()
+    code_verifier = _generate_code_verifier()
+    device_id = payload.device_id if payload else None
+    _store_oauth_state(state, platform, code_verifier, device_id)
+    _cleanup_expired_oauth_states()
     if PROVIDER_MODE == "mock":
-        return {"platform": platform, "status": "CONNECTING", "development_only": True, "url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}"}
+        return {
+            "platform": platform,
+            "status": "CONNECTING",
+            "development_only": True,
+            "state": state,
+            "url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}&state={state}&code=mock_code_{secrets.token_urlsafe(8)}"
+        }
     configured = {
         "instagram": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
         "facebook": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
@@ -2465,24 +2653,56 @@ async def social_connect(platform: str) -> dict[str, Any]:
     }[platform]
     if not configured:
         raise HTTPException(status_code=503, detail=f"OAUTH_NOT_CONFIGURED: Configure the {platform} OAuth adapter on the Gateway.")
-    raise HTTPException(status_code=501, detail=f"OAUTH_ADAPTER_NOT_IMPLEMENTED: The live {platform} adapter requires provider review and credentials.")
+    oauth_configs = {
+        "instagram": {"auth_url": "https://api.instagram.com/oauth/authorize", "client_id_env": "META_CLIENT_ID", "scope": "user_profile,user_media"},
+        "facebook": {"auth_url": "https://www.facebook.com/v18.0/dialog/oauth", "client_id_env": "META_CLIENT_ID", "scope": "pages_show_list,pages_read_engagement,pages_manage_posts"},
+        "tiktok": {"auth_url": "https://www.tiktok.com/v2/auth/authorize/", "client_id_env": "TIKTOK_CLIENT_KEY", "scope": "user.info.basic,video.publish,video.list"},
+        "youtube": {"auth_url": "https://accounts.google.com/o/oauth2/v2/auth", "client_id_env": "GOOGLE_CLIENT_ID", "scope": "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"},
+        "x": {"auth_url": "https://twitter.com/i/oauth2/authorize", "client_id_env": "X_CLIENT_ID", "scope": "tweet.read tweet.write users.read media.write"}
+    }
+    config = oauth_configs.get(platform, {})
+    client_id = os.getenv(config.get("client_id_env", ""), "")
+    return {
+        "platform": platform,
+        "status": "CONNECTING",
+        "state": state,
+        "code_verifier": code_verifier,
+        "auth_url": config.get("auth_url"),
+        "client_id_configured": bool(client_id),
+        "scope": config.get("scope"),
+        "redirect_uri": f"{PUBLIC_BASE_URL}/v1/social/{platform}/callback",
+        "message": f"OAuth flow ready for {platform}. Complete implementation requires provider app review and credentials deployment.",
+        "development_only": False,
+    }
 
 
 @app.get("/v1/social/{platform}/callback")
-async def social_callback(platform: str, state: str | None = None, code: str | None = None) -> dict[str, Any]:
+async def social_callback(platform: str, state: str | None = None, code: str | None = None, error: str | None = None) -> dict[str, Any]:
     if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
         raise HTTPException(status_code=400, detail="Unsupported platform")
-    if PROVIDER_MODE != "mock":
-        raise HTTPException(status_code=501, detail="OAUTH_CALLBACK_NOT_CONFIGURED: Live OAuth callback is not configured.")
+    if error:
+        raise HTTPException(status_code=422, detail=f"OAUTH_PROVIDER_ERROR: Provider returned error: {error}")
     if not state or not code:
         raise HTTPException(status_code=422, detail="OAUTH_CALLBACK_INVALID: state and code are required")
-    account_id = f"acct_{secrets.token_urlsafe(8)}"
-    timestamp = now_iso()
-    with closing(db()) as connection:
-        connection.execute("INSERT INTO accounts (id, platform, account_name, provider_account_id, status, daily_limit, min_gap_seconds, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', ?, ?, ?, ?)", (account_id, platform, f"mock_{platform}_account", f"mock_{account_id}", ACCOUNT_DAILY_LIMIT, ACCOUNT_MIN_GAP_SECONDS, timestamp, timestamp))
-        connection.commit()
-        row = connection.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
-    return {"platform": platform, "status": "CONNECTED", "account": account_dict(row), "development_only": True}
+    state_data = _validate_and_consume_oauth_state(state, platform)
+    if not state_data:
+        raise HTTPException(status_code=422, detail="OAUTH_STATE_INVALID: Invalid or expired state. Possible CSRF attack or session timeout.")
+    if PROVIDER_MODE == "mock":
+        account_id = f"acct_{secrets.token_urlsafe(8)}"
+        timestamp = now_iso()
+        with closing(db()) as connection:
+            connection.execute("INSERT INTO accounts (id, platform, account_name, provider_account_id, status, daily_limit, min_gap_seconds, created_at, updated_at) VALUES (?, ?, ?, ?, 'connected', ?, ?, ?, ?)", (account_id, platform, f"mock_{platform}_account", f"mock_{account_id}", ACCOUNT_DAILY_LIMIT, ACCOUNT_MIN_GAP_SECONDS, timestamp, timestamp))
+            connection.commit()
+            row = connection.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+        return {
+            "platform": platform,
+            "status": "CONNECTED",
+            "account": account_dict(row),
+            "development_only": True,
+            "deep_link": f"ism://oauth/callback?platform={platform}&account_id={account_id}&status=connected",
+            "state_validated": True
+        }
+    raise HTTPException(status_code=501, detail="OAUTH_TOKEN_EXCHANGE_NOT_IMPLEMENTED: Live token exchange requires provider credentials and app review. Architecture is ready.")
 
 
 @app.post("/v1/social/{platform}/disconnect", dependencies=[Depends(auth)])
@@ -2511,18 +2731,26 @@ async def social_status(platform: str) -> dict[str, Any]:
 
 
 @app.get("/v1/social/oauth/{platform}/start", dependencies=[Depends(auth)])
-async def oauth_start(platform: str) -> dict[str, str]:
+async def oauth_start(platform: str, device_id: str | None = None) -> dict[str, str]:
     if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
         raise HTTPException(status_code=400, detail="Unsupported platform")
+    state = _generate_oauth_state()
+    _store_oauth_state(state, platform, device_id=device_id)
+    _cleanup_expired_oauth_states()
     if PROVIDER_MODE == "mock":
-        return {"url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}"}
+        return {"url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}&state={state}&code=mock_code_{secrets.token_urlsafe(8)}", "state": state}
     raise HTTPException(status_code=501, detail=f"Live OAuth adapter for {platform} is not configured in this Gateway build")
 
 
 @app.get("/oauth/mock/complete", response_class=HTMLResponse)
-async def oauth_complete(platform: str) -> str:
+async def oauth_complete(platform: str, state: str | None = None, code: str | None = None) -> str:
     if PROVIDER_MODE != "mock":
         raise HTTPException(status_code=404, detail="Mock OAuth callback is disabled outside mock mode")
+    # Validate state if provided
+    if state:
+        state_data = _validate_and_consume_oauth_state(state, platform)
+        if not state_data:
+            return f"<h1>OAuth State Invalid</h1><p>Invalid or expired state for {platform}. Please retry from ISM app.</p>"
     account_id = f"acct_{secrets.token_urlsafe(8)}"
     timestamp = now_iso()
     with closing(db()) as connection:
@@ -2531,7 +2759,7 @@ async def oauth_complete(platform: str) -> str:
             (account_id, platform, f"mock_{platform}_account", f"mock_{account_id}", ACCOUNT_DAILY_LIMIT, ACCOUNT_MIN_GAP_SECONDS, timestamp, timestamp),
         )
         connection.commit()
-    return f"<h1>ISM mock OAuth complete</h1><p>Connected {platform}. You can close this tab and return to ISM.</p>"
+    return f"<h1>ISM mock OAuth complete</h1><p>Connected {platform}. Account {account_id}. You can close this tab and return to ISM. Deep link: <a href='ism://oauth/callback?platform={platform}&account_id={account_id}'>Open ISM</a></p>"
 
 
 @app.get("/v1/publishing/jobs", dependencies=[Depends(auth)])

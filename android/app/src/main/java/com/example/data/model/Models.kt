@@ -199,10 +199,10 @@ enum class AiProviderType(
     val brandColorHex: String = "#8B5CF6",
     val unitCurrency: String = "$"
 ) {
-    GEMINI("Google Gemini AI", "gemini-2.5-flash", "AIzaSy...", "https://aistudio.google.com/app/apikey", "#38BDF8", "Quota"),
-    OPENAI("OpenAI (GPT-4o)", "gpt-4o-mini", "sk-proj-...", "https://platform.openai.com/api-keys", "#10B981", "$"),
-    ANTHROPIC("Anthropic (Claude)", "claude-3-5-sonnet-20241022", "sk-ant-...", "https://console.anthropic.com/settings/keys", "#D97706", "$"),
-    OPENROUTER("OpenRouter (Multi-LLM)", "meta-llama/llama-3.3-70b-instruct", "sk-or-v1-...", "https://openrouter.ai/keys", "#6366F1", "$"),
+    GEMINI("Google Gemini AI", "gemini-2.5-flash", "YOUR_GEMINI_KEY_HERE", "https://aistudio.google.com/app/apikey", "#38BDF8", "Quota"),
+    OPENAI("OpenAI (GPT-4o)", "gpt-4o-mini", "YOUR_OPENAI_KEY_HERE", "https://platform.openai.com/api-keys", "#10B981", "$"),
+    ANTHROPIC("Anthropic (Claude)", "claude-3-5-sonnet-20241022", "YOUR_ANTHROPIC_KEY_HERE", "https://console.anthropic.com/settings/keys", "#D97706", "$"),
+    OPENROUTER("OpenRouter (Multi-LLM)", "meta-llama/llama-3.3-70b-instruct", "YOUR_OPENROUTER_KEY_HERE", "https://openrouter.ai/keys", "#6366F1", "$"),
     GROQ("Groq (Ultra-Fast)", "llama-3.3-70b-versatile", "gsk_...", "https://console.groq.com/keys", "#F59E0B", "Reqs"),
     MISTRAL("Mistral AI", "mistral-large-latest", "...", "https://console.mistral.ai/api-keys/", "#EF4444", "$"),
     CUSTOM("Custom Endpoint", "default", "key_...", "", "#94A3B8", "Units")

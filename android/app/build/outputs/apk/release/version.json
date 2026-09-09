@@ -1,0 +1,22 @@
+{
+  "versionCode": 8,
+  "versionName": "1.0.0-free",
+  "applicationId": "com.aistudio.opuspro.apk",
+  "buildTime": "2026-09-09T12:00:00Z",
+  "freeGateway": true,
+  "freeGateways": [
+    "https://ism-free-gateway.fly.dev",
+    "https://ism-free-gateway.onrender.com"
+  ],
+  "features": [
+    "auto-gateway-discovery",
+    "free-gateway",
+    "beautiful-ui",
+    "onboarding",
+    "material3",
+    "offline-recovery",
+    "resumable-upload"
+  ],
+  "apkSize": "66KB minimal, 55MB full",
+  "notes": "Minimal APK is placeholder, real build via GitHub Actions CI"
+}

@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: ism-free-gateway
+    env: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PUBLIC_BASE_URL
+        value: https://ism-free-gateway.onrender.com
+      - key: REQUIRE_GATEWAY_TOKEN
+        value: false
+      - key: FREE_MODE
+        value: true
+      - key: PROVIDER_MODE
+        value: mock
+      - key: PYTHON_VERSION
+        value: 3.12.0
+    healthCheckPath: /health
+    autoDeploy: false
+
+# Render free tier:
+# - 750 hours/month free
+# - Spins down after 15 min inactivity
+# - 512MB RAM, 0.1 CPU
+# - Perfect for free gateway demo

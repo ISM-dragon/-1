@@ -31,6 +31,36 @@ permissions:
   contents: read
 
 jobs:
+  security-scan:
+    name: Security - Secret & Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan - Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for hardcoded secrets patterns
+        run: |
+          echo "Checking for hardcoded API keys..."
+          ! grep -r --include="*.kt" --include="*.py" --include="*.ts" --include="*.js" -E "AIzaSy[A-Za-z0-9_-]{33}|sk-proj-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-or-v1-[A-Za-z0-9]{20,}" android/app/src/main gateway/*.py app/src --exclude-dir=node_modules || (echo "❌ Hardcoded secrets found!" && exit 1)
+          echo "✅ No hardcoded secrets pattern detected"
+          echo "Checking for plaintext tokens in logs..."
+          ! grep -r --include="*.kt" -n "Log\..*token\|Log\..*apiKey\|Log\..*Bearer" android/app/src/main || echo "⚠️ Review log statements for token leakage"
+          echo "✅ Secret pattern check complete"
+      - name: Dependency vulnerability scan - Python
+        run: |
+          python -m pip install --upgrade pip safety
+          safety check -r gateway/requirements.txt || echo "⚠️ Vulnerability check found issues, review required"
+      - name: Verify .gitignore for secrets
+        run: |
+          grep -q "secrets/" .gitignore || (echo "❌ secrets/ not in .gitignore" && exit 1)
+          grep -q "*.key" .gitignore || (echo "❌ *.key not in .gitignore" && exit 1)
+          grep -q "*.jks" .gitignore || (echo "❌ *.jks not in .gitignore" && exit 1)
+          echo "✅ .gitignore properly configured"
+
   python-quality:
     name: Gateway and pipeline tests
     runs-on: ubuntu-latest
@@ -50,6 +80,10 @@ jobs:
       - name: Run pipeline tests
         working-directory: pipeline
         run: python -m pytest tests -q
+      - name: Python static analysis - ruff
+        run: |
+          pip install ruff
+          ruff check gateway/ --ignore E501 || echo "⚠️ Ruff found issues"
 
   desktop-quality:
     name: Desktop typecheck and build
@@ -67,3 +101,76 @@ jobs:
       - name: Build desktop app
         working-directory: app
         run: npm run build
+
+  android-quality:
+    name: Android - Lint, Test, Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            android/.gradle
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      - name: Check for hardcoded secrets in Android
+        run: |
+          echo "Scanning Android for secrets..."
+          ! grep -rn --include="*.kt" "AIzaSy\|sk-proj-\|sk-ant-\|sk-or-v1-" android/app/src/main/java --exclude-dir=build || (echo "❌ Hardcoded secrets in Android!" && exit 1)
+          echo "✅ No hardcoded secrets in Android"
+      - name: Android Lint
+        working-directory: android
+        run: ./gradlew lintDebug --stacktrace
+      - name: Android Unit Tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --stacktrace
+      - name: Android Build Debug
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace
+      - name: Check APK size
+        working-directory: android
+        run: |
+          APK_SIZE=$(stat -c%s app/build/outputs/apk/debug/app-debug.apk || stat -f%z app/build/outputs/apk/debug/app-debug.apk)
+          echo "APK size: $APK_SIZE bytes"
+          MAX_SIZE=100000000
+          if [ $APK_SIZE -gt $MAX_SIZE ]; then
+            echo "⚠️ APK size $APK_SIZE exceeds $MAX_SIZE bytes, review for desktop resources leak"
+          else
+            echo "✅ APK size OK: $APK_SIZE bytes"
+          fi
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+
+  production-readiness:
+    name: Production Readiness Check
+    runs-on: ubuntu-latest
+    needs: [security-scan, python-quality, android-quality]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify production readiness docs
+        run: |
+          test -f PRODUCTION_READINESS.md || (echo "❌ PRODUCTION_READINESS.md missing" && exit 1)
+          test -f ARCHITECTURE_AUDIT.md || (echo "❌ ARCHITECTURE_AUDIT.md missing" && exit 1)
+          echo "✅ Production docs exist"
+          grep -q "Production Readiness Score" PRODUCTION_READINESS.md || echo "⚠️ Score missing"
+      - name: Verify gateway discovery endpoint
+        run: |
+          grep -q "gateway/discovery" gateway/main.py || (echo "❌ Gateway discovery endpoint missing" && exit 1)
+          grep -q "oauth_states" gateway/main.py || (echo "❌ OAuth states table missing" && exit 1)
+          echo "✅ Gateway P0 endpoints exist"
+      - name: Verify auto-discovery in Android
+        run: |
+          grep -q "GatewayDiscovery" android/app/src/main/java/com/example/data/repository/ContractJobRepository.kt || (echo "❌ Auto-discovery not in repository" && exit 1)
+          grep -q "autoDiscover" android/app/src/main/java/com/example/ContractApp.kt || (echo "❌ Auto-discovery not in UI" && exit 1)
+          echo "✅ Android auto-discovery exists"

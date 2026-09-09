@@ -1,0 +1,46 @@
+app = "ism-free-gateway"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8787"
+  PUBLIC_BASE_URL = "https://ism-free-gateway.fly.dev"
+  REQUIRE_GATEWAY_TOKEN = "false"
+  FREE_MODE = "true"
+  PROVIDER_MODE = "mock"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[services]]
+  internal_port = 8787
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+[services.concurrency]
+  type = "connections"
+  hard_limit = 100
+  soft_limit = 80
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
+# Free tier: 3 shared-cpu-1x 256MB VMs, 160GB egress
+# This config uses 1 VM with 512MB - fits free tier if you have 1-2 VMs total

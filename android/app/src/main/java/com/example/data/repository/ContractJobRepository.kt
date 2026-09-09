@@ -24,7 +24,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-class ContractJobRepository(private val context: Context) {
+class ContractJobRepository(val context: Context) {
     private val database = OpusDatabase.getDatabase(context)
     private val jobs = database.processingJobDao()
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -36,8 +36,23 @@ class ContractJobRepository(private val context: Context) {
 
     fun loadGatewayConfig(): GatewayConfig {
         val encrypted = prefs.getString(KEY_TOKEN, "").orEmpty()
+        val savedBaseUrl = prefs.getString(KEY_BASE_URL, "").orEmpty()
+        
+        // P0: Auto-discovery - Use BuildConfig default if no saved URL
+        val effectiveBaseUrl = if (savedBaseUrl.isBlank()) {
+            // Try BuildConfig default (no manual entry required!)
+            try {
+                val defaultUrl = com.example.BuildConfig.GATEWAY_DEFAULT_URL
+                if (defaultUrl.isNotBlank()) defaultUrl else savedBaseUrl
+            } catch (e: Exception) {
+                savedBaseUrl
+            }
+        } else {
+            savedBaseUrl
+        }
+        
         return GatewayConfig(
-            baseUrl = prefs.getString(KEY_BASE_URL, "").orEmpty(),
+            baseUrl = effectiveBaseUrl,
             token = if (encrypted.isBlank()) "" else secure.decrypt(encrypted)
         )
     }
@@ -47,6 +62,20 @@ class ContractJobRepository(private val context: Context) {
         val editor = prefs.edit().putString(KEY_BASE_URL, normalized.baseUrl)
         if (normalized.token.isBlank()) editor.remove(KEY_TOKEN) else editor.putString(KEY_TOKEN, secure.encrypt(normalized.token))
         editor.apply()
+    }
+    
+    /**
+     * P0: Auto-discover gateway without manual entry
+     * User says: "لن احتاج ان ادخل رابط هناك"
+     */
+    suspend fun autoDiscoverGateway(): com.example.data.model.AppResult<GatewayConfig> = withContext(Dispatchers.IO) {
+        val discovery = com.example.data.remote.GatewayDiscovery(context)
+        val result = discovery.getOrDiscoverConfig(this@ContractJobRepository)
+        // Convert AppResult<GatewayConfig> to our return type
+        when (result) {
+            is com.example.data.model.AppResult.Success -> com.example.data.model.AppResult.success(result.data)
+            is com.example.data.model.AppResult.Error -> com.example.data.model.AppResult.error(result.error)
+        }
     }
 
     suspend fun startJob(title: String, sourceUri: Uri, captions: String, mode: String): String = withContext(Dispatchers.IO) {

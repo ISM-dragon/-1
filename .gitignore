@@ -43,3 +43,34 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+
+# Security - Never commit secrets, keys, keystores
+secrets/
+*.key
+*.jks
+*.p12
+*.pem
+*.keystore
+.env
+.env.*
+!.env.example
+gateway/secrets/
+**/secrets/
+**/*secret*.json
+!**/secret.example.json
+ai-vault.json
+**/ai-vault.json
+
+# Android signing
+*.keystore
+android/app/release/
+android/app/*.jks
+keystore.properties
+
+# API keys and tokens
+*.token
+*.secret
+
+# Local configs with secrets
+local.properties
+*.local.properties

@@ -13,10 +13,28 @@ android {
     applicationId = "com.aistudio.opuspro.apk"
     minSdk = 24
     targetSdk = 36
-    versionCode = 7
-    versionName = "0.12.0"
+    versionCode = 8
+    versionName = "1.0.0-free"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // v1: Free Gateway - No manual URL, no server setup needed! 🆓
+    // Priority: Free gateways (Fly.io, Render) → Production → Local
+    val defaultGatewayUrl = System.getenv("ISM_GATEWAY_URL") 
+      ?: System.getenv("GATEWAY_URL")
+      ?: "https://ism-free-gateway.fly.dev"  // Free gateway default - no setup needed!
+    val gatewayFallbackUrls = System.getenv("ISM_GATEWAY_FALLBACK_URLS")
+      ?: "https://ism-free-gateway.onrender.com,https://api.ism.app,https://gateway.ism.local,http://10.0.2.2:8787,http://192.168.1.100:8787,http://127.0.0.1:8787"
+    val gatewayAutoDiscoveryEnabled = (System.getenv("ISM_GATEWAY_AUTO_DISCOVERY") ?: "true").toBoolean()
+    
+    buildConfigField("String", "GATEWAY_DEFAULT_URL", "\"$defaultGatewayUrl\"")
+    buildConfigField("String", "GATEWAY_FALLBACK_URLS", "\"$gatewayFallbackUrls\"")
+    buildConfigField("boolean", "GATEWAY_AUTO_DISCOVERY", "$gatewayAutoDiscoveryEnabled")
+    buildConfigField("boolean", "AUTO_PUBLISH_ENABLED", "true")
+    buildConfigField("boolean", "AUTO_CAPTURE_ENABLED", "true")
+    buildConfigField("String", "API_VERSION", "\"v1\"")
+    buildConfigField("boolean", "FREE_GATEWAY_ENABLED", "true")
+    buildConfigField("String", "FREE_GATEWAY_URLS", "\"https://ism-free-gateway.fly.dev,https://ism-free-gateway.onrender.com,https://ism-gateway-free.hf.space\"")
   }
 
   val releaseKeystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
